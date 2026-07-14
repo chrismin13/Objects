@@ -56,6 +56,19 @@ export function initializePwa(): () => void {
   if (initialized) return () => {};
   initialized = true;
 
+  if (["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+    if ("serviceWorker" in navigator) {
+      void navigator.serviceWorker.getRegistrations().then((registrations) =>
+        Promise.all(registrations.map((item) => item.unregister()))
+      );
+    }
+    if ("caches" in window) {
+      void caches.keys().then((names) => Promise.all(names.filter((name) => name.startsWith("objects-pwa-")).map((name) => caches.delete(name))));
+    }
+    emitStatus();
+    return () => { initialized = false; };
+  }
+
   const onInstallPrompt = (event: Event) => {
     event.preventDefault();
     installPrompt = event as InstallPromptEvent;

@@ -3,6 +3,7 @@ import { Component } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { mountObjects, syncObjectsState } from "./objects";
 import { initializePwa } from "./pwa";
+import { responsiveStyles } from "./responsive-styles";
 import { styles } from "./styles";
 
 type AuthIdentity = ReturnType<typeof useAuth>;
@@ -163,7 +164,7 @@ export function App() {
 
   return (
     <>
-      <style>{styles}</style>
+      <style>{`${styles}\n${responsiveStyles}`}</style>
       {auth.isLoading ? online && !authTimedOut ? <SignInScreen loading /> : <OfflineScreen /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
     </>
   );

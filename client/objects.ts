@@ -103,6 +103,7 @@ let persistState = async () => null;
 let performSignOut = async () => {};
 let staticEventsBound = false;
 let logbookTimer = null;
+let modalReturnFocus = null;
 
 export function mountObjects(serializedState, options) {
   app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
@@ -516,13 +517,24 @@ function cycleTheme() {
 }
 
 function openSidebar() { app.classList.add('sidebar-open'); syncSidebarAccessibility(); setTimeout(() => $('#sidebar-close')?.focus(), 20); }
-function closeSidebar() { app.classList.remove('sidebar-open'); syncSidebarAccessibility(); if (matchMedia('(max-width: 820px)').matches) setTimeout(() => $('#sidebar-open')?.focus(), 20); }
+function closeSidebar() {
+  const wasOpen = app.classList.contains('sidebar-open');
+  app.classList.remove('sidebar-open');
+  syncSidebarAccessibility();
+  if (wasOpen && matchMedia('(max-width: 820px)').matches) setTimeout(() => $('#sidebar-open')?.focus(), 20);
+}
 
 function syncSidebarAccessibility() {
-  const hidden = matchMedia('(max-width: 820px)').matches && !app.classList.contains('sidebar-open');
+  const mobile = matchMedia('(max-width: 820px)').matches;
+  const inspectorOpen = app.classList.contains('inspector-open');
+  const hidden = mobile && (!app.classList.contains('sidebar-open') || inspectorOpen);
   sidebarPanel.inert = hidden;
   if (hidden) sidebarPanel.setAttribute('aria-hidden', 'true');
   else sidebarPanel.removeAttribute('aria-hidden');
+  const mainPane = $('.main-pane', app);
+  mainPane.inert = mobile && inspectorOpen;
+  if (mainPane.inert) mainPane.setAttribute('aria-hidden', 'true');
+  else mainPane.removeAttribute('aria-hidden');
 }
 
 function setView(type, id = null) {
@@ -777,8 +789,8 @@ function renderTask(task) {
   if (effectiveTags(task).length) meta.push(...effectiveTags(task).slice(0, 2).map((tag) => `<span class="meta-item"><i class="tag-dot"></i>${esc(tag)}</span>`));
   const star = ui.view.type === 'anytime' && task.bucket === 'today' ? icon('star', 'today-star') : '';
   return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${completed ? 'completed' : ''}" data-task-id="${task.id}" draggable="true">
-    <button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${checked ? 'Restore' : 'Complete'} ${esc(task.title)}">${checked ? icon('check') : ''}</button>
-    <div class="task-main" data-action="select-task"><span class="task-title">${star}${esc(task.title)}</span>${task.notes ? `<div class="task-notes-preview">${esc(task.notes)}</div>` : ''}${meta.length ? `<div class="task-meta">${meta.join('')}</div>` : ''}</div>
+    <button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${checked ? 'Restore' : 'Complete'} ${esc(task.title)}"><span class="check-visual">${checked ? icon('check') : ''}</span></button>
+    <div class="task-main" data-action="select-task" role="button" tabindex="0" aria-label="Open details for ${esc(task.title)}"><span class="task-title">${star}${esc(task.title)}</span>${task.notes ? `<div class="task-notes-preview">${esc(task.notes)}</div>` : ''}${meta.length ? `<div class="task-meta">${meta.join('')}</div>` : ''}</div>
     ${icon('chevron', 'task-chevron')}
   </li>`;
 }
@@ -857,6 +869,12 @@ function handleContentClick(event) {
 }
 
 function handleContentKeydown(event) {
+  const taskMain = event.target.closest('.task-main[data-action="select-task"]');
+  if (taskMain && (event.key === 'Enter' || event.key === ' ')) {
+    event.preventDefault();
+    selectTask(taskMain.closest('[data-task-id]').dataset.taskId);
+    return;
+  }
   if (!event.target.matches('.quick-add-input')) return;
   if (event.key === 'Enter' && event.target.value.trim()) {
     createTask(event.target.value.trim(), event.target.closest('[data-quick-add]')?.dataset.quickAdd);
@@ -1038,18 +1056,25 @@ function selectTask(taskId) {
   app.classList.add('inspector-open');
   renderContent();
   renderInspector();
+  syncSidebarAccessibility();
+  inspector.tabIndex = -1;
+  setTimeout(() => inspector.focus(), 20);
 }
 
 function closeInspector() {
+  const returnTaskId = ui.selectedTaskId;
   ui.selectedTaskId = null;
   app.classList.remove('inspector-open');
+  renderSidebar();
   renderContent();
   inspector.innerHTML = '';
+  syncSidebarAccessibility();
+  setTimeout(() => $(`[data-task-id="${returnTaskId}"] .task-main`, content)?.focus(), 20);
 }
 
 function renderInspector() {
   const task = ui.state.tasks.find((item) => item.id === ui.selectedTaskId);
-  if (!task) { app.classList.remove('inspector-open'); inspector.innerHTML = ''; return; }
+  if (!task) { app.classList.remove('inspector-open'); inspector.innerHTML = ''; syncSidebarAccessibility(); return; }
   const schedule = task.bucket === 'today' ? (task.evening ? 'evening' : 'today') : task.bucket;
   const projectOptions = [`<option value="">No project</option>`, ...ui.state.projects.filter((p) => p.status === 'open').map((p) => `<option value="${p.id}" ${task.projectId === p.id ? 'selected' : ''}>${esc(p.title)}</option>`)].join('');
   const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => h.projectId === task.projectId && !h.archived).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
@@ -1071,6 +1096,7 @@ function renderInspector() {
     <div class="detail-group"><span class="detail-label">Repeat</span>${repeat ? `<div class="repeat-grid"><select class="detail-select" data-repeat-field="mode"><option value="fixed" ${repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-repeat-field="frequency"><option value="daily" ${repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" max="365" data-repeat-field="interval" value="${repeat.interval || 1}" aria-label="Repeat interval"><input class="detail-input" type="date" data-repeat-field="nextDate" value="${repeat.nextDate || localDay()}" aria-label="Next occurrence"></div>${repeat.frequency === 'weekly' ? `<div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(repeat.weekdays || []).includes(day) ? 'active' : ''}" data-weekday="${day}" aria-label="Repeat on ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}">${label}</button>`).join('')}</div>` : ''}<div class="settings-row"><label for="repeat-paused">Pause schedule</label><input id="repeat-paused" type="checkbox" data-repeat-field="paused" ${repeat.paused ? 'checked' : ''}></div><button class="checklist-add" data-inspector-action="stop-repeat">Stop repeating</button>` : `<button class="checklist-add" data-inspector-action="start-repeat">Make repeating…</button>`}</div>
     <div class="inspector-actions"><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === 'cancelled' ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}</div>
   </div>`;
+  syncSidebarAccessibility();
 }
 
 function renderMarkdown(markdown = '') {
@@ -1201,8 +1227,8 @@ function handleInspectorClick(event) {
   }
   const action = event.target.closest('[data-inspector-action]')?.dataset.inspectorAction;
   if (action === 'close') closeInspector();
-  if (action === 'trash') { task.status = 'cancelled'; task.completedAt = null; scheduleSave(); closeInspector(); showToast('Moved to Trash'); }
-  if (action === 'restore') { task.status = 'open'; scheduleSave(); closeInspector(); showToast('To-do restored'); }
+  if (action === 'trash') { task.status = 'cancelled'; task.completedAt = null; task.loggedAt = null; task.completedWithProjectId = null; scheduleSave(); closeInspector(); showToast('Moved to Trash'); }
+  if (action === 'restore') { task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.completedWithProjectId = null; scheduleSave(); closeInspector(); showToast('To-do restored'); }
   if (action === 'delete-forever') {
     confirmAction('Delete this to-do forever?', 'This cannot be undone.', 'Delete forever', () => {
       ui.state.tasks = ui.state.tasks.filter((item) => item.id !== task.id); scheduleSave(); closeInspector(); showToast('To-do permanently deleted');
@@ -1233,6 +1259,7 @@ function handleInspectorClick(event) {
 function openSearch() {
   ui.focusedSearchIndex = 0;
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal quick-find" role="dialog" aria-modal="true" aria-label="Quick find"><div class="modal-header">${icon('search')}<input id="search-input" class="modal-search" type="search" placeholder="Jump to a list or find a to-do…" autocomplete="off"><span class="key-hint">esc</span></div><div id="search-results" class="search-results"></div></div></div>`;
+  activateModal();
   $('#search-input').addEventListener('input', renderSearchResults);
   $('#search-input').addEventListener('keydown', handleSearchKeydown);
   $('#search-results').addEventListener('click', handleSearchClick);
@@ -1300,6 +1327,7 @@ function chooseSearchResult(item) {
 function openNewListModal() {
   const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}">${esc(area.title)}</option>`)].join('');
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="new-list-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Create a list</h2><p>Use projects for outcomes and areas for the ongoing parts of your life.</p><div class="form-field"><label for="list-type">Type</label><select id="list-type"><option value="project">Project</option><option value="area">Area</option></select></div><div class="form-field"><label for="list-title">Name</label><input id="list-title" required autocomplete="off" placeholder="e.g. Plan summer trip"></div><div class="form-field" id="area-field"><label for="list-area">Area</label><select id="list-area">${areaOptions}</select></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Create</button></div></form></div>`;
+  activateModal();
   $('#list-type').addEventListener('change', (event) => { $('#area-field').hidden = event.target.value === 'area'; });
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -1323,6 +1351,7 @@ function openHeadingModal(headingId = null) {
   const heading = ui.state.headings.find((item) => item.id === headingId);
   const projectId = heading?.projectId || ui.view.id;
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="heading-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>${heading ? 'Edit heading' : 'New heading'}</h2><p>Headings divide a project into clear stages or categories.</p><div class="form-field"><label for="heading-title">Name</label><input id="heading-title" required value="${esc(heading?.title || '')}" placeholder="e.g. Preparation"></div>${heading ? `<div class="settings-section button-row"><button class="button" type="button" data-heading-action="duplicate">Duplicate with to-dos</button><button class="button" type="button" data-heading-action="archive">Archive</button></div>` : ''}<div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">${heading ? 'Save' : 'Create'}</button></div></form></div>`;
+  activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
   $('#heading-form').addEventListener('submit', (event) => {
@@ -1340,7 +1369,7 @@ function openHeadingModal(headingId = null) {
     } else {
       const copy = { ...heading, id: uid('heading'), title: `${heading.title} copy`, order: heading.order + 0.5 };
       ui.state.headings.push(copy);
-      ui.state.tasks.filter((task) => task.headingId === heading.id && task.status === 'open').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), headingId: copy.id, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
+      ui.state.tasks.filter((task) => task.headingId === heading.id && task.status === 'open').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), headingId: copy.id, tags: [...(task.tags || [])], repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
       showToast('Heading duplicated');
     }
     scheduleSave(); closeModal(); render();
@@ -1354,6 +1383,7 @@ function openProjectModal(projectId) {
   const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}" ${project.areaId === area.id ? 'selected' : ''}>${esc(area.title)}</option>`)].join('');
   const archivedHeadings = ui.state.headings.filter((heading) => heading.projectId === project.id && heading.archived);
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="project-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Project options</h2><p>Edit the outcome, move it, duplicate it, or send it to the Logbook.</p><div class="form-field"><label for="project-title">Name</label><input id="project-title" required value="${esc(project.title)}"></div><div class="form-field"><label for="project-notes">Notes</label><input id="project-notes" value="${esc(project.notes || '')}"></div><div class="form-field"><label for="project-area">Area</label><select id="project-area">${areaOptions}</select></div><div class="repeat-grid"><div class="form-field"><label for="project-start">Start date</label><input id="project-start" type="date" value="${project.scheduledFor || ''}"></div><div class="form-field"><label for="project-deadline">Deadline</label><input id="project-deadline" type="date" value="${project.deadline || ''}"></div></div><div class="form-field"><label for="project-tags">Tags</label><input id="project-tags" value="${esc((project.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}<div class="settings-section"><h3>Repeat</h3>${project.repeat ? `<div class="repeat-grid"><select class="detail-select" data-project-repeat-field="mode"><option value="fixed" ${project.repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${project.repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-project-repeat-field="frequency"><option value="daily" ${project.repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${project.repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${project.repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${project.repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" data-project-repeat-field="interval" value="${project.repeat.interval || 1}" aria-label="Project repeat interval"><input class="detail-input" type="date" data-project-repeat-field="nextDate" value="${project.repeat.nextDate || addDays(localDay(), 7)}" aria-label="Project next occurrence"></div><button class="checklist-add" type="button" data-project-action="stop-repeat">Stop repeating</button>` : `<button class="button" type="button" data-project-action="repeat">Make project repeating…</button>`}</div><div class="settings-section button-row"><button class="button" type="button" data-project-action="duplicate">Duplicate project</button><button class="button" type="button" data-project-action="${project.status === 'completed' ? 'restore' : 'complete'}">${project.status === 'completed' ? 'Restore project' : 'Complete project'}</button><button class="danger-button" type="button" data-project-action="delete">${icon('trash')} Delete project</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
+  activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
   $('#project-form').addEventListener('submit', (event) => {
@@ -1412,14 +1442,14 @@ function openProjectModal(projectId) {
 }
 
 function duplicateProject(project) {
-  const copy = { ...project, id: uid('project'), title: `${project.title} copy`, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
+  const copy = { ...project, id: uid('project'), title: `${project.title} copy`, tags: [...(project.tags || [])], repeat: project.repeat ? { ...project.repeat, weekdays: [...(project.repeat.weekdays || [])] } : null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
   ui.state.projects.push(copy);
   const headingMap = new Map();
   ui.state.headings.filter((heading) => heading.projectId === project.id).forEach((heading) => {
     const duplicate = { ...heading, id: uid('heading'), projectId: copy.id };
     headingMap.set(heading.id, duplicate.id); ui.state.headings.push(duplicate);
   });
-  ui.state.tasks.filter((task) => task.projectId === project.id && task.status !== 'cancelled').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
+  ui.state.tasks.filter((task) => task.projectId === project.id && task.status !== 'cancelled').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, tags: [...(task.tags || [])], repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
   setView('project', copy.id); showToast('Project duplicated');
 }
 
@@ -1427,6 +1457,7 @@ function openAreaModal(areaId) {
   const area = areaById(areaId);
   if (!area) return;
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="area-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Area options</h2><p>Areas represent ongoing responsibilities that do not finish.</p><div class="form-field"><label for="area-title">Name</label><input id="area-title" required value="${esc(area.title)}"></div><div class="form-field"><label for="area-color">Color</label><input id="area-color" type="color" value="${esc(area.color || '#5b7cfa')}"></div><div class="form-field"><label for="area-tags">Tags inherited by its to-dos</label><input id="area-tags" value="${esc((area.tags || []).join(', '))}"></div><div class="settings-section button-row"><button class="danger-button" type="button" data-area-delete>${icon('trash')} Delete area</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
+  activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
   $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.color = $('#area-color').value; area.tags = $('#area-tags').value.split(',').map((value) => value.trim()).filter(Boolean); scheduleSave(); closeModal(); render(); });
@@ -1449,6 +1480,7 @@ function openSettings() {
   const installHelp = pwa.installed ? 'Objects is running as an installed app.' : pwa.ios ? 'On iPhone or iPad, use Share → Add to Home Screen. Notifications are available only after installation.' : 'Install from this button when available, or use your browser’s Install app / Add to Home Screen menu.';
   const notificationLabel = pwa.notificationPermission === 'unsupported' ? 'Not supported here' : pwa.notificationPermission === 'denied' ? 'Blocked in browser settings' : settings.notifications && pwa.notificationPermission === 'granted' ? 'Disable notifications' : 'Enable notifications';
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings"><h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p><div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div><div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div><div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div><div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div><div class="settings-section"><h3>Reminders</h3><p>Notifications work on desktop and mobile, including notification taps that reopen the task. Scheduled reminders are reliable while Objects is open; closed-app delivery needs a server push scheduler.</p><button class="button" type="button" data-settings-action="notifications" ${pwa.notificationPermission === 'denied' ? 'disabled' : ''}>${esc(notificationLabel)}</button></div><div class="settings-section"><h3>Calendar</h3><p>Add an event manually or import a standard .ics calendar file. Events remain private in your Objects data.</p><div class="form-field"><label for="event-title">Event</label><input id="event-title" placeholder="Event title"></div><div class="repeat-grid"><div class="form-field"><label for="event-start">Starts</label><input id="event-start" type="datetime-local"></div><div class="form-field"><label for="event-end">Ends</label><input id="event-end" type="datetime-local"></div></div><div class="button-row"><button class="button" type="button" data-settings-action="add-event">Add event</button><label class="button" for="ics-import">Import .ics</label><input class="hidden-file" id="ics-import" type="file" accept=".ics,text/calendar"></div></div><div class="settings-section"><h3>Data</h3><p>Export a complete backup or import one from another Objects installation.</p><div class="button-row"><button class="button" type="button" data-settings-action="export">${icon('download')} Export JSON</button><label class="button" for="json-import">${icon('upload')} Import JSON</label><input class="hidden-file" id="json-import" type="file" accept="application/json,.json"></div></div><div class="settings-section"><h3>Automation</h3><p>Open <code>/?title=Call%20Maya%20tomorrow</code> while signed in, or use the authenticated <code>POST /api/tasks</code> Lakebed endpoint.</p></div><div class="form-actions"><button class="button primary" type="button" data-cancel>Done</button></div></div></div>`;
+  activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
   $('#setting-group').addEventListener('change', (event) => { settings.groupToday = event.target.checked; scheduleSave(); render(); });
@@ -1554,10 +1586,38 @@ function parseIcsDate(value) {
   return iso;
 }
 
-function closeModal() { $('#modal-root').innerHTML = ''; }
+function activateModal() {
+  const root = $('#modal-root');
+  if (!modalReturnFocus || !modalReturnFocus.isConnected) {
+    modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  app.inert = true;
+  const dialog = $('[role="dialog"], [role="alertdialog"]', root);
+  if (!dialog) return;
+  if (!dialog.hasAttribute('aria-label') && !dialog.hasAttribute('aria-labelledby')) {
+    const heading = $('h1, h2, h3', dialog);
+    if (heading) {
+      heading.id ||= 'modal-title';
+      dialog.setAttribute('aria-labelledby', heading.id);
+    }
+  }
+  dialog.tabIndex = -1;
+  dialog.focus();
+}
+
+function closeModal() {
+  const returnFocus = modalReturnFocus;
+  $('#modal-root').innerHTML = '';
+  app.inert = false;
+  modalReturnFocus = null;
+  setTimeout(() => {
+    if (returnFocus?.isConnected && !returnFocus.closest('[inert]')) returnFocus.focus();
+  }, 20);
+}
 
 function confirmAction(title, message, label, onConfirm) {
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">${esc(title)}</h2><p>${esc(message)}</p><div class="form-actions"><button class="button" type="button" data-confirm-cancel>Cancel</button><button class="button primary" type="button" data-confirm-accept>${esc(label)}</button></div></div></div>`;
+  activateModal();
   $('[data-confirm-cancel]').addEventListener('click', closeModal);
   $('[data-confirm-accept]').addEventListener('click', () => { closeModal(); onConfirm(); });
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -1565,6 +1625,19 @@ function confirmAction(title, message, label, onConfirm) {
 }
 
 function handleGlobalKeydown(event) {
+  if (event.key === 'Tab' && $('#modal-root').children.length) {
+    const dialog = $('[role="dialog"], [role="alertdialog"]', $('#modal-root'));
+    const focusable = dialog ? [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')].filter((element) => !element.hidden && element.getClientRects().length) : [];
+    if (focusable.length) {
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus();
+      }
+    }
+  }
   if (event.key === 'Escape') {
     if ($('#modal-root').children.length) closeModal();
     else if (ui.selectedTaskId) closeInspector();
@@ -1574,7 +1647,7 @@ function handleGlobalKeydown(event) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); return; }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); openSearch(); return; }
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd' && ui.selectedTaskId) { event.preventDefault(); const task = currentTask(); const copy = { ...task, id: uid('task'), title: `${task.title} copy`, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); selectTask(copy.id); scheduleSave(); showToast('To-do duplicated'); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd' && ui.selectedTaskId) { event.preventDefault(); const task = currentTask(); const copy = { ...task, id: uid('task'), title: `${task.title} copy`, tags: [...(task.tags || [])], repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); selectTask(copy.id); scheduleSave(); showToast('To-do duplicated'); return; }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'n' && ui.view.type === 'project') { event.preventDefault(); openHeadingModal(); return; }
   if (!event.metaKey && !event.ctrlKey && !event.altKey && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
     if (event.key.toLowerCase() === 'n') { event.preventDefault(); beginQuickAdd(true); }

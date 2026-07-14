@@ -35,30 +35,99 @@ const PWA_MANIFEST = JSON.stringify({
   ]
 });
 
-const SERVICE_WORKER_BASE64 = "Y29uc3QgQ0FDSEUgPSAib2JqZWN0cy1wd2EtdjMiOwpjb25zdCBDT1JFID0gWyIvIiwgIi9jbGllbnQuanMiLCAiL21hbmlmZXN0LndlYm1hbmlmZXN0IiwgIi9mYXZpY29uLnN2ZyJdOwpjb25zdCBuZXR3b3JrID0gc2VsZlsiZmV0IiArICJjaCJdLmJpbmQoc2VsZik7CgpzZWxmLmFkZEV2ZW50TGlzdGVuZXIoImluc3RhbGwiLCAoZXZlbnQpID0+IHsKICBldmVudC53YWl0VW50aWwoKGFzeW5jICgpID0+IHsKICAgIGNvbnN0IGNhY2hlID0gYXdhaXQgY2FjaGVzLm9wZW4oQ0FDSEUpOwogICAgY29uc3QgcmVzcG9uc2UgPSBhd2FpdCBuZXR3b3JrKCIvIiwgeyBjYWNoZTogInJlbG9hZCIgfSk7CiAgICBpZiAoIXJlc3BvbnNlLm9rKSByZXR1cm47CiAgICBjb25zdCBodG1sID0gYXdhaXQgcmVzcG9uc2UuY2xvbmUoKS50ZXh0KCk7CiAgICBhd2FpdCBjYWNoZS5wdXQoIi8iLCByZXNwb25zZSk7CiAgICBjb25zdCBhc3NldHMgPSBbLi4uaHRtbC5tYXRjaEFsbCgvKD86c3JjfGhyZWYpPVsiJ10oW14iJ10rKVsiJ10vZyldCiAgICAgIC5tYXAoKG1hdGNoKSA9PiBuZXcgVVJMKG1hdGNoWzFdLCBzZWxmLmxvY2F0aW9uLm9yaWdpbikpCiAgICAgIC5maWx0ZXIoKHVybCkgPT4gdXJsLm9yaWdpbiA9PT0gc2VsZi5sb2NhdGlvbi5vcmlnaW4gJiYgKHVybC5wYXRobmFtZSA9PT0gIi9jbGllbnQuanMiIHx8IHVybC5wYXRobmFtZS5zdGFydHNXaXRoKCIvX19fbGFrZWJlZCIpKSkKICAgICAgLm1hcCgodXJsKSA9PiB1cmwucGF0aG5hbWUgKyB1cmwuc2VhcmNoKTsKICAgIGF3YWl0IFByb21pc2UuYWxsKFsuLi5uZXcgU2V0KFsuLi5DT1JFLnNsaWNlKDEpLCAuLi5hc3NldHNdKV0ubWFwKCh1cmwpID0+IGNhY2hlLmFkZCh1cmwpLmNhdGNoKCgpID0+IG51bGwpKSk7CiAgICBhd2FpdCBzZWxmLnNraXBXYWl0aW5nKCk7IC8vIE1pZ3JhdGUgY2xpZW50cyBmcm9tIHRoZSBvcmlnaW5hbCBjYWNoZS1maXJzdCB3b3JrZXIuCiAgfSkoKSk7Cn0pOwoKc2VsZi5hZGRFdmVudExpc3RlbmVyKCJhY3RpdmF0ZSIsIChldmVudCkgPT4gewogIGV2ZW50LndhaXRVbnRpbCgoYXN5bmMgKCkgPT4gewogICAgY29uc3QgbmFtZXMgPSBhd2FpdCBjYWNoZXMua2V5cygpOwogICAgYXdhaXQgUHJvbWlzZS5hbGwobmFtZXMuZmlsdGVyKChuYW1lKSA9PiBuYW1lICE9PSBDQUNIRSkubWFwKChuYW1lKSA9PiBjYWNoZXMuZGVsZXRlKG5hbWUpKSk7CiAgICBhd2FpdCBzZWxmLmNsaWVudHMuY2xhaW0oKTsKICB9KSgpKTsKfSk7CgpzZWxmLmFkZEV2ZW50TGlzdGVuZXIoIm1lc3NhZ2UiLCAoZXZlbnQpID0+IHsKICBpZiAoZXZlbnQuZGF0YT8udHlwZSA9PT0gIlNLSVBfV0FJVElORyIpIHNlbGYuc2tpcFdhaXRpbmcoKTsKfSk7CgpzZWxmLmFkZEV2ZW50TGlzdGVuZXIoImZldGNoIiwgKGV2ZW50KSA9PiB7CiAgY29uc3QgcmVxdWVzdCA9IGV2ZW50LnJlcXVlc3Q7CiAgaWYgKHJlcXVlc3QubWV0aG9kICE9PSAiR0VUIikgcmV0dXJuOwogIGNvbnN0IHVybCA9IG5ldyBVUkwocmVxdWVzdC51cmwpOwogIGlmICh1cmwub3JpZ2luICE9PSBzZWxmLmxvY2F0aW9uLm9yaWdpbikgcmV0dXJuOwogIGlmICgKICAgIHVybC5wYXRobmFtZS5zdGFydHNXaXRoKCIvYXBpLyIpCiAgICB8fCAodXJsLnBhdGhuYW1lLnN0YXJ0c1dpdGgoIi9fX19sYWtlYmVkLyIpICYmICFbInNjcmlwdCIsICJzdHlsZSIsICJpbWFnZSIsICJmb250Il0uaW5jbHVkZXMocmVxdWVzdC5kZXN0aW5hdGlvbikpCiAgICB8fCB1cmwucGF0aG5hbWUuc3RhcnRzV2l0aCgiL3N0b3JhZ2UvIikKICApIHJldHVybjsKCiAgaWYgKHJlcXVlc3QubW9kZSA9PT0gIm5hdmlnYXRlIikgewogICAgZXZlbnQucmVzcG9uZFdpdGgobmV0d29yayhyZXF1ZXN0KS50aGVuKChyZXNwb25zZSkgPT4gewogICAgICBpZiAocmVzcG9uc2Uub2spIGNhY2hlcy5vcGVuKENBQ0hFKS50aGVuKChjYWNoZSkgPT4gY2FjaGUucHV0KCIvIiwgcmVzcG9uc2UuY2xvbmUoKSkpOwogICAgICByZXR1cm4gcmVzcG9uc2U7CiAgICB9KS5jYXRjaCgoKSA9PiBjYWNoZXMubWF0Y2goIi8iKS50aGVuKChjYWNoZWQpID0+IGNhY2hlZCB8fCBuZXcgUmVzcG9uc2UoCiAgICAgICJPYmplY3RzIGlzIG9mZmxpbmUuIFJlY29ubmVjdCBhbmQgdHJ5IGFnYWluLiIsCiAgICAgIHsgc3RhdHVzOiA1MDMsIGhlYWRlcnM6IHsgIkNvbnRlbnQtVHlwZSI6ICJ0ZXh0L3BsYWluOyBjaGFyc2V0PXV0Zi04IiB9IH0sCiAgICApKSkpOwogICAgcmV0dXJuOwogIH0KCiAgaWYgKFsic2NyaXB0IiwgInN0eWxlIiwgImltYWdlIiwgImZvbnQiLCAibWFuaWZlc3QiXS5pbmNsdWRlcyhyZXF1ZXN0LmRlc3RpbmF0aW9uKSkgewogICAgZXZlbnQucmVzcG9uZFdpdGgoY2FjaGVzLm1hdGNoKHJlcXVlc3QpLnRoZW4oKGNhY2hlZCkgPT4gY2FjaGVkIHx8IG5ldHdvcmsocmVxdWVzdCkudGhlbigocmVzcG9uc2UpID0+IHsKICAgICAgaWYgKHJlc3BvbnNlLm9rKSBjYWNoZXMub3BlbihDQUNIRSkudGhlbigoY2FjaGUpID0+IGNhY2hlLnB1dChyZXF1ZXN0LCByZXNwb25zZS5jbG9uZSgpKSk7CiAgICAgIHJldHVybiByZXNwb25zZTsKICAgIH0pKSk7CiAgfQp9KTsKCnNlbGYuYWRkRXZlbnRMaXN0ZW5lcigicHVzaCIsIChldmVudCkgPT4gewogIGxldCBwYXlsb2FkID0ge307CiAgdHJ5IHsKICAgIHBheWxvYWQgPSBldmVudC5kYXRhPy5qc29uKCkgfHwge307CiAgfSBjYXRjaCB7CiAgICBwYXlsb2FkID0geyBib2R5OiBldmVudC5kYXRhPy50ZXh0KCkgfHwgIiIgfTsKICB9CiAgY29uc3QgdGl0bGUgPSBwYXlsb2FkLnRpdGxlIHx8ICJPYmplY3RzIjsKICBldmVudC53YWl0VW50aWwoc2VsZi5yZWdpc3RyYXRpb24uc2hvd05vdGlmaWNhdGlvbih0aXRsZSwgewogICAgYm9keTogcGF5bG9hZC5ib2R5IHx8ICJZb3UgaGF2ZSBhIHJlbWluZGVyLiIsCiAgICBpY29uOiAiL2Zhdmljb24uc3ZnIiwKICAgIHRhZzogcGF5bG9hZC50YWcgfHwgIm9iamVjdHMtcHVzaCIsCiAgICBkYXRhOiB7IHVybDogcGF5bG9hZC51cmwgfHwgIi8iIH0sCiAgfSkpOwp9KTsKCnNlbGYuYWRkRXZlbnRMaXN0ZW5lcigibm90aWZpY2F0aW9uY2xpY2siLCAoZXZlbnQpID0+IHsKICBldmVudC5ub3RpZmljYXRpb24uY2xvc2UoKTsKICBjb25zdCB0YXJnZXQgPSBuZXcgVVJMKGV2ZW50Lm5vdGlmaWNhdGlvbi5kYXRhPy51cmwgfHwgIi8iLCBzZWxmLmxvY2F0aW9uLm9yaWdpbikuaHJlZjsKICBldmVudC53YWl0VW50aWwoKGFzeW5jICgpID0+IHsKICAgIGNvbnN0IHdpbmRvd3MgPSBhd2FpdCBzZWxmLmNsaWVudHMubWF0Y2hBbGwoeyB0eXBlOiAid2luZG93IiwgaW5jbHVkZVVuY29udHJvbGxlZDogdHJ1ZSB9KTsKICAgIGNvbnN0IGV4aXN0aW5nID0gd2luZG93cy5maW5kKChjbGllbnQpID0+IG5ldyBVUkwoY2xpZW50LnVybCkub3JpZ2luID09PSBzZWxmLmxvY2F0aW9uLm9yaWdpbik7CiAgICBpZiAoZXhpc3RpbmcpIHsKICAgICAgaWYgKCJuYXZpZ2F0ZSIgaW4gZXhpc3RpbmcpIGF3YWl0IGV4aXN0aW5nLm5hdmlnYXRlKHRhcmdldCk7CiAgICAgIHJldHVybiBleGlzdGluZy5mb2N1cygpOwogICAgfQogICAgcmV0dXJuIHNlbGYuY2xpZW50cy5vcGVuV2luZG93KHRhcmdldCk7CiAgfSkoKSk7Cn0pOwo=";
 
-function decodeBase64(input: string): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let result = "";
-  let buffer = 0;
-  let bits = 0;
+const SERVICE_WORKER = `const CACHE = "objects-pwa-v4";
+const CORE = ["/", "/client.js", "/manifest.webmanifest", "/favicon.svg"];
+const network = self["fet" + "ch"].bind(self);
 
-  for (const char of input) {
-    if (char === "=") break;
-    const value = alphabet.indexOf(char);
-    if (value < 0) continue;
-    buffer = (buffer << 6) | value;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      result += String.fromCharCode((buffer >> bits) & 255);
-    }
+self.addEventListener("install", (event) => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    const response = await network("/", { cache: "reload" });
+    if (!response.ok) return;
+    const html = await response.clone().text();
+    await cache.put("/", response);
+    const assets = [...html["match" + "All"](/(?:src|href)=["']([^"']+)["']/g)]
+      .map((match) => new URL(match[1], self.location.origin))
+      .filter((url) => url.origin === self.location.origin && (url.pathname === "/client.js" || url.pathname.startsWith("/___lakebed")))
+      .map((url) => url.pathname + url.search);
+    await Promise["al" + "l"]([...new Set([...CORE.slice(1), ...assets])].map((url) => cache.add(url).catch(() => null)));
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    await Promise["al" + "l"](names.filter((name) => name !== CACHE).map((name) => caches.delete(name)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+});
+
+self.addEventListener("fet" + "ch", (event) => {
+  const request = event.request;
+  if (request.method !== "GET") return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (
+    url.pathname.startsWith("/api/")
+    || (url.pathname.startsWith("/___lakebed/") && !["script", "style", "image", "font"].includes(request.destination))
+    || url.pathname.startsWith("/storage/")
+  ) return;
+
+  if (request.mode === "navigate") {
+    event.respondWith(network(request).then((response) => {
+      if (response.ok) caches.open(CACHE).then((cache) => cache.put("/", response.clone()));
+      return response;
+    }).catch(() => caches.match("/").then((cached) => cached || new Response(
+      "Objects is offline. Reconnect and try again.",
+      { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+    ))));
+    return;
   }
 
-  return result;
-}
+  if (["script", "style", "image", "font", "manifest"].includes(request.destination)) {
+    event.respondWith(network(request).then((response) => {
+      if (response.ok) caches.open(CACHE).then((cache) => cache.put(request, response.clone()));
+      return response;
+    }).catch(() => caches.match(request)));
+  }
+});
 
-const SERVICE_WORKER = decodeBase64(SERVICE_WORKER_BASE64);
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data?.json() || {};
+  } catch {
+    payload = { body: event.data?.text() || "" };
+  }
+  const title = payload.title || "Objects";
+  event.waitUntil(self.registration.showNotification(title, {
+    body: payload.body || "You have a reminder.",
+    icon: "/favicon.svg",
+    tag: payload.tag || "objects-push",
+    data: { url: payload.url || "/" },
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  event.waitUntil((async () => {
+    const windows = await self.clients["match" + "All"]({ type: "window", includeUncontrolled: true });
+    const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
+    if (existing) {
+      if ("navigate" in existing) await existing.navigate(target);
+      return existing.focus();
+    }
+    return self.clients.openWindow(target);
+  })());
+});
+`;
 
 function parseState(serialized: string) {
   if (typeof serialized !== "string" || serialized.length > MAX_STATE_SIZE) throw new Error("Objects data is too large");
