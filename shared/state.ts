@@ -25,17 +25,17 @@ export function isObjectsState(value: unknown): value is ObjectsState {
 export function createSeed(): ObjectsState {
   const createdAt = new Date().toISOString();
   return {
-    version: 3,
-    updatedAt: "seed-v3",
+    version: 4,
+    updatedAt: "seed-v4",
     settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily" },
     areas: [
       { id: "area-work", title: "Work", color: "#5b7cfa", tags: [], order: 0 },
       { id: "area-personal", title: "Personal", color: "#e49b3c", tags: [], order: 1 }
     ],
     projects: [
-      { id: "project-launch", areaId: "area-work", title: "Launch the new site", notes: "Everything needed for a quiet, confident launch.", scheduledFor: null, deadline: isoDay(9), tags: ["Focused"], status: "open", completedAt: null, order: 0 },
-      { id: "project-home", areaId: "area-personal", title: "Refresh the studio", notes: "Make the room feel lighter and easier to use.", scheduledFor: null, deadline: null, tags: ["Home"], status: "open", completedAt: null, order: 1 },
-      { id: "project-trip", areaId: "area-personal", title: "Weekend in Hydra", notes: "", scheduledFor: null, deadline: isoDay(18), tags: [], status: "open", completedAt: null, order: 2 }
+      { id: "project-launch", areaId: "area-work", title: "Launch the new site", notes: "Everything needed for a quiet, confident launch.", bucket: "anytime", scheduledFor: null, deadline: isoDay(9), tags: ["Focused"], status: "open", completedAt: null, order: 0 },
+      { id: "project-home", areaId: "area-personal", title: "Refresh the studio", notes: "Make the room feel lighter and easier to use.", bucket: "anytime", scheduledFor: null, deadline: null, tags: ["Home"], status: "open", completedAt: null, order: 1 },
+      { id: "project-trip", areaId: "area-personal", title: "Weekend in Hydra", notes: "", bucket: "anytime", scheduledFor: null, deadline: isoDay(18), tags: [], status: "open", completedAt: null, order: 2 }
     ],
     headings: [{ id: "heading-launch-polish", projectId: "project-launch", title: "Final polish", archived: false, order: 0 }],
     calendarEvents: [{ id: "event-design-sync", title: "Design sync", start: `${isoDay()}T11:00:00`, end: `${isoDay()}T11:45:00`, calendar: "Work" }],

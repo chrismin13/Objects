@@ -36,7 +36,7 @@ const PWA_MANIFEST = JSON.stringify({
 });
 
 
-const SERVICE_WORKER = `const CACHE = "objects-pwa-v4";
+const SERVICE_WORKER = `const CACHE = "objects-pwa-v5";
 const CORE = ["/", "/client.js", "/manifest.webmanifest", "/favicon.svg"];
 const network = self["fet" + "ch"].bind(self);
 
@@ -116,7 +116,10 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  const targetUrl = new URL(event.notification.data?.url || "/", self.location.origin);
+  if (event.action === "snooze-10") targetUrl.searchParams.set("snooze", "10");
+  if (event.action === "snooze-60") targetUrl.searchParams.set("snooze", "60");
+  const target = targetUrl.href;
   event.waitUntil((async () => {
     const windows = await self.clients["match" + "All"]({ type: "window", includeUncontrolled: true });
     const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
@@ -133,7 +136,7 @@ function parseState(serialized: string) {
   if (typeof serialized !== "string" || serialized.length > MAX_STATE_SIZE) throw new Error("Objects data is too large");
   const state: unknown = JSON.parse(serialized);
   if (!isObjectsState(state)) throw new Error("Invalid Objects data");
-  state.version = 3;
+  state.version = 4;
   state.updatedAt = new Date().toISOString();
   return state;
 }

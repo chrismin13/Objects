@@ -12,12 +12,15 @@ Live app: [objects.lakebed.app](https://objects.lakebed.app)
 
 - Inbox, Today, This Evening, Upcoming, Anytime, Someday, Logbook, and Trash
 - Areas, projects, project headings, checklists, notes, tags, inherited tags, deadlines, and start dates
+- Project scheduling across Today, Upcoming, Anytime, and Someday, including project deadlines and hierarchical Trash restoration
+- Things-style Move destinations for Inbox, areas, projects, and headings, with inline project creation
 - Repeating to-dos and projects with fixed or after-completion schedules, intervals, weekday selection, pausing, and editable templates
-- Browser reminders, calendar events, manual event entry, and `.ics` import
-- Natural-language capture for phrases such as `tomorrow at 2pm`, `next Friday`, `this evening`, `someday`, `due tomorrow`, and `#tags`
+- Browser reminders with notification snoozing, calendar events, manual event entry, and `.ics` import
+- Natural-language capture for phrases such as `tomorrow at 2pm`, `in 3 weeks`, `next Friday`, `this evening`, `someday`, `due tomorrow`, and `#tags`
 - Quick Find across titles, notes, checklist items, tags, headings, completed items, and special lists
 - Tomorrow, Deadlines, Repeating, All Projects, and Logged Projects views
-- Tag filtering, drag-and-drop ordering, duplication, completion undo, Markdown notes, project completion, and restoration
+- Tag filtering, drag-and-drop ordering, duplication, completion undo, extended Markdown notes, project completion, and restoration
+- Share/copy-link actions, deep links to individual to-dos, heading movement, and heading-to-project conversion
 - Things-style Logbook timing: log completed to-dos and projects immediately, daily at midnight, or manually
 - Responsive desktop/mobile layouts and light, dark, and system themes
 - Installable PWA with standalone display and an offline application shell

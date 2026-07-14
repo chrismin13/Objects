@@ -170,6 +170,10 @@ export async function showTaskReminder(task: { id: string; title: string; notes?
     icon: "/favicon.svg",
     tag: `objects-task-${task.id}`,
     data: { url: `/?task=${encodeURIComponent(task.id)}` },
+    actions: [
+      { action: "snooze-10", title: "Snooze 10 min" },
+      { action: "snooze-60", title: "Snooze 1 hour" },
+    ],
   };
 
   try {
