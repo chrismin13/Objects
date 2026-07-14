@@ -1,0 +1,5 @@
+.lakebed/
+.env.lakebed.server
+.DS_Store
+.DS_Store
+npm-debug.log*
