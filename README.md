@@ -1,5 +1,7 @@
 # Objects
 
+[objects.chrismin13.com](https://objects.chrismin13.com)
+
 Objects is a polished, full-featured task manager inspired by Things 3 and built as a native [Lakebed](https://lakebed.dev) capsule.
 
 It uses Lakebed’s Preact client, database API v1, live queries, mutations, hosted runtime, and first-party Google authentication. There are no OAuth keys, database credentials, runtime dependencies, or external services to configure.
