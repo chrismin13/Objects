@@ -58,4 +58,28 @@ export const featureStyles = `
   background: var(--surface);
   font: inherit;
 }
+
+@media (max-width: 820px) {
+  .toast-region {
+    top: calc(68px + env(safe-area-inset-top, 0px));
+    right: 12px;
+    bottom: auto;
+    left: 12px;
+    align-items: center;
+    transform: none;
+  }
+  .toast {
+    width: fit-content;
+    min-width: 0;
+    max-width: min(100%, 360px);
+    padding: 9px 13px;
+    border-radius: 999px;
+    animation-name: mobile-toast-in;
+  }
+  .toast span { overflow-wrap: anywhere; }
+}
+
+@keyframes mobile-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+}
 `;
