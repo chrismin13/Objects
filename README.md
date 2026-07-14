@@ -19,7 +19,7 @@ Live app: [objects.lakebed.app](https://objects.lakebed.app)
 - Natural-language capture for phrases such as `tomorrow at 2pm`, `in 3 weeks`, `next Friday`, `this evening`, `someday`, `due tomorrow`, and `#tags`
 - Things-style two-stage Quick Find across titles, tags, lists, notes, checklist items, Logbook records, Trash, headings, and special lists
 - Tomorrow, Deadlines, Repeating, All Projects, and Logged Projects views
-- Tag filtering and global tag management; drag scheduling between Upcoming days and This Evening; sidebar filing and list/heading/checklist ordering; duplication; completion undo; extended Markdown notes; project completion; and restoration
+- Tag filtering and global tag management; multi-select with batch scheduling, moving, tagging, completion, cancellation, and Trash actions; drag scheduling between Upcoming days and This Evening; sidebar filing and list/heading/checklist ordering; duplication; completion undo; extended Markdown notes; project completion; and restoration
 - Share/copy-link actions, deep links to individual to-dos, heading movement, and heading-to-project conversion
 - Things-style Logbook timing: log completed to-dos and projects immediately, daily at midnight, or manually
 - Responsive desktop/mobile layouts and light, dark, and system themes

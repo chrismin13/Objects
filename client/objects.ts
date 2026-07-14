@@ -87,6 +87,8 @@ const ui = {
   user: null,
   view: { type: 'today', id: null },
   selectedTaskId: null,
+  selectedTaskIds: new Set(),
+  selectionAnchorId: null,
   saveTimer: null,
   savesInFlight: 0,
   lastCompleted: null,
@@ -143,6 +145,7 @@ export function syncObjectsState(serializedState) {
       const selected = ui.selectedTaskId; ui.state = remote; normalizeState();
       const logged = applyLogbookPolicy();
       if (selected && !ui.state.tasks.some((task) => task.id === selected)) ui.selectedTaskId = null;
+      ui.selectedTaskIds = new Set([...ui.selectedTaskIds].filter((id) => ui.state.tasks.some((task) => task.id === id)));
       render(); showToast('Changes synced from another device');
       if (logged) scheduleSave();
     }
@@ -188,6 +191,55 @@ function normalizeState() {
     project.order ??= index;
   });
   ui.state.areas.forEach((area) => { area.tags ||= []; });
+  const discoveredTags = [...(ui.state.settings.tags || []), ...ui.state.areas.flatMap((area) => area.tags), ...ui.state.projects.flatMap((project) => project.tags), ...ui.state.tasks.flatMap((task) => task.tags)];
+  ui.state.settings.tags = cleanTagList(discoveredTags);
+  const canonicalTags = new Map(ui.state.settings.tags.map((tag) => [tag.toLocaleLowerCase(), tag]));
+  [...ui.state.areas, ...ui.state.projects, ...ui.state.tasks].forEach((item) => {
+    item.tags = cleanTagList(item.tags).map((tag) => canonicalTags.get(tag.toLocaleLowerCase()) || tag);
+  });
+}
+
+function cleanTagList(tags) {
+  const unique = new Map();
+  (Array.isArray(tags) ? tags : []).forEach((value) => {
+    const tag = String(value || '').trim().replace(/^#+/, '').slice(0, 40);
+    const key = tag.toLocaleLowerCase();
+    if (tag && !unique.has(key)) unique.set(key, tag);
+  });
+  return [...unique.values()].sort((a, b) => a.localeCompare(b));
+}
+
+function getKnownTags() {
+  return cleanTagList(ui.state?.settings?.tags || []);
+}
+
+function registerTags(tags) {
+  const next = cleanTagList([...(ui.state.settings.tags || []), ...tags]);
+  ui.state.settings.tags = next;
+  const canonical = new Map(next.map((tag) => [tag.toLocaleLowerCase(), tag]));
+  return cleanTagList(tags).map((tag) => canonical.get(tag.toLocaleLowerCase()) || tag);
+}
+
+function tagSelectionSummary(tags) {
+  if (!tags.length) return 'Choose tags…';
+  if (tags.length <= 2) return tags.join(', ');
+  return `${tags.length} tags selected`;
+}
+
+function renderTagPicker(selectedTags, field) {
+  const tags = getKnownTags();
+  if (!tags.length) return '<p class="detail-help tag-picker-empty">No tags yet. Add one in Settings first.</p>';
+  const selected = new Set(selectedTags || []);
+  return `<details class="tag-picker" data-tag-picker="${esc(field)}"><summary><span data-tag-summary>${esc(tagSelectionSummary([...selected]))}</span>${icon('chevron')}</summary><div class="tag-picker-menu" role="group" aria-label="Available tags">${tags.map((tag) => `<label><input type="checkbox" value="${esc(tag)}" data-tag-choice="${esc(field)}" ${selected.has(tag) ? 'checked' : ''}><span>${esc(tag)}</span></label>`).join('')}</div></details>`;
+}
+
+function selectedPickerTags(root) {
+  return $$('[data-tag-choice]:checked', root).map((input) => input.value);
+}
+
+function refreshTagPickerSummary(picker) {
+  const summary = $('[data-tag-summary]', picker);
+  if (summary) summary.textContent = tagSelectionSummary(selectedPickerTags(picker));
 }
 
 function isLogged(item) {
@@ -295,7 +347,8 @@ function nextRepeatDate(fromDay, repeat) {
 
 function startOfWeek(value) {
   const date = new Date(value); date.setHours(12, 0, 0, 0);
-  const offset = (date.getDay() + 6) % 7; date.setDate(date.getDate() - offset);
+  const weekStartsOn = Number(ui.state?.settings?.weekStartsOn ?? 1);
+  const offset = (date.getDay() - weekStartsOn + 7) % 7; date.setDate(date.getDate() - offset);
   return date;
 }
 
@@ -381,80 +434,33 @@ function cloneProjectTemplate(template, scheduledFor) {
   ui.state.tasks.filter((task) => task.projectId === template.id && task.status === 'open').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, repeat: null, repeatTemplateId: null, scheduledFor: null, bucket: 'anytime', status: 'open', completedAt: null, loggedAt: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
 }
 
-export function parseNaturalTask(rawTitle) {
-  let title = rawTitle.trim();
-  const today = localDay();
-  const result = { title, bucket: null, scheduledFor: null, evening: false, reminderAt: null, deadline: null, tags: [] };
-  const tagMatches = [...title.matchAll(/(?:^|\s)#([\p{L}\p{N}_-]+)/gu)];
-  result.tags = tagMatches.map((match) => match[1]);
-  title = title.replace(/(?:^|\s)#[\p{L}\p{N}_-]+/gu, ' ').replace(/\s+/g, ' ').trim();
+const NATURAL_DATE_SOURCE = [
+  'tod(?:ay)?', 'tom(?:orrow)?', 'tonight', 'this\\s+eve(?:ning)?', 'eve(?:ning)?', 'next\\s+week', 'someday',
+  '\\d+\\s*(?:d|days?|w|weeks?|mo|months?|y|years?)\\s+from\\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\s*\\d{1,2}',
+  '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\s*\\d{1,2}\\s*\\+\\s*\\d+\\s*(?:d|days?|w|weeks?|mo|months?|y|years?)',
+  '(?:\\d+(?:st|nd|rd|th)|last)\\s+(?:sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?)\\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\\s+\\d{4})?',
+  '(?:in\\s+)?\\d+\\s*(?:d|days?|w|weeks?|mo|months?|y|years?)',
+  '(?:next\\s+)?(?:sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?)',
+  '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\s*\\d{1,2}(?:,?\\s*\\d{4})?',
+  '\\d{4}-\\d{2}-\\d{2}', '\\d{1,2}[/-]\\d{1,2}(?:[/-]\\d{2,4})?'
+].join('|');
 
-  const deadlineMatch = title.match(/\s(?:deadline|due)\s+(today|tomorrow|next week|(?:in\s+)?\d+\s*(?:d|days?|w|weeks?|mo|months?|y|years?)|(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{1,2}|\d{4}-\d{2}-\d{2})\b/i);
-  if (deadlineMatch) {
-    result.deadline = parseNaturalDate(deadlineMatch[1], today) || deadlineMatch[1];
-    title = title.replace(deadlineMatch[0], '').trim();
-  }
-  const dateMatch = title.match(/\s(today|tonight|this evening|tomorrow|next week|someday|(?:in\s+)?\d+\s*(?:d|days?|w|weeks?|mo|months?|y|years?)|(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{1,2}|\d{4}-\d{2}-\d{2})(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?\s*$/i);
-  if (dateMatch) {
-    const phrase = dateMatch[1].toLowerCase();
-    if (phrase === 'someday') result.bucket = 'someday';
-    else {
-      result.scheduledFor = parseNaturalDate(phrase, today);
-      result.bucket = result.scheduledFor === today ? 'today' : 'upcoming';
-      result.evening = phrase === 'tonight' || phrase === 'this evening';
-    }
-    if (dateMatch[2] && result.scheduledFor) {
-      let hour = Number(dateMatch[2]);
-      const minute = Number(dateMatch[3] || 0);
-      const meridiem = (dateMatch[4] || '').toLowerCase();
-      if (meridiem === 'pm' && hour < 12) hour += 12;
-      if (meridiem === 'am' && hour === 12) hour = 0;
-      result.reminderAt = `${result.scheduledFor}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-    }
-    title = title.replace(dateMatch[0], '').trim();
-  }
-  if (!result.reminderAt) {
-    const timeOnly = title.match(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(a|am|p|pm)\s*$/i);
-    if (timeOnly) {
-      let hour = Number(timeOnly[1]);
-      const meridiem = timeOnly[3].toLowerCase();
-      if (meridiem.startsWith('p') && hour < 12) hour += 12;
-      if (meridiem.startsWith('a') && hour === 12) hour = 0;
-      result.scheduledFor = today; result.bucket = 'today';
-      result.reminderAt = `${today}T${String(hour).padStart(2, '0')}:${String(Number(timeOnly[2] || 0)).padStart(2, '0')}`;
-      title = title.replace(timeOnly[0], '').trim();
-    }
-  }
-  result.title = title || rawTitle.trim();
-  return result;
+function parseNaturalTime(hourValue, minuteValue = '0', meridiemValue = '') {
+  let hour = Number(hourValue);
+  const minute = Number(minuteValue || 0);
+  const meridiem = String(meridiemValue || '').toLowerCase();
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute > 59) return null;
+  if (meridiem.startsWith('p') && hour < 12) hour += 12;
+  if (meridiem.startsWith('a') && hour === 12) hour = 0;
+  if (hour > 23 || (meridiem && Number(hourValue) > 12)) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
-function parseNaturalDate(phrase, today = localDay()) {
-  const value = String(phrase || '').trim().toLowerCase();
-  if (['today', 'tonight', 'evening', 'this evening'].includes(value)) return today;
-  if (value === 'tomorrow') return addDays(today, 1);
-  if (value === 'next week') {
-    const date = new Date(`${today}T12:00:00`);
-    const weekStart = Number(ui.state?.settings?.weekStartsOn ?? 1);
-    let distance = (weekStart - date.getDay() + 7) % 7;
-    if (distance === 0) distance = 7;
-    return addDays(today, distance);
-  }
-  if (/^(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/.test(value)) return nextWeekday(value.replace('next ', ''));
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const namedDate = value.match(/^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(\d{1,2})$/);
-  if (namedDate) {
-    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-    const month = months.indexOf(namedDate[1].slice(0, 3));
-    const candidate = new Date(new Date(`${today}T12:00:00`).getFullYear(), month, Number(namedDate[2]), 12);
-    if (localDay(candidate) < today) candidate.setFullYear(candidate.getFullYear() + 1);
-    return localDay(candidate);
-  }
-  const relative = value.match(/^(?:in\s+)?(\d+)\s*(d|days?|w|weeks?|mo|months?|y|years?)$/);
-  if (!relative) return null;
-  const amount = Number(relative[1]);
-  const unit = relative[2];
-  const date = new Date(`${today}T12:00:00`);
+function offsetNaturalDate(day, amountValue, unitValue) {
+  const amount = Number(amountValue);
+  const unit = String(unitValue || '').toLowerCase();
+  const date = new Date(`${day}T12:00:00`);
+  if (!Number.isFinite(amount) || Number.isNaN(date.getTime())) return null;
   if (/^d/.test(unit)) date.setDate(date.getDate() + amount);
   else if (/^w/.test(unit)) date.setDate(date.getDate() + amount * 7);
   else if (/^mo/.test(unit)) {
@@ -463,8 +469,7 @@ function parseNaturalDate(phrase, today = localDay()) {
     const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
     date.setDate(Math.min(targetDay, lastDay));
   } else {
-    const month = date.getMonth();
-    const targetDay = date.getDate();
+    const month = date.getMonth(); const targetDay = date.getDate();
     date.setDate(1); date.setFullYear(date.getFullYear() + amount); date.setMonth(month);
     const lastDay = new Date(date.getFullYear(), month + 1, 0).getDate();
     date.setDate(Math.min(targetDay, lastDay));
@@ -472,10 +477,125 @@ function parseNaturalDate(phrase, today = localDay()) {
   return localDay(date);
 }
 
-function nextWeekday(name) {
+export function parseNaturalTask(rawTitle) {
+  let title = rawTitle.trim();
+  const today = localDay();
+  const result = { title, bucket: null, scheduledFor: null, evening: false, reminderAt: null, deadline: null, tags: [] };
+  const tagMatches = [...title.matchAll(/(?:^|\s)#([\p{L}\p{N}_-]+)/gu)];
+  result.tags = tagMatches.map((match) => match[1]);
+  title = title.replace(/(?:^|\s)#[\p{L}\p{N}_-]+/gu, ' ').replace(/\s+/g, ' ').trim();
+
+  const deadlineMatch = title.match(new RegExp(`\\s(?:deadline|due)\\s+(${NATURAL_DATE_SOURCE})(?=\\s|$)`, 'i'));
+  if (deadlineMatch) {
+    result.deadline = parseNaturalDate(deadlineMatch[1], today) || deadlineMatch[1];
+    title = title.replace(deadlineMatch[0], '').trim();
+  }
+  const dateMatch = title.match(new RegExp(`\\s(${NATURAL_DATE_SOURCE})(?:\\s+(?:at\\s+)?(\\d{1,2})(?::(\\d{2}))?\\s*(a|am|p|pm)?)?\\s*$`, 'i'));
+  if (dateMatch) {
+    const phrase = dateMatch[1].toLowerCase();
+    if (phrase === 'someday') result.bucket = 'someday';
+    else {
+      result.scheduledFor = parseNaturalDate(phrase, today);
+      result.bucket = result.scheduledFor === today ? 'today' : 'upcoming';
+      result.evening = ['tonight', 'evening', 'eve', 'this evening', 'this eve'].includes(phrase);
+    }
+    if (dateMatch[2] && result.scheduledFor) {
+      const time = parseNaturalTime(dateMatch[2], dateMatch[3], dateMatch[4]);
+      if (time) result.reminderAt = `${result.scheduledFor}T${time}`;
+    }
+    title = title.replace(dateMatch[0], '').trim();
+  }
+  if (!result.reminderAt) {
+    const timeOnly = title.match(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(a|am|p|pm)\s*$/i);
+    if (timeOnly) {
+      const time = parseNaturalTime(timeOnly[1], timeOnly[2], timeOnly[3]);
+      if (time) {
+        result.scheduledFor = today; result.bucket = 'today'; result.reminderAt = `${today}T${time}`;
+        title = title.replace(timeOnly[0], '').trim();
+      }
+    }
+  }
+  result.title = title || rawTitle.trim();
+  return result;
+}
+
+function parseNaturalDate(phrase, today = localDay()) {
+  const value = String(phrase || '').trim().toLowerCase().replace(/,/g, '').replace(/\s+/g, ' ');
+  const relativeFrom = value.match(/^(\d+)\s*(d|days?|w|weeks?|mo|months?|y|years?)\s+from\s+(.+)$/);
+  if (relativeFrom) {
+    const base = parseNaturalDate(relativeFrom[3], today);
+    return base ? offsetNaturalDate(base, relativeFrom[1], relativeFrom[2]) : null;
+  }
+  const relativePlus = value.match(/^(.+?)\s*\+\s*(\d+)\s*(d|days?|w|weeks?|mo|months?|y|years?)$/);
+  if (relativePlus) {
+    const base = parseNaturalDate(relativePlus[1], today);
+    return base ? offsetNaturalDate(base, relativePlus[2], relativePlus[3]) : null;
+  }
+  if (['today', 'tod', 'tonight', 'evening', 'eve', 'this evening', 'this eve'].includes(value)) return today;
+  if (['tomorrow', 'tom'].includes(value)) return addDays(today, 1);
+  if (value === 'next week') {
+    const date = new Date(`${today}T12:00:00`);
+    const weekStart = Number(ui.state?.settings?.weekStartsOn ?? 1);
+    let distance = (weekStart - date.getDay() + 7) % 7;
+    if (distance === 0) distance = 7;
+    return addDays(today, distance);
+  }
+  const weekday = value.match(/^(?:next\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?)$/);
+  if (weekday) return nextWeekday(weekday[1], today);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const candidate = new Date(`${value}T12:00:00`);
+    return Number.isNaN(candidate.getTime()) || localDay(candidate) !== value ? null : value;
+  }
+  const ordinalWeekday = value.match(/^(?:(\d+)(?:st|nd|rd|th)|(last))\s+(sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?)\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?$/);
+  if (ordinalWeekday) {
+    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+    const month = months.indexOf(ordinalWeekday[4].slice(0, 3));
+    const targetDay = days.findIndex((day) => day.startsWith(ordinalWeekday[3].slice(0, 3)));
+    const explicitYear = Number(ordinalWeekday[5]) || null;
+    let year = explicitYear || new Date(`${today}T12:00:00`).getFullYear();
+    const calculate = () => {
+      if (ordinalWeekday[2]) {
+        const candidate = new Date(year, month + 1, 0, 12);
+        candidate.setDate(candidate.getDate() - ((candidate.getDay() - targetDay + 7) % 7));
+        return candidate;
+      }
+      const candidate = new Date(year, month, 1, 12);
+      candidate.setDate(1 + ((targetDay - candidate.getDay() + 7) % 7) + (Number(ordinalWeekday[1]) - 1) * 7);
+      return candidate.getMonth() === month ? candidate : null;
+    };
+    let candidate = calculate();
+    if (!explicitYear && candidate && localDay(candidate) < today) { year += 1; candidate = calculate(); }
+    return candidate ? localDay(candidate) : null;
+  }
+  const namedDate = value.match(/^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(\d{1,2})(?:\s*(\d{4}))?$/);
+  if (namedDate) {
+    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    const month = months.indexOf(namedDate[1].slice(0, 3));
+    const explicitYear = Number(namedDate[3]) || null;
+    const candidate = new Date(explicitYear || new Date(`${today}T12:00:00`).getFullYear(), month, Number(namedDate[2]), 12);
+    if (!explicitYear && localDay(candidate) < today) candidate.setFullYear(candidate.getFullYear() + 1);
+    return localDay(candidate);
+  }
+  const numericDate = value.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$/);
+  if (numericDate) {
+    const currentYear = new Date(`${today}T12:00:00`).getFullYear();
+    let year = Number(numericDate[3]) || currentYear;
+    if (year < 100) year += 2000;
+    const candidate = new Date(year, Number(numericDate[1]) - 1, Number(numericDate[2]), 12);
+    if (!numericDate[3] && localDay(candidate) < today) candidate.setFullYear(candidate.getFullYear() + 1);
+    return localDay(candidate);
+  }
+  const relative = value.match(/^(?:in\s+)?(\d+)\s*(d|days?|w|weeks?|mo|months?|y|years?)$/);
+  if (!relative) return null;
+  return offsetNaturalDate(today, relative[1], relative[2]);
+}
+
+function nextWeekday(name, today = localDay()) {
   const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-  const target = days.indexOf(name);
-  const date = new Date();
+  const normalized = days.find((day) => day.startsWith(name.slice(0, 3))) || name;
+  const target = days.indexOf(normalized);
+  const date = new Date(`${today}T12:00:00`);
   let distance = (target - date.getDay() + 7) % 7;
   if (distance === 0) distance = 7;
   date.setDate(date.getDate() + distance);
@@ -520,7 +640,7 @@ function handleCaptureUrl() {
       }
     }
     task.deadline = parseNaturalDate(params.get('deadline')) || task.deadline;
-    if (params.get('tags')) task.tags = [...new Set([...task.tags, ...params.get('tags').split(',').map((tag) => tag.trim()).filter(Boolean)])];
+    if (params.get('tags')) task.tags = cleanTagList([...task.tags, ...registerTags(params.get('tags').split(','))]);
     if (params.get('checklist')) task.checklist = params.get('checklist').split(/\r?\n/).filter(Boolean).map((item) => ({ id: uid('check'), title: item, done: false }));
     if (['completed', 'canceled'].includes(params.get('status'))) { task.status = params.get('status'); task.completedAt = new Date().toISOString(); task.loggedAt = null; applyLogbookPolicy(); }
     scheduleSave(); render();
@@ -769,6 +889,7 @@ function syncSidebarAccessibility() {
 function setView(type, id = null) {
   ui.view = { type, id };
   ui.selectedTaskId = null;
+  clearTaskSelection(false);
   ui.activeTag = type === 'tag' ? id : null;
   closeSidebar();
   render();
@@ -789,7 +910,7 @@ function projectIsActive(project) { return project && (project.status === 'open'
 function projectIsToday(project, today = localDay()) { return projectIsActive(project) && (project.bucket === 'today' || (project.scheduledFor && project.scheduledFor <= today) || (project.deadline && project.deadline <= today)); }
 
 function upcomingTaskEntries(today, taskFilter) {
-  const dated = ui.state.tasks.filter((task) => taskFilter(task) && ((task.scheduledFor && task.scheduledFor > today) || (!task.scheduledFor && task.deadline && task.deadline > today))).map((task) => ({
+  const dated = ui.state.tasks.filter((task) => taskFilter(task) && ((task.scheduledFor && task.scheduledFor > today) || (task.deadline && task.deadline > today))).map((task) => ({
     ...task,
     agendaDay: task.scheduledFor && task.scheduledFor > today ? task.scheduledFor : task.deadline,
     agendaDeadlineOnly: !(task.scheduledFor && task.scheduledFor > today),
@@ -799,7 +920,7 @@ function upcomingTaskEntries(today, taskFilter) {
 }
 
 function upcomingProjectEntries(today) {
-  const dated = ui.state.projects.filter((project) => projectIsActive(project) && ((project.scheduledFor && project.scheduledFor > today) || (!project.scheduledFor && project.deadline && project.deadline > today))).map((project) => ({ ...project, agendaDay: project.scheduledFor && project.scheduledFor > today ? project.scheduledFor : project.deadline }));
+  const dated = ui.state.projects.filter((project) => projectIsActive(project) && ((project.scheduledFor && project.scheduledFor > today) || (project.deadline && project.deadline > today))).map((project) => ({ ...project, agendaDay: project.scheduledFor && project.scheduledFor > today ? project.scheduledFor : project.deadline }));
   const repeating = ui.state.projects.filter((project) => project.status === 'open' && project.repeat && !project.repeat.paused && project.repeat.nextDate > today).map((project) => ({ ...project, agendaDay: project.repeat.nextDate, agendaPreview: true }));
   return [...dated, ...repeating];
 }
@@ -867,11 +988,11 @@ function viewDefinition() {
     inbox: { title: 'Inbox', icon: 'inbox', eyebrow: 'Collect now, decide later', subtitle: 'Unsorted thoughts and to-dos waiting for a home.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.bucket === 'inbox') },
     today: { title: 'Today', icon: 'star', eyebrow: new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date()), subtitle: 'Your clear, focused plan for the day.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'today' || (t.scheduledFor && t.scheduledFor <= today && t.bucket !== 'someday' && t.bucket !== 'inbox') || (t.deadline && t.deadline <= today))), projects: ui.state.projects.filter((p) => projectIsToday(p, today)) },
     upcoming: { title: 'Upcoming', icon: 'calendar', eyebrow: 'Plan ahead', subtitle: 'Start dates, repeating plans, deadlines, and calendar events in one agenda.', tasks: upcomingTaskEntries(today, taskFilter), projects: upcomingProjectEntries(today) },
-    anytime: { title: 'Anytime', icon: 'layers', eyebrow: 'Available now', subtitle: 'Everything active that you could make progress on.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'anytime' || t.bucket === 'today') && (!t.scheduledFor || t.scheduledFor <= today)), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.bucket !== 'someday' && (!p.scheduledFor || p.scheduledFor <= today)) },
+    anytime: { title: 'Anytime', icon: 'layers', eyebrow: 'Available now', subtitle: 'Everything active that you could make progress on.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'anytime' || t.bucket === 'today') && (!t.scheduledFor || t.scheduledFor <= today)) },
     someday: { title: 'Someday', icon: 'archive', eyebrow: 'Ideas for later', subtitle: 'Possibilities worth keeping, without a commitment.', tasks: ui.state.tasks.filter((t) => (t.status === 'open' || isCompletedButVisible(t)) && !t.repeat && t.bucket === 'someday'), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.bucket === 'someday') },
     logbook: { title: 'Logbook', icon: 'check', eyebrow: 'Completed', subtitle: 'A record of the progress you have made.', tasks: ui.state.tasks.filter((t) => isLogged(t)), projects: ui.state.projects.filter((p) => isLogged(p)) },
     trash: { title: 'Trash', icon: 'trash', eyebrow: 'Discarded', subtitle: 'Items moved here stay available for recovery.', tasks: ui.state.tasks.filter(isTrashed), projects: ui.state.projects.filter(isTrashed) },
-    tomorrow: { title: 'Tomorrow', icon: 'calendar', eyebrow: formatDate(addDays(today, 1), { weekday: 'long', month: 'long', day: 'numeric' }), subtitle: 'Everything planned for the next day.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.scheduledFor === addDays(today, 1)), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.scheduledFor === addDays(today, 1)) },
+    tomorrow: { title: 'Tomorrow', icon: 'calendar', eyebrow: formatDate(addDays(today, 1), { weekday: 'long', month: 'long', day: 'numeric' }), subtitle: 'Start dates, repeating plans, and deadlines for the next day.', tasks: upcomingTaskEntries(today, taskFilter).filter((task) => task.agendaDay === addDays(today, 1)), projects: upcomingProjectEntries(today).filter((project) => project.agendaDay === addDays(today, 1)) },
     deadlines: { title: 'Deadlines', icon: 'flag', eyebrow: 'Commitments', subtitle: 'Open items ordered by the date they must be finished.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.deadline), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.deadline).sort((a, b) => a.deadline.localeCompare(b.deadline)) },
     repeating: { title: 'Repeating', icon: 'repeat', eyebrow: 'Templates', subtitle: 'Routines that create fresh to-dos and projects on their schedule.', tasks: ui.state.tasks.filter((t) => t.status === 'open' && t.repeat), repeatingProjects: ui.state.projects.filter((p) => p.status === 'open' && p.repeat) },
   };
@@ -884,7 +1005,7 @@ function viewDefinition() {
   if (ui.view.type === 'area') {
     const area = areaById(ui.view.id);
     if (!area) return definitions.today;
-    return { title: area.title, icon: 'circle', eyebrow: 'Area', subtitle: 'An ongoing part of life, with projects and standalone to-dos.', tasks: ui.state.tasks.filter((t) => t.areaId === area.id && taskFilter(t)), area };
+    return { title: area.title, icon: 'circle', eyebrow: 'Area', subtitle: 'An ongoing part of life, with projects and standalone to-dos.', tasks: ui.state.tasks.filter((t) => t.areaId === area.id && !t.projectId && taskFilter(t)), projects: ui.state.projects.filter((project) => project.areaId === area.id && projectIsActive(project) && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today)), area };
   }
   if (ui.view.type === 'tag') {
     return { title: `#${ui.view.id}`, icon: 'tag', eyebrow: 'Tag', subtitle: 'Matching items from every active list.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && effectiveTags(t).includes(ui.view.id)), projects: ui.state.projects.filter((p) => projectIsActive(p) && effectiveProjectTags(p).includes(ui.view.id)) };
@@ -929,11 +1050,11 @@ function renderContent() {
       <div class="view-title-row">${icon(view.icon, 'view-icon')}<h1>${esc(view.title)}</h1><div class="header-actions">${headerActions}</div></div>
       <p class="view-subtitle">${esc(view.subtitle)}</p>
       ${progress !== null ? `<div class="progress-line" aria-label="Project ${progress}% complete"><span style="width:${progress}%"></span></div>` : ''}
-      ${tags.length > 1 && ui.view.type !== 'tag' ? `<div class="filter-bar"><button class="chip ${!ui.activeTag ? 'active' : ''}" data-filter-tag="">All</button>${tags.map((tag) => `<button class="chip ${ui.activeTag === tag ? 'active' : ''}" data-filter-tag="${esc(tag)}">${esc(tag)}</button>`).join('')}</div>` : ''}
+      ${tags.length && ui.view.type !== 'tag' ? `<div class="filter-bar"><button class="chip ${!ui.activeTag ? 'active' : ''}" data-filter-tag="">All</button>${tags.map((tag) => `<button class="chip ${ui.activeTag === tag ? 'active' : ''}" data-filter-tag="${esc(tag)}">${esc(tag)}</button>`).join('')}</div>` : ''}
     </header>
     ${calendar}
     ${projectSection}${view.repeatingProjects?.length ? `<section class="section"><div class="section-header"><h2>Repeating projects</h2></div>${renderProjectCards(view.repeatingProjects)}</section>` : ''}${sections.length ? sections.map(renderSection).join('') : projectSection || view.repeatingProjects?.length ? '' : renderEmpty(view)}
-  </div>`;
+  </div>${renderSelectionToolbar()}`;
 }
 
 function renderCalendarEvents(viewType) {
@@ -971,6 +1092,11 @@ function buildSections(tasks) {
       return (ui.state.headings.find((h) => h.id === a)?.order || 0) - (ui.state.headings.find((h) => h.id === b)?.order || 0);
     }).map(([key, items]) => {
       const heading = ui.state.headings.find((item) => item.id === key);
+      const today = localDay();
+      items.sort((a, b) => {
+        const rank = (task) => task.bucket === 'someday' ? 2 : task.scheduledFor && task.scheduledFor > today ? 1 : 0;
+        return rank(a) - rank(b) || a.order - b.order;
+      });
       return { key, title: heading?.title || (ui.state.headings.some((h) => h.projectId === ui.view.id && !h.archived) ? 'To-dos' : ''), tasks: items, heading };
     });
   }
@@ -1052,17 +1178,137 @@ function renderTask(task) {
   else if (area && !['area', 'project'].includes(ui.view.type)) meta.push(`<span class="meta-item">${esc(area.title)}</span>`);
   if (task.deadline) meta.push(`<span class="meta-item deadline">${icon('flag')} ${deadlineLabel(task.deadline)}</span>`);
   if (task.reminderAt) meta.push(`<span class="meta-item reminder">${icon('bell')} ${formatReminderTime(task.reminderAt)}</span>`);
+  if (task.bucket === 'someday' && ui.view.type === 'project') meta.push(`<span class="meta-item">${icon('archive')} Someday</span>`);
+  else if (task.scheduledFor && task.scheduledFor > localDay() && !['upcoming', 'tomorrow'].includes(ui.view.type)) meta.push(`<span class="meta-item">${icon('calendar')} ${formatDate(task.scheduledFor, { month: 'short', day: 'numeric' })}</span>`);
   if (task.repeat) meta.push(`<span class="meta-item">${icon('repeat')} ${repeatLabel(task.repeat)}</span>`);
   if (task.agendaDeadlineOnly) meta.push(`<span class="meta-item deadline">Deadline date</span>`);
   if (task.agendaPreview) meta.push(`<span class="meta-item">Upcoming copy</span>`);
   if (task.checklist?.length) meta.push(`<span class="meta-item">${icon('list')} ${task.checklist.filter((i) => i.done).length}/${task.checklist.length}</span>`);
   if (effectiveTags(task).length) meta.push(...effectiveTags(task).slice(0, 2).map((tag) => `<span class="meta-item"><i class="tag-dot"></i>${esc(tag)}</span>`));
   const star = ui.view.type === 'anytime' && task.bucket === 'today' ? icon('star', 'today-star') : '';
-  return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="true">
+  const bulkSelected = ui.selectedTaskIds.has(task.id);
+  return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${bulkSelected ? 'bulk-selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="true" aria-selected="${bulkSelected}">
     <button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${checked ? 'Restore' : 'Complete'} ${esc(task.title)}"><span class="check-visual">${checked ? icon('check') : ''}</span></button>
     <div class="task-main" data-action="select-task" role="button" tabindex="0" aria-label="Open details for ${esc(task.title)}"><span class="task-title">${star}${esc(task.title)}</span>${task.notes ? `<div class="task-notes-preview">${esc(task.notes)}</div>` : ''}${meta.length ? `<div class="task-meta">${meta.join('')}</div>` : ''}</div>
+    <button class="task-select ${bulkSelected ? 'active' : ''}" type="button" data-action="select-bulk" aria-label="${bulkSelected ? 'Remove' : 'Add'} ${esc(task.title)} ${bulkSelected ? 'from' : 'to'} selection">${bulkSelected ? icon('check') : icon('circle')}</button>
     ${icon('chevron', 'task-chevron')}
   </li>`;
+}
+
+function selectedTasks() {
+  return ui.state.tasks.filter((task) => ui.selectedTaskIds.has(task.id));
+}
+
+function clearTaskSelection(renderAfter = true) {
+  ui.selectedTaskIds.clear();
+  ui.selectionAnchorId = null;
+  if (renderAfter && ui.state) renderContent();
+}
+
+function selectTaskForBulk(taskId, extendRange = false) {
+  if (extendRange && ui.selectionAnchorId) {
+    const visibleIds = $$('[data-task-id]', content).map((row) => row.dataset.taskId);
+    const anchor = visibleIds.indexOf(ui.selectionAnchorId);
+    const target = visibleIds.indexOf(taskId);
+    if (anchor >= 0 && target >= 0) {
+      visibleIds.slice(Math.min(anchor, target), Math.max(anchor, target) + 1).forEach((id) => ui.selectedTaskIds.add(id));
+    }
+  } else if (ui.selectedTaskIds.has(taskId)) {
+    ui.selectedTaskIds.delete(taskId);
+    if (ui.selectionAnchorId === taskId) ui.selectionAnchorId = [...ui.selectedTaskIds].at(-1) || null;
+  } else {
+    ui.selectedTaskIds.add(taskId);
+    ui.selectionAnchorId = taskId;
+  }
+  if (ui.selectedTaskIds.size) closeInspector({ restoreFocus: false });
+  renderContent();
+}
+
+function renderSelectionToolbar() {
+  const tasks = selectedTasks();
+  if (!tasks.length) return '';
+  const allTrashed = tasks.every(isTrashed);
+  const actionable = tasks.some((task) => task.status === 'open' && !task.repeat && !isTrashed(task));
+  return `<div class="selection-toolbar" role="toolbar" aria-label="Actions for ${tasks.length} selected to-do${tasks.length === 1 ? '' : 's'}">
+    <strong>${tasks.length} selected</strong>
+    ${allTrashed ? `<button class="button" type="button" data-bulk-action="restore">Restore</button>` : ''}
+    ${actionable ? `<button class="button" type="button" data-bulk-action="today">Today</button><button class="button" type="button" data-bulk-action="someday">Someday</button><button class="button" type="button" data-bulk-action="move">Move…</button><button class="button" type="button" data-bulk-action="tags">Tags…</button><button class="button" type="button" data-bulk-action="complete">Complete</button><button class="button" type="button" data-bulk-action="cancel">Cancel</button>` : ''}
+    ${!allTrashed ? `<button class="danger-button" type="button" data-bulk-action="trash">${icon('trash')} Trash</button>` : ''}
+    <button class="icon-button" type="button" data-bulk-action="clear" aria-label="Clear selection">${icon('x')}</button>
+  </div>`;
+}
+
+function handleBulkAction(action) {
+  const tasks = selectedTasks();
+  const actionable = tasks.filter((task) => task.status === 'open' && !task.repeat && !isTrashed(task));
+  if (action === 'clear') { clearTaskSelection(); return; }
+  if (action === 'move') { openMoveTaskModal(actionable); return; }
+  if (action === 'tags') { openBulkTagsModal(actionable); return; }
+  if (action === 'today' || action === 'someday') {
+    actionable.forEach((task) => {
+      const nextDate = action === 'today' ? localDay() : null;
+      moveReminderToDate(task, nextDate);
+      task.bucket = action;
+      task.scheduledFor = nextDate;
+      task.evening = false;
+    });
+    scheduleSave(); clearTaskSelection(); showToast(`${actionable.length} to-do${actionable.length === 1 ? '' : 's'} moved to ${action === 'today' ? 'Today' : 'Someday'}`); return;
+  }
+  if (action === 'complete' || action === 'cancel') {
+    const finishedAt = new Date().toISOString();
+    actionable.forEach((task) => {
+      task.status = action === 'complete' ? 'completed' : 'canceled';
+      task.completedAt = finishedAt; task.loggedAt = null; task.completedWithProjectId = null;
+      if (task.repeatTemplateId) {
+        const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
+        if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
+      }
+    });
+    applyLogbookPolicy(); materializeRecurringTasks(); scheduleSave(); clearTaskSelection();
+    showToast(`${actionable.length} to-do${actionable.length === 1 ? '' : 's'} ${action === 'complete' ? 'completed' : 'canceled'}`); return;
+  }
+  if (action === 'restore') {
+    tasks.forEach((task) => restoreTrashedTask(task));
+    scheduleSave(); clearTaskSelection(); showToast(`${tasks.length} to-do${tasks.length === 1 ? '' : 's'} restored`); return;
+  }
+  if (action === 'trash') {
+    const trashedAt = new Date().toISOString();
+    tasks.filter((task) => !isTrashed(task)).forEach((task) => {
+      task.previousStatus = task.status; task.status = 'trashed'; task.loggedAt = null; task.trashedAt = trashedAt;
+    });
+    scheduleSave(); clearTaskSelection(); showToast(`${tasks.length} to-do${tasks.length === 1 ? '' : 's'} moved to Trash`);
+  }
+}
+
+function openBulkTagsModal(tasks) {
+  if (!tasks.length) return;
+  const knownTags = getKnownTags();
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="bulk-tags-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Tag ${tasks.length} to-do${tasks.length === 1 ? '' : 's'}</h2><p>Checked tags will be applied to every selected to-do. A mixed tag stays unchanged until you click it.</p><div class="bulk-tag-grid">${knownTags.map((tag) => {
+    const count = tasks.filter((task) => task.tags.includes(tag)).length;
+    const state = count === tasks.length ? 'all' : count ? 'mixed' : 'none';
+    return `<label class="bulk-tag-option"><input type="checkbox" value="${esc(tag)}" data-tag-state="${state}" ${state === 'all' ? 'checked' : ''}><span>${esc(tag)}</span></label>`;
+  }).join('') || '<p>No tags yet.</p>'}</div><div class="form-field"><label for="bulk-new-tags">Add new tags</label><input id="bulk-new-tags" placeholder="Errand, Focused"></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Apply tags</button></div></form></div>`;
+  activateModal();
+  $$('[data-tag-state="mixed"]').forEach((input) => { input.indeterminate = true; });
+  $$('.bulk-tag-option input').forEach((input) => input.addEventListener('change', () => { input.indeterminate = false; input.dataset.changed = 'true'; }));
+  $('[data-cancel]').addEventListener('click', closeModal);
+  $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
+  $('#bulk-tags-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const tagInputs = $$('input[type="checkbox"]', event.currentTarget);
+    const newTags = registerTags($('#bulk-new-tags').value.split(','));
+    tasks.forEach((task) => {
+      const next = new Set(task.tags);
+      tagInputs.forEach((input) => {
+        if (input.dataset.tagState === 'mixed' && input.dataset.changed !== 'true') return;
+        if (input.checked) next.add(input.value);
+        else next.delete(input.value);
+      });
+      newTags.forEach((tag) => next.add(tag));
+      task.tags = [...next];
+    });
+    scheduleSave(); closeModal(); clearTaskSelection(); showToast(`Tags updated on ${tasks.length} to-do${tasks.length === 1 ? '' : 's'}`);
+  });
 }
 
 function canQuickAdd() { return !['logbook', 'trash', 'upcoming', 'repeating', 'allProjects', 'loggedProjects'].includes(ui.view.type) && !(ui.view.type === 'project' && projectById(ui.view.id)?.status !== 'open'); }
@@ -1113,8 +1359,18 @@ function deadlineLabel(day) {
 function handleContentClick(event) {
   const taskRow = event.target.closest('[data-task-id]');
   const action = event.target.closest('[data-action]')?.dataset.action;
+  const bulkAction = event.target.closest('[data-bulk-action]')?.dataset.bulkAction;
+  if (bulkAction) { handleBulkAction(bulkAction); return; }
+  if (action === 'select-bulk' && taskRow) {
+    selectTaskForBulk(taskRow.dataset.taskId, event.shiftKey);
+    return;
+  }
   if (action === 'toggle-task' && taskRow) {
     toggleTask(taskRow.dataset.taskId, taskRow);
+    return;
+  }
+  if (taskRow && (event.metaKey || event.ctrlKey || event.shiftKey)) {
+    selectTaskForBulk(taskRow.dataset.taskId, event.shiftKey);
     return;
   }
   if (taskRow && (action === 'select-task' || !event.target.closest('button'))) {
@@ -1325,7 +1581,7 @@ function createTaskFromParsed(parsed, options = {}) {
   const today = localDay();
   const task = {
     id: uid('task'), title: parsed.title, notes: options.notes || '', status: 'open', bucket: 'inbox', scheduledFor: null, evening: false, reminderAt: null, deadline: null,
-    projectId: options.projectId || null, headingId: null, areaId: null, tags: parsed.tags || [], checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now(),
+    projectId: options.projectId || null, headingId: null, areaId: null, tags: registerTags(parsed.tags || []), checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now(),
   };
   if (options.useCurrentView !== false) {
     if (ui.view.type === 'today') { task.bucket = 'today'; task.scheduledFor = today; }
@@ -1474,7 +1730,7 @@ function renderInspector() {
     ${task.projectId ? `<div class="detail-group"><label class="detail-label" for="task-heading">Heading</label><select id="task-heading" class="detail-select" data-field="headingId">${headingOptions}</select></div>` : ''}
     <div class="detail-group"><label class="detail-label" for="task-reminder">Reminder</label><input id="task-reminder" class="detail-input" type="datetime-local" data-field="reminderAt" value="${task.reminderAt || ''}"></div>
     <div class="detail-group"><label class="detail-label" for="task-deadline">Deadline</label><input id="task-deadline" class="detail-input" type="date" data-field="deadline" value="${task.deadline || ''}"></div>
-    <div class="detail-group"><label class="detail-label" for="task-tags">Tags</label><input id="task-tags" class="detail-input" type="text" data-field="tags" value="${esc(task.tags.join(', '))}" placeholder="Errand, Focused"></div>
+    <div class="detail-group"><span class="detail-label">Tags</span>${renderTagPicker(task.tags, 'task')}</div>
     <div class="detail-group"><span class="detail-label">Checklist</span><div class="checklist">${task.checklist.map((item) => `<div class="checklist-item" data-check-id="${item.id}" draggable="true"><input type="checkbox" data-check-field="done" ${item.done ? 'checked' : ''} ${repeat ? 'disabled' : ''} aria-label="${repeat ? 'Checklist items can be completed on generated copies only' : 'Complete checklist item'}"><input type="text" data-check-field="title" value="${esc(item.title)}" aria-label="Checklist item"><button class="checklist-remove" data-inspector-action="remove-check" aria-label="Remove checklist item">×</button></div>`).join('')}</div>${repeat ? '<p class="detail-help">Complete checklist items on each generated copy. This template controls future copies.</p>' : ''}<button class="checklist-add" data-inspector-action="add-check">+ Add item</button></div>
     <div class="detail-group"><span class="detail-label">Repeat</span>${repeat ? `<div class="repeat-grid"><select class="detail-select" data-repeat-field="mode"><option value="fixed" ${repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-repeat-field="frequency"><option value="daily" ${repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" max="365" data-repeat-field="interval" value="${repeat.interval || 1}" aria-label="Repeat interval"><input class="detail-input" type="date" data-repeat-field="nextDate" value="${repeat.nextDate || localDay()}" aria-label="Next occurrence"></div>${repeat.frequency === 'weekly' ? `<div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(repeat.weekdays || []).includes(day) ? 'active' : ''}" data-weekday="${day}" aria-label="Repeat on ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}">${label}</button>`).join('')}</div>` : ''}<div class="settings-row"><label for="repeat-paused">Pause schedule</label><input id="repeat-paused" type="checkbox" data-repeat-field="paused" ${repeat.paused ? 'checked' : ''}></div><button class="checklist-add" data-inspector-action="stop-repeat">Stop repeating</button>` : `<button class="checklist-add" data-inspector-action="start-repeat">Make repeating…</button>`}</div>
     <div class="inspector-actions">${!isTrashed(task) ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === 'open' && !task.repeat ? '<button class="button" data-inspector-action="cancel">Cancel to-do</button>' : ''}` : ''}${isTrashed(task) ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}</div>
@@ -1562,7 +1818,6 @@ function handleInspectorInput(event) {
   if (!task) return;
   const field = event.target.dataset.field;
   if (field === 'title' || field === 'notes') task[field] = event.target.value;
-  if (field === 'tags') task.tags = event.target.value.split(',').map((v) => v.trim()).filter(Boolean);
   const checkRow = event.target.closest('[data-check-id]');
   if (checkRow && event.target.dataset.checkField === 'title') {
     const item = task.checklist.find((check) => check.id === checkRow.dataset.checkId);
@@ -1579,6 +1834,13 @@ function handleInspectorInput(event) {
 function handleInspectorChange(event) {
   const task = currentTask();
   if (!task) return;
+  if (event.target.dataset.tagChoice === 'task') {
+    const picker = event.target.closest('[data-tag-picker]');
+    task.tags = selectedPickerTags(picker);
+    refreshTagPickerSummary(picker);
+    scheduleSave(); renderSidebar(); renderContent();
+    return;
+  }
   const field = event.target.dataset.field;
   if (['deadline', 'scheduledFor', 'reminderAt'].includes(field)) task[field] = event.target.value || null;
   if (field === 'scheduledFor') {
@@ -1723,17 +1985,21 @@ async function shareTask(task) {
   }
 }
 
-function openMoveTaskModal(task) {
+function openMoveTaskModal(taskOrTasks) {
+  const tasks = (Array.isArray(taskOrTasks) ? taskOrTasks : [taskOrTasks]).filter(Boolean);
+  if (!tasks.length) return;
+  const task = tasks[0];
+  const single = tasks.length === 1;
   const destinations = [
     `<option value="inbox">Inbox</option>`,
     `<option value="anytime">No area or project (Anytime)</option>`,
-    ...ui.state.areas.map((area) => `<option value="area:${area.id}" ${task.areaId === area.id && !task.projectId ? 'selected' : ''}>${esc(area.title)} (Area)</option>`),
+    ...ui.state.areas.map((area) => `<option value="area:${area.id}" ${single && task.areaId === area.id && !task.projectId ? 'selected' : ''}>${esc(area.title)} (Area)</option>`),
     ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).flatMap((project) => [
-      `<option value="project:${project.id}" ${task.projectId === project.id && !task.headingId ? 'selected' : ''}>${esc(project.title)} (Project)</option>`,
-      ...ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${task.headingId === heading.id ? 'selected' : ''}>${esc(project.title)} › ${esc(heading.title)}</option>`)
+      `<option value="project:${project.id}" ${single && task.projectId === project.id && !task.headingId ? 'selected' : ''}>${esc(project.title)} (Project)</option>`,
+      ...ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(project.title)} › ${esc(heading.title)}</option>`)
     ])
   ].join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="move-task-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Move to-do</h2><p>Move it to the Inbox, an area, a project, or directly under a heading.</p><div class="form-field"><label for="move-destination">Destination</label><select id="move-destination">${destinations}</select></div><div class="form-field"><label for="move-new-project">Or create a new project</label><input id="move-new-project" placeholder="New project name"></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Move</button></div></form></div>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="move-task-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Move ${tasks.length === 1 ? 'to-do' : `${tasks.length} to-dos`}</h2><p>Move ${tasks.length === 1 ? 'it' : 'them'} to the Inbox, an area, a project, or directly under a heading.</p><div class="form-field"><label for="move-destination">Destination</label><select id="move-destination">${destinations}</select></div><div class="form-field"><label for="move-new-project">Or create a new project</label><input id="move-new-project" placeholder="New project name"></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Move</button></div></form></div>`;
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -1747,14 +2013,16 @@ function openMoveTaskModal(task) {
       destinationProject = { id: uid('project'), areaId: selectedAreaId, title: newTitle, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
       ui.state.projects.push(destinationProject);
     }
-    task.projectId = null; task.headingId = null; task.areaId = null;
-    if (destinationProject) { task.projectId = destinationProject.id; task.areaId = destinationProject.areaId; }
-    else if (value === 'inbox') { task.bucket = 'inbox'; task.scheduledFor = null; task.evening = false; }
-    else if (value === 'anytime') { if (task.bucket === 'inbox') task.bucket = 'anytime'; }
-    else if (value.startsWith('area:')) { task.areaId = value.slice(5); if (task.bucket === 'inbox') task.bucket = 'anytime'; }
-    else if (value.startsWith('project:')) { const project = projectById(value.slice(8)); task.projectId = project.id; task.areaId = project.areaId || null; if (task.bucket === 'inbox') task.bucket = 'anytime'; }
-    else if (value.startsWith('heading:')) { const heading = ui.state.headings.find((item) => item.id === value.slice(8)); const project = projectById(heading.projectId); task.headingId = heading.id; task.projectId = project.id; task.areaId = project.areaId || null; if (task.bucket === 'inbox') task.bucket = 'anytime'; }
-    scheduleSave(); closeModal(); render(); showToast(newTitle ? `Moved to new project “${newTitle}”` : 'To-do moved');
+    tasks.forEach((item) => {
+      item.projectId = null; item.headingId = null; item.areaId = null;
+      if (destinationProject) { item.projectId = destinationProject.id; item.areaId = destinationProject.areaId; }
+      else if (value === 'inbox') { item.bucket = 'inbox'; item.scheduledFor = null; item.evening = false; moveReminderToDate(item, null); }
+      else if (value === 'anytime') { if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+      else if (value.startsWith('area:')) { item.areaId = value.slice(5); if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+      else if (value.startsWith('project:')) { const project = projectById(value.slice(8)); item.projectId = project.id; item.areaId = project.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+      else if (value.startsWith('heading:')) { const heading = ui.state.headings.find((candidate) => candidate.id === value.slice(8)); const project = projectById(heading.projectId); item.headingId = heading.id; item.projectId = project.id; item.areaId = project.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+    });
+    scheduleSave(); closeModal(); clearTaskSelection(); showToast(newTitle ? `Moved to new project “${newTitle}”` : `${tasks.length === 1 ? 'To-do' : `${tasks.length} to-dos`} moved`);
   });
 }
 
@@ -1926,7 +2194,7 @@ function openProjectModal(projectId) {
     if (['anytime', 'someday'].includes(project.bucket)) project.scheduledFor = null;
     if (project.bucket === 'upcoming' && !project.scheduledFor) project.scheduledFor = addDays(localDay(), 1);
     project.deadline = $('#project-deadline').value || null;
-    project.tags = $('#project-tags').value.split(',').map((value) => value.trim()).filter(Boolean);
+    project.tags = registerTags($('#project-tags').value.split(','));
     $$('[data-project-repeat-field]').forEach((field) => { project.repeat[field.dataset.projectRepeatField] = field.dataset.projectRepeatField === 'interval' ? Math.max(1, Number(field.value) || 1) : field.value; });
     if (project.repeat) project.repeat.deadlineOffset = dayDistance(project.repeat.nextDate, project.deadline);
     ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.areaId = project.areaId; });
@@ -2041,7 +2309,7 @@ function openAreaModal(areaId) {
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
-  $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.color = $('#area-color').value; area.tags = $('#area-tags').value.split(',').map((value) => value.trim()).filter(Boolean); scheduleSave(); closeModal(); render(); });
+  $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.color = $('#area-color').value; area.tags = registerTags($('#area-tags').value.split(',')); scheduleSave(); closeModal(); render(); });
   $('[data-area-delete]').addEventListener('click', () => {
     confirmAction('Delete this area?', 'Its projects and to-dos will be kept.', 'Delete area', () => {
       ui.state.areas = ui.state.areas.filter((item) => item.id !== area.id);
@@ -2054,35 +2322,59 @@ function openAreaModal(areaId) {
 
 function openSettings() {
   const settings = ui.state.settings;
-  const managedTags = [...new Set([...ui.state.areas.flatMap((area) => area.tags || []), ...ui.state.projects.flatMap((project) => project.tags || []), ...ui.state.tasks.flatMap((task) => task.tags || [])])].sort((a, b) => a.localeCompare(b));
+  const managedTags = getKnownTags();
   const pwa = getPwaStatus();
   const pendingLogCount = [...ui.state.tasks, ...ui.state.projects].filter(isCompletedButVisible).length;
   const logbookHelp = settings.logCompletedItems === 'immediately' ? 'Completed items move to the Logbook as soon as they are checked.' : settings.logCompletedItems === 'manually' ? 'Completed items stay in their original lists until you log them.' : 'Completed items stay visible for the rest of the day and move to the Logbook after midnight.';
   const installLabel = pwa.installed ? 'Installed' : pwa.canPromptInstall ? 'Install Objects' : 'Installation help';
   const installHelp = pwa.installed ? 'Objects is running as an installed app.' : pwa.ios ? 'On iPhone or iPad, use Share → Add to Home Screen. Notifications are available only after installation.' : 'Install from this button when available, or use your browser’s Install app / Add to Home Screen menu.';
   const notificationLabel = pwa.notificationPermission === 'unsupported' ? 'Not supported here' : pwa.notificationPermission === 'denied' ? 'Blocked in browser settings' : settings.notifications && pwa.notificationPermission === 'granted' ? 'Disable notifications' : 'Enable notifications';
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings"><h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p><div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div><div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div><div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div><div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div><div class="settings-section"><h3>Reminders</h3><p>Notifications work on desktop and mobile, including notification taps that reopen the task. Scheduled reminders are reliable while Objects is open; closed-app delivery needs a server push scheduler.</p><button class="button" type="button" data-settings-action="notifications" ${pwa.notificationPermission === 'denied' ? 'disabled' : ''}>${esc(notificationLabel)}</button></div><div class="settings-section"><h3>Calendar</h3><p>Add an event manually or import a standard .ics calendar file. Events remain private in your Objects data.</p><div class="form-field"><label for="event-title">Event</label><input id="event-title" placeholder="Event title"></div><div class="repeat-grid"><div class="form-field"><label for="event-start">Starts</label><input id="event-start" type="datetime-local"></div><div class="form-field"><label for="event-end">Ends</label><input id="event-end" type="datetime-local"></div></div><div class="button-row"><button class="button" type="button" data-settings-action="add-event">Add event</button><label class="button" for="ics-import">Import .ics</label><input class="hidden-file" id="ics-import" type="file" accept=".ics,text/calendar"></div></div><div class="settings-section"><h3>Tags</h3><p>Rename a tag everywhere or remove it from all items.</p><div class="tag-manager">${managedTags.length ? managedTags.map((tag) => `<div class="settings-row tag-manager-row"><input class="detail-input" value="${esc(tag)}" data-tag-original="${esc(tag)}" aria-label="Rename ${esc(tag)}"><button class="button" type="button" data-delete-tag="${esc(tag)}">Remove</button></div>`).join('') : '<p>No tags yet.</p>'}</div></div><div class="settings-section"><h3>Data</h3><p>Export a complete backup or import one from another Objects installation.</p><div class="button-row"><button class="button" type="button" data-settings-action="export">${icon('download')} Export JSON</button><label class="button" for="json-import">${icon('upload')} Import JSON</label><input class="hidden-file" id="json-import" type="file" accept="application/json,.json"></div></div><div class="settings-section"><h3>Automation</h3><p>Open <code>/?title=Call%20Maya%20tomorrow</code> while signed in, or use the authenticated <code>POST /api/tasks</code> Lakebed endpoint.</p></div><div class="form-actions"><button class="button primary" type="button" data-cancel>Done</button></div></div></div>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
+    <h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p>
+    <div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div>
+    <div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div>
+    <div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div>
+    <div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div>
+    <div class="settings-section"><h3>Reminders</h3><p>Notifications work on desktop and mobile, including notification taps that reopen the task. Scheduled reminders are reliable while Objects is open; closed-app delivery needs a server push scheduler.</p><button class="button" type="button" data-settings-action="notifications" ${pwa.notificationPermission === 'denied' ? 'disabled' : ''}>${esc(notificationLabel)}</button></div>
+    <div class="settings-section"><h3>Calendar</h3><p>Add an event manually or import a standard .ics calendar file. Events remain private in your Objects data.</p><div class="form-field"><label for="event-title">Event</label><input id="event-title" placeholder="Event title"></div><div class="repeat-grid"><div class="form-field"><label for="event-start">Starts</label><input id="event-start" type="datetime-local"></div><div class="form-field"><label for="event-end">Ends</label><input id="event-end" type="datetime-local"></div></div><div class="button-row"><button class="button" type="button" data-settings-action="add-event">Add event</button><label class="button" for="ics-import">Import .ics</label><input class="hidden-file" id="ics-import" type="file" accept=".ics,text/calendar"></div></div>
+    <div class="settings-section"><h3>Tags</h3><p>Create tags here, then choose them from the tag dropdown on a to-do. Renames and removals apply everywhere.</p><form id="new-tag-form" class="tag-add-row"><input id="new-tag" class="detail-input" maxlength="40" autocomplete="off" placeholder="New tag name" aria-label="New tag name"><button class="button primary" type="submit">Add tag</button></form><div class="tag-manager">${managedTags.length ? managedTags.map((tag) => `<div class="settings-row tag-manager-row"><input class="detail-input" value="${esc(tag)}" data-tag-original="${esc(tag)}" aria-label="Rename ${esc(tag)}"><button class="button" type="button" data-delete-tag="${esc(tag)}">Remove</button></div>`).join('') : '<p>No tags yet.</p>'}</div></div>
+    <div class="settings-section"><h3>Data</h3><p>Export a complete backup or import one from another Objects installation.</p><div class="button-row"><button class="button" type="button" data-settings-action="export">${icon('download')} Export JSON</button><label class="button" for="json-import">${icon('upload')} Import JSON</label><input class="hidden-file" id="json-import" type="file" accept="application/json,.json"></div></div>
+    <div class="settings-section"><h3>Automation</h3><p>Open <code>/?title=Call%20Maya%20tomorrow</code> while signed in, or use the authenticated <code>POST /api/tasks</code> Lakebed endpoint.</p></div><div class="form-actions"><button class="button primary" type="button" data-cancel>Done</button></div>
+  </div></div>`;
   activateModal();
+  $('#setting-theme').closest('.settings-row').insertAdjacentHTML('beforebegin', `<div class="settings-row"><label for="setting-week-start">Week starts on</label><select id="setting-week-start" class="detail-select"><option value="1" ${Number(settings.weekStartsOn) === 1 ? 'selected' : ''}>Monday</option><option value="0" ${Number(settings.weekStartsOn) === 0 ? 'selected' : ''}>Sunday</option></select></div>`);
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
   $('#setting-group').addEventListener('change', (event) => { settings.groupToday = event.target.checked; scheduleSave(); render(); });
   $('#setting-calendar').addEventListener('change', (event) => { settings.showCalendar = event.target.checked; scheduleSave(); renderContent(); });
+  $('#setting-week-start').addEventListener('change', (event) => { settings.weekStartsOn = Number(event.target.value); scheduleSave(); });
   $('#setting-theme').addEventListener('change', (event) => { settings.theme = event.target.value; applyTheme(); scheduleSave(); });
   $$('[data-settings-action]').forEach((button) => button.addEventListener('click', () => handleSettingsAction(button.dataset.settingsAction)));
   $('#json-import').addEventListener('change', importJsonFile);
   $('#ics-import').addEventListener('change', importIcsFile);
+  $('#new-tag-form').addEventListener('submit', (event) => { event.preventDefault(); addTag($('#new-tag').value); });
   $$('[data-tag-original]').forEach((input) => input.addEventListener('change', () => renameTag(input.dataset.tagOriginal, input.value.trim())));
   $$('[data-delete-tag]').forEach((button) => button.addEventListener('click', () => removeTag(button.dataset.deleteTag)));
   bindLogbookSettings(settings);
 }
 
 function updateTagsEverywhere(transform) {
-  [...ui.state.areas, ...ui.state.projects, ...ui.state.tasks].forEach((item) => { item.tags = [...new Set((item.tags || []).map(transform).filter(Boolean))]; });
+  ui.state.settings.tags = cleanTagList((ui.state.settings.tags || []).map(transform).filter(Boolean));
+  [...ui.state.areas, ...ui.state.projects, ...ui.state.tasks].forEach((item) => { item.tags = cleanTagList((item.tags || []).map(transform).filter(Boolean)); });
+}
+
+function addTag(value) {
+  const tag = cleanTagList([value])[0];
+  if (!tag) { showToast('Enter a tag name'); $('#new-tag')?.focus(); return; }
+  if (getKnownTags().some((existing) => existing.toLocaleLowerCase() === tag.toLocaleLowerCase())) { showToast(`“${tag}” already exists`); $('#new-tag')?.select(); return; }
+  registerTags([tag]); scheduleSave(); openSettings(); showToast(`Added “${tag}”`);
+  setTimeout(() => $('#new-tag')?.focus(), 20);
 }
 
 function renameTag(from, to) {
-  if (!to || to === from) { openSettings(); return; }
-  updateTagsEverywhere((tag) => tag === from ? to : tag); scheduleSave(); openSettings(); showToast(`Renamed “${from}” to “${to}”`);
+  const normalized = cleanTagList([to])[0];
+  if (!normalized || normalized === from) { openSettings(); return; }
+  updateTagsEverywhere((tag) => tag === from ? normalized : tag); scheduleSave(); openSettings(); showToast(`Renamed “${from}” to “${normalized}”`);
 }
 
 function removeTag(tag) {
@@ -2239,12 +2531,20 @@ function handleGlobalKeydown(event) {
   }
   if (event.key === 'Escape') {
     if ($('#modal-root').children.length) closeModal();
+    else if (ui.selectedTaskIds.size) clearTaskSelection();
     else if (ui.selectedTaskId) closeInspector();
     else closeSidebar();
     return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); return; }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); openSearch(); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+    event.preventDefault();
+    $$('[data-task-id]', content).forEach((row) => ui.selectedTaskIds.add(row.dataset.taskId));
+    ui.selectionAnchorId = [...ui.selectedTaskIds][0] || null;
+    if (ui.selectedTaskIds.size) closeInspector({ restoreFocus: false });
+    renderContent(); return;
+  }
   if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'n') { event.preventDefault(); beginQuickAdd(true); return; }
   if ((event.metaKey || event.ctrlKey) && event.altKey && event.key.toLowerCase() === 'n') { event.preventDefault(); openNewListModal(); return; }
   if ((event.metaKey || event.ctrlKey) && /^[1-6]$/.test(event.key)) {
@@ -2253,8 +2553,17 @@ function handleGlobalKeydown(event) {
   }
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
   if ((event.metaKey || event.ctrlKey) && event.key === '.' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 't' && ui.selectedTaskId) {
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 't' && ui.selectedTaskId) {
     event.preventDefault(); const task = currentTask(); task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = false; moveReminderToDate(task, task.scheduledFor); scheduleSave(); render(); return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.altKey && event.key.toLowerCase() === 't' && ui.selectedTaskId) {
+    event.preventDefault(); const task = currentTask(); task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = true; moveReminderToDate(task, task.scheduledFor); scheduleSave(); render(); return;
+  }
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 's' && ui.selectedTaskId) {
+    event.preventDefault(); renderInspector(); setTimeout(() => $('[data-field="scheduledFor"]', inspector)?.focus(), 20); return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'd' && ui.selectedTaskId) {
+    event.preventDefault(); renderInspector(); setTimeout(() => $('[data-field="deadline"]', inspector)?.focus(), 20); return;
   }
   if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'r' && ui.selectedTaskId) {
     event.preventDefault(); renderInspector(); setTimeout(() => $('[data-field="scheduledFor"]', inspector)?.focus(), 20); return;
@@ -2262,7 +2571,7 @@ function handleGlobalKeydown(event) {
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r' && ui.selectedTaskId) {
     event.preventDefault(); const task = currentTask(); if (!task.repeat) { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(); } return;
   }
-  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f' && ui.selectedTaskId) { event.preventDefault(); openMoveTaskModal(currentTask()); return; }
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && ['f', 'm'].includes(event.key.toLowerCase()) && (ui.selectedTaskId || ui.selectedTaskIds.size)) { event.preventDefault(); openMoveTaskModal(ui.selectedTaskIds.size ? selectedTasks() : currentTask()); return; }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') { event.preventDefault(); const logged = logCompletedNow(); scheduleSave(); render(); showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`); return; }
   if (event.altKey && event.key === 'Backspace' && ui.selectedTaskId && currentTask()?.status === 'open') {
     event.preventDefault(); const task = currentTask(); task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = null; applyLogbookPolicy(); scheduleSave(); closeInspector(); render(); showToast('To-do canceled'); return;

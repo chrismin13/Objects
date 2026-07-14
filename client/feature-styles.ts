@@ -1,4 +1,53 @@
 export const featureStyles = `
+.task-row { grid-template-columns: 26px minmax(0, 1fr) 28px 16px; }
+.task-row.bulk-selected { background: var(--blue-soft); }
+.task-select {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin: -4px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  opacity: 0;
+}
+.task-select svg { width: 17px; height: 17px; }
+.task-row:hover .task-select,
+.task-row:focus-within .task-select,
+.task-select.active { opacity: 1; }
+.task-select.active { background: var(--blue); color: #fff; }
+.selection-toolbar {
+  position: fixed;
+  z-index: 25;
+  left: calc(var(--sidebar-width) + (100vw - var(--sidebar-width)) / 2);
+  bottom: 22px;
+  transform: translateX(-50%);
+  max-width: min(760px, calc(100vw - var(--sidebar-width) - 32px));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+}
+.selection-toolbar strong { padding: 0 8px; white-space: nowrap; font-size: 12px; }
+.selection-toolbar .button,
+.selection-toolbar .danger-button { min-height: 34px; white-space: nowrap; }
+.selection-toolbar .icon-button { flex: none; }
+.bulk-tag-grid { display: flex; flex-wrap: wrap; gap: 7px; }
+.bulk-tag-option { position: relative; }
+.bulk-tag-option input { position: absolute; opacity: 0; pointer-events: none; }
+.bulk-tag-option span { display: block; padding: 7px 11px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--muted); cursor: pointer; }
+.bulk-tag-option input:checked + span { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+.bulk-tag-option input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
 .detail-row:has(.inline-add) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -60,6 +109,15 @@ export const featureStyles = `
 }
 
 @media (max-width: 820px) {
+  .task-row { grid-template-columns: 32px minmax(0, 1fr) 44px 16px; }
+  .task-select { width: 44px; height: 44px; margin: -8px 0; opacity: 1; }
+  .selection-toolbar {
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+    transform: none;
+  }
   .toast-region {
     top: calc(68px + env(safe-area-inset-top, 0px));
     right: 12px;
@@ -77,6 +135,10 @@ export const featureStyles = `
     animation-name: mobile-toast-in;
   }
   .toast span { overflow-wrap: anywhere; }
+}
+
+@media (max-width: 520px) {
+  .task-row { grid-template-columns: 32px minmax(0, 1fr) 44px; }
 }
 
 @keyframes mobile-toast-in {
