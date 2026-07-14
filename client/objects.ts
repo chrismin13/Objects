@@ -20,6 +20,7 @@ const icons = {
   chevron: '<path d="m9 18 6-6-6-6"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   folder: '<path d="M3 5h6l2 2h10v12H3z"/>',
+  area: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
   circle: '<circle cx="12" cy="12" r="9"/>',
   flag: '<path d="M5 21V4M5 4h12l-2 4 2 4H5"/>',
   tag: '<path d="M20.59 13.41 11 3H4v7l9.59 9.59a2 2 0 0 0 2.82 0l4.18-4.18a2 2 0 0 0 0-2.82Z"/><circle cx="7.5" cy="6.5" r=".7"/>',
@@ -90,7 +91,6 @@ const ui = {
   selectedTaskIds: new Set(),
   selectionAnchorId: null,
   saveTimer: null,
-  savesInFlight: 0,
   lastCompleted: null,
   focusedSearchIndex: 0,
   searchEverything: false,
@@ -141,10 +141,7 @@ export function mountObjects(serializedState, options) {
 }
 
 export function syncObjectsState(serializedState) {
-  // The save mutation normalizes updatedAt on the server. Ignore its live-query
-  // echo until the mutation returns that timestamp, otherwise we rebuild the UI
-  // around whichever control the user is still editing.
-  if (!ui.state || ui.saveTimer || ui.savesInFlight) return;
+  if (!ui.state || ui.saveTimer) return;
   try {
     const remote = JSON.parse(serializedState);
     if (remote.updatedAt && remote.updatedAt !== ui.state.updatedAt) {
@@ -762,7 +759,7 @@ function bindStaticEvents() {
   $('#sidebar-close').innerHTML = icon('x');
   $('#magic-add').innerHTML = icon('plus');
   $('#magic-add').draggable = true;
-  $('#new-list-button').innerHTML = `${icon('plus')}<span>New list</span>`;
+  $('#new-list-button').innerHTML = `${icon('plus')}<span>New List</span>`;
   $('#settings-button').innerHTML = icon('settings');
   $('#search-button').addEventListener('click', () => openSearch());
   $('#mobile-search').addEventListener('click', () => openSearch());
@@ -1056,7 +1053,7 @@ function renderSidebar() {
     const areaProjects = ui.state.projects.filter((project) => project.areaId === area.id && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today)).sort((a, b) => a.order - b.order);
     return `<li>
       <button class="nav-item ${ui.view.type === 'area' && ui.view.id === area.id ? 'active' : ''}" data-view="area" data-id="${area.id}" data-list-kind="area" draggable="true">
-        <span class="nav-symbol" style="color:${esc(area.color || '#999')}">●</span><span class="nav-title">${esc(area.title)}</span><span class="nav-count">${taskCount('area', area.id) || ''}</span>
+        ${icon('area', 'nav-area-icon')}<span class="nav-title">${esc(area.title)}</span><span class="nav-count">${taskCount('area', area.id) || ''}</span>
       </button>
       ${areaProjects.length ? `<ul class="nav-list">${areaProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" data-list-kind="project" draggable="true" style="padding-left:37px">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('')}</ul>` : ''}
     </li>`;
@@ -1066,7 +1063,7 @@ function renderSidebar() {
   const projectsHtml = looseProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" data-list-kind="project" draggable="true">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('');
 
   sidebar.innerHTML = `<ul class="nav-list">${standardHtml}</ul>
-    <ul class="nav-list"><li class="nav-section-title"><span>My lists</span></li>${areasHtml || ''}${projectsHtml || ''}</ul>`;
+    <ul class="nav-list nav-user-lists">${areasHtml || ''}${projectsHtml || ''}</ul>`;
 }
 
 function viewDefinition() {
@@ -1113,11 +1110,11 @@ function viewDefinition() {
   return definitions.today;
 }
 
-function render() {
+function render(forceInspector = false) {
   if (!ui.state) return;
   renderSidebar();
   renderContent();
-  renderInspector();
+  renderInspector(forceInspector);
 }
 
 function renderContent() {
@@ -1139,13 +1136,13 @@ function renderContent() {
   const calendar = ['today', 'upcoming', 'tomorrow'].includes(ui.view.type) && ui.state.settings.showCalendar ? renderCalendarEvents(ui.view.type) : '';
   const projectSection = visibleProjects.length ? `<section class="section"><div class="section-header"><h2>Projects</h2></div>${renderProjectCards(visibleProjects)}</section>` : '';
 
-  content.innerHTML = `<div class="content-inner">
+  content.innerHTML = `<div class="content-inner" data-view-type="${esc(ui.view.type)}">
     <header class="view-header">
       <div class="eyebrow">${esc(view.eyebrow)}${deadline}</div>
       <div class="view-title-row">${icon(view.icon, 'view-icon')}<h1>${esc(view.title)}</h1><div class="header-actions">${headerActions}</div></div>
       <p class="view-subtitle">${esc(view.subtitle)}</p>
       ${progress !== null ? `<div class="progress-line" aria-label="Project ${progress}% complete"><span style="width:${progress}%"></span></div>` : ''}
-      ${tags.length && ui.view.type !== 'tag' ? `<div class="filter-bar" aria-label="Filter by tags"><button class="chip ${!ui.activeTags.size ? 'active' : ''}" data-filter-tag="">All</button>${tags.map((tag) => `<button class="chip ${ui.activeTags.has(tag) ? 'active' : ''}" data-filter-tag="${esc(tag)}" aria-pressed="${ui.activeTags.has(tag)}">${esc(tag)}</button>`).join('')}</div>` : ''}
+      ${tags.length && ['project', 'area'].includes(ui.view.type) ? `<div class="filter-bar" aria-label="Filter by tags"><button class="chip ${!ui.activeTags.size ? 'active' : ''}" data-filter-tag="">All</button>${tags.map((tag) => `<button class="chip ${ui.activeTags.has(tag) ? 'active' : ''}" data-filter-tag="${esc(tag)}" aria-pressed="${ui.activeTags.has(tag)}">${esc(tag)}</button>`).join('')}</div>` : ''}
     </header>
     ${calendar}
     ${projectSection}${view.repeatingProjects?.length ? `<section class="section"><div class="section-header"><h2>Repeating projects</h2></div>${renderProjectCards(view.repeatingProjects)}</section>` : ''}${sections.length ? sections.map(renderSection).join('') : projectSection || view.repeatingProjects?.length ? '' : renderEmpty(view)}
@@ -1269,7 +1266,7 @@ function groupBy(items, getKey) {
 
 function renderSection(section) {
   const headingActions = section.heading ? `<span class="heading-actions">${section.archived ? `<button class="button heading-restore" data-action="restore-heading" data-heading-id="${section.heading.id}">Restore</button>` : `<button class="icon-button" data-action="heading-menu" data-heading-id="${section.heading.id}" aria-label="Heading options">${icon('more')}</button>`}</span>` : '';
-  const title = section.title ? `<div class="section-header ${section.heading ? 'heading-header' : ''} ${section.archived ? 'archived-heading-header' : ''}" ${section.heading && !section.archived ? `data-heading-id="${section.heading.id}" draggable="true"` : ''}><h2>${esc(section.title)}</h2>${section.meta ? `<span class="section-meta">${esc(section.meta)}</span>` : ''}${section.symbol ? `<span class="section-symbol">${section.symbol}</span>` : ''}${headingActions}</div>` : '';
+  const title = section.title ? `<div class="section-header ${section.heading ? 'heading-header' : ''} ${section.archived ? 'archived-heading-header' : ''}" ${section.heading && !section.archived ? `data-heading-id="${section.heading.id}" draggable="true"` : ''}>${section.symbol ? `<span class="section-symbol">${section.symbol}</span>` : ''}<h2>${esc(section.title)}</h2>${section.meta ? `<span class="section-meta">${esc(section.meta)}</span>` : ''}${headingActions}</div>` : '';
   const emptyAgenda = section.agenda && !section.tasks.length ? '<p class="agenda-empty">No plans</p>' : '';
   return `<section class="section ${section.archived ? 'archived-section' : ''}" data-section="${esc(section.key)}">${title}<ul class="task-list">${section.tasks.map(renderTask).join('')}</ul>${emptyAgenda}${!section.archived && canQuickAdd() ? renderQuickAdd(section.key, section.title || viewDefinition().title) : ''}</section>`;
 }
@@ -1900,10 +1897,11 @@ function closeInspector({ restoreFocus = true } = {}) {
   if (restoreFocus) setTimeout(() => $(`[data-task-id="${returnTaskId}"] .task-main`, content)?.focus(), 20);
 }
 
-function renderInspector() {
+function renderInspector(force = false) {
   const task = ui.state.tasks.find((item) => item.id === ui.selectedTaskId);
   if (!task) { app.classList.remove('inspector-open'); inspector.innerHTML = ''; syncSidebarAccessibility(); return; }
   const previousPane = $('.inspector-scroll', inspector);
+  if (!force && previousPane?.dataset.taskId === task.id) { syncSidebarAccessibility(); return; }
   const previousScrollTop = previousPane?.dataset.taskId === task.id ? previousPane.scrollTop : 0;
   const schedule = task.bucket === 'today' ? (task.evening ? 'evening' : 'today') : task.bucket;
   const projectOptions = [`<option value="">No project</option>`, ...ui.state.projects.filter((p) => p.status === 'open').map((p) => `<option value="${p.id}" ${task.projectId === p.id ? 'selected' : ''}>${esc(p.title)}</option>`)].join('');
@@ -2039,7 +2037,7 @@ function handleChecklistDrop(event) {
   let insertAt = task.checklist.findIndex((item) => item.id === targetId) + (after ? 1 : 0);
   if (insertAt < 0) insertAt = task.checklist.length;
   task.checklist.splice(insertAt, 0, moved);
-  ui.draggedCheckId = null; scheduleSave(); renderInspector();
+  ui.draggedCheckId = null; scheduleSave(); renderInspector(true);
 }
 
 function handleInspectorInput(event) {
@@ -2117,14 +2115,6 @@ function handleInspectorChange(event) {
     if (item) item.done = event.target.checked;
   }
   scheduleSave();
-  const inspectorStructureChanged = field === 'projectId' || repeatField === 'frequency';
-  if (inspectorStructureChanged) {
-    render();
-    return;
-  }
-
-  // Keep native date/time pickers and other active controls mounted. Replacing
-  // the inspector here dismisses mobile pickers and resets its scroll position.
   const scheduledForInput = $('[data-field="scheduledFor"]', inspector);
   const reminderAtInput = $('[data-field="reminderAt"]', inspector);
   const deadlineInput = $('[data-field="deadline"]', inspector);
@@ -2133,6 +2123,7 @@ function handleInspectorChange(event) {
   if (deadlineInput) deadlineInput.value = task.deadline || '';
   renderSidebar();
   renderContent();
+  if (field === 'projectId' || repeatField === 'frequency') renderInspector(true);
 }
 
 function handleInspectorClick(event) {
@@ -2152,7 +2143,7 @@ function handleInspectorClick(event) {
     task.evening = schedule === 'evening';
     task.bucket = ['today', 'evening'].includes(schedule) ? 'today' : schedule;
     task.scheduledFor = nextDate;
-    scheduleSave(); render(); return;
+    scheduleSave(); render(true); return;
   }
   const action = event.target.closest('[data-inspector-action]')?.dataset.inspectorAction;
   if (action === 'close') closeInspector();
@@ -2185,27 +2176,27 @@ function handleInspectorClick(event) {
   if (action === 'move') { openMoveTaskModal(task); return; }
   if (action === 'share') { void shareTask(task); return; }
   if (action === 'copy-link') { void copyTaskLink(task); return; }
-  if (action === 'markdown') { ui.markdownPreview = !ui.markdownPreview; renderInspector(); }
+  if (action === 'markdown') { ui.markdownPreview = !ui.markdownPreview; renderInspector(true); }
   if (action === 'find-text') {
     ui.noteFindOpen = true;
     ui.markdownPreview = false;
-    renderInspector();
+    renderInspector(true);
     setTimeout(() => $('[data-note-find-query]', inspector)?.focus(), 20);
   }
   if (action === 'find-previous') updateNoteFind(-1, true);
   if (action === 'find-next') updateNoteFind(1, true);
-  if (action === 'close-find') { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(); }
-  if (action === 'start-repeat') { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(); }
-  if (action === 'stop-repeat') { task.repeat = null; scheduleSave(); render(); }
-  if (action === 'add-check') { task.checklist.push({ id: uid('check'), title: '', done: false }); scheduleSave(); renderInspector(); $$('.checklist-item input[type="text"]', inspector).at(-1)?.focus(); }
-  if (action === 'remove-check') { const id = event.target.closest('[data-check-id]')?.dataset.checkId; task.checklist = task.checklist.filter((item) => item.id !== id); scheduleSave(); renderInspector(); renderContent(); }
-  if (action === 'clear-date') { moveReminderToDate(task, null); task.bucket = 'anytime'; task.scheduledFor = null; task.evening = false; scheduleSave(); render(); }
+  if (action === 'close-find') { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(true); }
+  if (action === 'start-repeat') { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(true); }
+  if (action === 'stop-repeat') { task.repeat = null; scheduleSave(); render(true); }
+  if (action === 'add-check') { task.checklist.push({ id: uid('check'), title: '', done: false }); scheduleSave(); renderInspector(true); $$('.checklist-item input[type="text"]', inspector).at(-1)?.focus(); }
+  if (action === 'remove-check') { const id = event.target.closest('[data-check-id]')?.dataset.checkId; task.checklist = task.checklist.filter((item) => item.id !== id); scheduleSave(); renderInspector(true); renderContent(); }
+  if (action === 'clear-date') { moveReminderToDate(task, null); task.bucket = 'anytime'; task.scheduledFor = null; task.evening = false; scheduleSave(); render(true); }
   const weekday = event.target.closest('[data-weekday]');
   if (weekday && task.repeat) {
     const day = Number(weekday.dataset.weekday);
     task.repeat.weekdays ||= [];
     task.repeat.weekdays = task.repeat.weekdays.includes(day) ? task.repeat.weekdays.filter((item) => item !== day) : [...task.repeat.weekdays, day].sort();
-    scheduleSave(); renderInspector();
+    scheduleSave(); renderInspector(true);
   }
 }
 
@@ -2821,7 +2812,7 @@ function handleGlobalKeydown(event) {
   }
   if (event.key === 'Escape') {
     if ($('#modal-root').children.length) closeModal();
-    else if (ui.noteFindOpen) { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(); }
+    else if (ui.noteFindOpen) { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(true); }
     else if (ui.selectedTaskIds.size) clearTaskSelection();
     else if (ui.selectedTaskId) closeInspector();
     else closeSidebar();
@@ -2831,7 +2822,7 @@ function handleGlobalKeydown(event) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
     event.preventDefault();
     if (document.activeElement?.matches('.inspector-notes, [data-check-field="title"]')) {
-      ui.noteFindOpen = true; ui.markdownPreview = false; renderInspector();
+      ui.noteFindOpen = true; ui.markdownPreview = false; renderInspector(true);
       setTimeout(() => $('[data-note-find-query]', inspector)?.focus(), 20);
     } else openSearch();
     return;
@@ -2852,10 +2843,10 @@ function handleGlobalKeydown(event) {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
   if ((event.metaKey || event.ctrlKey) && event.key === '.' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
   if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 't' && ui.selectedTaskId) {
-    event.preventDefault(); const task = currentTask(); task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = false; moveReminderToDate(task, task.scheduledFor); scheduleSave(); render(); return;
+    event.preventDefault(); const task = currentTask(); task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = false; moveReminderToDate(task, task.scheduledFor); scheduleSave(); render(true); return;
   }
   if ((event.metaKey || event.ctrlKey) && event.altKey && event.key.toLowerCase() === 't' && ui.selectedTaskId) {
-    event.preventDefault(); const task = currentTask(); task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = true; moveReminderToDate(task, task.scheduledFor); scheduleSave(); render(); return;
+    event.preventDefault(); const task = currentTask(); task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = true; moveReminderToDate(task, task.scheduledFor); scheduleSave(); render(true); return;
   }
   if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 's' && ui.selectedTaskId) {
     event.preventDefault(); renderInspector(); setTimeout(() => $('[data-field="scheduledFor"]', inspector)?.focus(), 20); return;
@@ -2867,7 +2858,7 @@ function handleGlobalKeydown(event) {
     event.preventDefault(); renderInspector(); setTimeout(() => $('[data-field="scheduledFor"]', inspector)?.focus(), 20); return;
   }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r' && ui.selectedTaskId) {
-    event.preventDefault(); const task = currentTask(); if (!task.repeat) { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(); } return;
+    event.preventDefault(); const task = currentTask(); if (!task.repeat) { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(true); } return;
   }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && ['f', 'm'].includes(event.key.toLowerCase()) && (ui.selectedTaskId || ui.selectedTaskIds.size)) { event.preventDefault(); openMoveTaskModal(ui.selectedTaskIds.size ? selectedTasks() : currentTask()); return; }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') { event.preventDefault(); const logged = logCompletedNow(); scheduleSave(); render(); showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`); return; }
@@ -2892,7 +2883,6 @@ function scheduleSave(renderAfter = false) {
   clearTimeout(ui.saveTimer);
   ui.saveTimer = setTimeout(async () => {
     ui.saveTimer = null;
-    ui.savesInFlight += 1;
     try {
       ui.state.updatedAt = new Date().toISOString();
       const updatedAt = await persistState(JSON.stringify(ui.state));
@@ -2902,8 +2892,6 @@ function scheduleSave(renderAfter = false) {
     } catch (error) {
       markSaving('error');
       showToast('Could not save changes');
-    } finally {
-      ui.savesInFlight -= 1;
     }
   }, 350);
 }

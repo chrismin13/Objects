@@ -133,12 +133,12 @@ self.addEventListener("notificationclick", (event) => {
 });
 `;
 
-function parseState(serialized: string) {
+function parseState(serialized: string, refreshUpdatedAt = true) {
   if (typeof serialized !== "string" || serialized.length > MAX_STATE_SIZE) throw new Error("Objects data is too large");
   const state: unknown = JSON.parse(serialized);
   if (!isObjectsState(state)) throw new Error("Invalid Objects data");
   state.version = 5;
-  state.updatedAt = new Date().toISOString();
+  if (refreshUpdatedAt || !state.updatedAt) state.updatedAt = new Date().toISOString();
   return state;
 }
 
@@ -174,7 +174,7 @@ export default capsule({
 
   mutations: {
     saveState: mutation(async (ctx, serialized: string) => {
-      const state = parseState(serialized);
+      const state = parseState(serialized, false);
       const next = splitState(JSON.stringify(state));
       const existing = await ctx.db.workspaceChunks
         .withIndex("by_owner_part", (range) => range.eq("ownerId", ctx.auth.userId))
