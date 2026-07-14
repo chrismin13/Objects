@@ -107,6 +107,7 @@ let performSignOut = async () => {};
 let staticEventsBound = false;
 let logbookTimer = null;
 let modalReturnFocus = null;
+let sidebarGesture = null;
 
 export function mountObjects(serializedState, options) {
   app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
@@ -560,6 +561,10 @@ function bindStaticEvents() {
   $('#sidebar-open').addEventListener('click', openSidebar);
   $('#sidebar-close').addEventListener('click', closeSidebar);
   $('#sidebar-scrim').addEventListener('click', closeSidebar);
+  window.addEventListener('pointerdown', handleSidebarGestureStart, { passive: true });
+  window.addEventListener('pointermove', handleSidebarGestureMove, { passive: false });
+  window.addEventListener('pointerup', handleSidebarGestureEnd, { passive: true });
+  window.addEventListener('pointercancel', handleSidebarGestureCancel, { passive: true });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
   window.matchMedia('(max-width: 820px)').addEventListener('change', syncSidebarAccessibility);
 
@@ -637,6 +642,93 @@ function closeSidebar() {
   if (wasOpen && matchMedia('(max-width: 820px)').matches) setTimeout(() => $('#sidebar-open')?.focus(), 20);
 }
 
+function handleSidebarGestureStart(event) {
+  if (!matchMedia('(max-width: 820px)').matches || !event.isPrimary) return;
+  if (app.classList.contains('inspector-open') || $('#modal-root')?.children.length) return;
+  const open = app.classList.contains('sidebar-open');
+  const edgeWidth = 32;
+  if (!open && event.clientX > edgeWidth) return;
+
+  sidebarGesture = {
+    pointerId: event.pointerId,
+    open,
+    startX: event.clientX,
+    startY: event.clientY,
+    currentX: event.clientX,
+    currentY: event.clientY,
+    startedAt: performance.now(),
+    horizontal: false,
+    canceled: false,
+  };
+}
+
+function handleSidebarGestureMove(event) {
+  const gesture = sidebarGesture;
+  if (!gesture || event.pointerId !== gesture.pointerId || gesture.canceled) return;
+  gesture.currentX = event.clientX;
+  gesture.currentY = event.clientY;
+  const deltaX = event.clientX - gesture.startX;
+  const deltaY = event.clientY - gesture.startY;
+
+  if (!gesture.horizontal) {
+    if (Math.hypot(deltaX, deltaY) < 8) return;
+    if (Math.abs(deltaY) > Math.abs(deltaX) * 1.15) {
+      gesture.canceled = true;
+      sidebarGesture = null;
+      return;
+    }
+    if ((!gesture.open && deltaX < 0) || (gesture.open && deltaX > 0)) {
+      gesture.canceled = true;
+      sidebarGesture = null;
+      return;
+    }
+    gesture.horizontal = true;
+    app.classList.add('sidebar-dragging');
+  }
+
+  event.preventDefault();
+  const width = sidebarPanel.getBoundingClientRect().width;
+  const offset = Math.max(-width, Math.min(0, (gesture.open ? 0 : -width) + deltaX));
+  const progress = 1 + (offset / width);
+  app.style.setProperty('--sidebar-gesture-x', `${offset}px`);
+  app.style.setProperty('--sidebar-gesture-progress', String(progress));
+}
+
+function handleSidebarGestureEnd(event) {
+  const gesture = sidebarGesture;
+  if (!gesture || event.pointerId !== gesture.pointerId) return;
+  sidebarGesture = null;
+  if (!gesture.horizontal) return;
+
+  const width = sidebarPanel.getBoundingClientRect().width;
+  const deltaX = gesture.currentX - gesture.startX;
+  const progress = Math.max(0, Math.min(1, (gesture.open ? width : 0) + deltaX) / width);
+  const velocity = deltaX / Math.max(1, performance.now() - gesture.startedAt);
+  const shouldOpen = gesture.open
+    ? progress > 0.65 && velocity > -0.45
+    : progress > 0.35 || velocity > 0.45;
+  settleSidebarGesture(shouldOpen);
+}
+
+function handleSidebarGestureCancel(event) {
+  const gesture = sidebarGesture;
+  if (!gesture || event.pointerId !== gesture.pointerId) return;
+  sidebarGesture = null;
+  if (gesture.horizontal) settleSidebarGesture(gesture.open);
+}
+
+function settleSidebarGesture(open) {
+  // Read the dragged position before switching classes so CSS animates from the finger to the nearest resting point.
+  sidebarPanel.getBoundingClientRect();
+  app.classList.toggle('sidebar-open', open);
+  app.classList.remove('sidebar-dragging');
+  syncSidebarAccessibility();
+  window.setTimeout(() => {
+    app.style.removeProperty('--sidebar-gesture-x');
+    app.style.removeProperty('--sidebar-gesture-progress');
+  }, 320);
+}
+
 function syncSidebarAccessibility() {
   const mobile = matchMedia('(max-width: 820px)').matches;
   const inspectorOpen = app.classList.contains('inspector-open');
@@ -648,6 +740,7 @@ function syncSidebarAccessibility() {
   mainPane.inert = mobile && inspectorOpen;
   if (mainPane.inert) mainPane.setAttribute('aria-hidden', 'true');
   else mainPane.removeAttribute('aria-hidden');
+  $('#sidebar-open')?.setAttribute('aria-expanded', String(mobile && app.classList.contains('sidebar-open')));
 }
 
 function setView(type, id = null) {

@@ -45,6 +45,36 @@ export const responsiveStyles = `
 .inspector:focus { outline: none; }
 
 @media (max-width: 820px) {
+  .sidebar,
+  .main-pane {
+    touch-action: pan-y;
+  }
+  .sidebar {
+    will-change: transform;
+  }
+  .scrim {
+    display: block;
+    position: fixed;
+    z-index: 15;
+    inset: 0;
+    background: rgba(0, 0, 0, .3);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .3s var(--ease);
+  }
+  .app-shell.sidebar-open .scrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .app-shell.sidebar-dragging .sidebar {
+    transform: translate3d(var(--sidebar-gesture-x, -102%), 0, 0);
+    transition: none;
+  }
+  .app-shell.sidebar-dragging .scrim {
+    opacity: var(--sidebar-gesture-progress, 0);
+    pointer-events: none;
+    transition: none;
+  }
   .mobile-header {
     height: calc(60px + env(safe-area-inset-top));
     padding: calc(8px + env(safe-area-inset-top)) 8px 8px;
