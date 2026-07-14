@@ -84,10 +84,13 @@ const ui = {
   saveTimer: null,
   lastCompleted: null,
   focusedSearchIndex: 0,
+  searchEverything: false,
   activeTag: null,
   markdownPreview: false,
   draggedTaskId: null,
+  draggedHeadingId: null,
   draggedCheckId: null,
+  draggedList: null,
   reminderTimer: null,
   reminderCheckRunning: false,
   pwaUpdateNotified: false,
@@ -148,6 +151,7 @@ function normalizeState() {
   ui.state.calendarEvents = ui.state.calendarEvents.filter((event) => event && typeof event.start === 'string' && typeof event.title === 'string');
   ui.state.tasks ||= [];
   ui.state.tasks.forEach((task, index) => {
+    if (task.status === 'cancelled') task.status = task.trashedAt ? 'trashed' : 'canceled';
     task.status ||= 'open';
     task.bucket ||= task.scheduledFor ? 'upcoming' : 'anytime';
     task.tags ||= [];
@@ -156,30 +160,35 @@ function normalizeState() {
     task.reminderAt ||= null;
     task.repeat ||= null;
     task.reminderSentAt ||= null;
-    if (task.status === 'completed' && task.loggedAt === undefined) task.loggedAt = task.completedAt || new Date().toISOString();
-    if (task.status !== 'completed') task.loggedAt = null;
+    if (['completed', 'canceled'].includes(task.status) && task.loggedAt === undefined) task.loggedAt = task.completedAt || new Date().toISOString();
+    if (!['completed', 'canceled'].includes(task.status)) task.loggedAt = null;
     task.order ??= index;
   });
   ui.state.projects.forEach((project, index) => {
+    if (project.status === 'cancelled') project.status = project.trashedAt ? 'trashed' : 'canceled';
     project.tags ||= [];
     project.scheduledFor ||= null;
     project.completedAt ||= null;
     project.repeat ||= null;
     project.repeatTemplateId ||= null;
     project.bucket ||= project.scheduledFor ? (project.scheduledFor <= localDay() ? 'today' : 'upcoming') : 'anytime';
-    if (project.status === 'completed' && project.loggedAt === undefined) project.loggedAt = project.completedAt || new Date().toISOString();
-    if (project.status !== 'completed') project.loggedAt = null;
+    if (['completed', 'canceled'].includes(project.status) && project.loggedAt === undefined) project.loggedAt = project.completedAt || new Date().toISOString();
+    if (!['completed', 'canceled'].includes(project.status)) project.loggedAt = null;
     project.order ??= index;
   });
   ui.state.areas.forEach((area) => { area.tags ||= []; });
 }
 
 function isLogged(item) {
-  return item?.status === 'completed' && Boolean(item.loggedAt);
+  return ['completed', 'canceled'].includes(item?.status) && Boolean(item.loggedAt);
+}
+
+function isTrashed(item) {
+  return item?.status === 'trashed' || Boolean(item?.trashedAt);
 }
 
 function isCompletedButVisible(item) {
-  return item?.status === 'completed' && !item.loggedAt;
+  return ['completed', 'canceled'].includes(item?.status) && !item.loggedAt;
 }
 
 export function applyLogbookPolicyToItems(items, policy, now = new Date()) {
@@ -369,12 +378,12 @@ export function parseNaturalTask(rawTitle) {
   result.tags = tagMatches.map((match) => match[1]);
   title = title.replace(/(?:^|\s)#[\p{L}\p{N}_-]+/gu, ' ').replace(/\s+/g, ' ').trim();
 
-  const deadlineMatch = title.match(/\s(?:deadline|due)\s+(today|tomorrow|(?:in\s+)?\d+\s*(?:days?|weeks?|months?)|\d{4}-\d{2}-\d{2})\b/i);
+  const deadlineMatch = title.match(/\s(?:deadline|due)\s+(today|tomorrow|next week|(?:in\s+)?\d+\s*(?:d|days?|w|weeks?|mo|months?|y|years?)|(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{1,2}|\d{4}-\d{2}-\d{2})\b/i);
   if (deadlineMatch) {
     result.deadline = parseNaturalDate(deadlineMatch[1], today) || deadlineMatch[1];
     title = title.replace(deadlineMatch[0], '').trim();
   }
-  const dateMatch = title.match(/\s(today|tonight|this evening|tomorrow|next week|someday|(?:in\s+)?\d+\s*(?:d|days?|w|weeks?|mo|months?|y|years?)|(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\d{4}-\d{2}-\d{2})(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?\s*$/i);
+  const dateMatch = title.match(/\s(today|tonight|this evening|tomorrow|next week|someday|(?:in\s+)?\d+\s*(?:d|days?|w|weeks?|mo|months?|y|years?)|(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{1,2}|\d{4}-\d{2}-\d{2})(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?\s*$/i);
   if (dateMatch) {
     const phrase = dateMatch[1].toLowerCase();
     if (phrase === 'someday') result.bucket = 'someday';
@@ -393,17 +402,43 @@ export function parseNaturalTask(rawTitle) {
     }
     title = title.replace(dateMatch[0], '').trim();
   }
+  if (!result.reminderAt) {
+    const timeOnly = title.match(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(a|am|p|pm)\s*$/i);
+    if (timeOnly) {
+      let hour = Number(timeOnly[1]);
+      const meridiem = timeOnly[3].toLowerCase();
+      if (meridiem.startsWith('p') && hour < 12) hour += 12;
+      if (meridiem.startsWith('a') && hour === 12) hour = 0;
+      result.scheduledFor = today; result.bucket = 'today';
+      result.reminderAt = `${today}T${String(hour).padStart(2, '0')}:${String(Number(timeOnly[2] || 0)).padStart(2, '0')}`;
+      title = title.replace(timeOnly[0], '').trim();
+    }
+  }
   result.title = title || rawTitle.trim();
   return result;
 }
 
 function parseNaturalDate(phrase, today = localDay()) {
   const value = String(phrase || '').trim().toLowerCase();
-  if (['today', 'tonight', 'this evening'].includes(value)) return today;
+  if (['today', 'tonight', 'evening', 'this evening'].includes(value)) return today;
   if (value === 'tomorrow') return addDays(today, 1);
-  if (value === 'next week') return addDays(today, 7);
+  if (value === 'next week') {
+    const date = new Date(`${today}T12:00:00`);
+    const weekStart = Number(ui.state?.settings?.weekStartsOn ?? 1);
+    let distance = (weekStart - date.getDay() + 7) % 7;
+    if (distance === 0) distance = 7;
+    return addDays(today, distance);
+  }
   if (/^(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/.test(value)) return nextWeekday(value.replace('next ', ''));
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const namedDate = value.match(/^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(\d{1,2})$/);
+  if (namedDate) {
+    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    const month = months.indexOf(namedDate[1].slice(0, 3));
+    const candidate = new Date(new Date(`${today}T12:00:00`).getFullYear(), month, Number(namedDate[2]), 12);
+    if (localDay(candidate) < today) candidate.setFullYear(candidate.getFullYear() + 1);
+    return localDay(candidate);
+  }
   const relative = value.match(/^(?:in\s+)?(\d+)\s*(d|days?|w|weeks?|mo|months?|y|years?)$/);
   if (!relative) return null;
   const amount = Number(relative[1]);
@@ -445,13 +480,31 @@ function handleCaptureUrl() {
     }
   }
 
-  if (requestedView && ['inbox', 'today', 'upcoming', 'anytime', 'someday', 'logbook'].includes(requestedView)) setView(requestedView);
+  if (requestedView && ['inbox', 'today', 'upcoming', 'anytime', 'someday', 'logbook', 'trash', 'tomorrow', 'deadlines', 'repeating', 'allProjects', 'loggedProjects'].includes(requestedView)) setView(requestedView);
   if (taskId && ui.state.tasks.some((task) => task.id === taskId)) selectTask(taskId);
   if (title) {
     const parsed = parseNaturalTask(title);
     const notes = [params.get('notes'), sharedTitle ? sharedText : null, sharedUrl].filter(Boolean).join('\n');
-    createTaskFromParsed(parsed, { notes, projectId: params.get('project') || null, useCurrentView: false });
+    const listTarget = params.get('list') || params.get('project');
+    const project = ui.state.projects.find((item) => item.id === listTarget || item.title.toLowerCase() === listTarget?.toLowerCase());
+    const area = ui.state.areas.find((item) => item.id === listTarget || item.title.toLowerCase() === listTarget?.toLowerCase());
+    const task = createTaskFromParsed(parsed, { notes, projectId: project?.id || null, useCurrentView: false });
+    if (area && !project) { task.areaId = area.id; task.bucket = 'anytime'; }
+    const when = params.get('when');
+    if (when) {
+      if (when.toLowerCase() === 'someday') { task.bucket = 'someday'; task.scheduledFor = null; }
+      else {
+        const day = parseNaturalDate(when);
+        if (day) { task.scheduledFor = day; task.bucket = day <= localDay() ? 'today' : 'upcoming'; task.evening = when.toLowerCase() === 'evening'; }
+      }
+    }
+    task.deadline = parseNaturalDate(params.get('deadline')) || task.deadline;
+    if (params.get('tags')) task.tags = [...new Set([...task.tags, ...params.get('tags').split(',').map((tag) => tag.trim()).filter(Boolean)])];
+    if (params.get('checklist')) task.checklist = params.get('checklist').split(/\r?\n/).filter(Boolean).map((item) => ({ id: uid('check'), title: item, done: false }));
+    if (['completed', 'canceled'].includes(params.get('status'))) { task.status = params.get('status'); task.completedAt = new Date().toISOString(); task.loggedAt = null; applyLogbookPolicy(); }
+    scheduleSave(); render();
   }
+  if (params.get('search')) setTimeout(() => openSearch(params.get('search')), 0);
   if (!taskId && !requestedView && !title && params.get('capture') !== '1') return;
   history.replaceState({}, '', location.pathname);
   if (params.get('capture') === '1') setTimeout(() => beginQuickAdd(true), 0);
@@ -515,6 +568,21 @@ function bindStaticEvents() {
     if (!button) return;
     setView(button.dataset.view, button.dataset.id || null);
   });
+  sidebar.addEventListener('dragstart', (event) => {
+    const list = event.target.closest('[data-list-kind]');
+    if (!list) return;
+    ui.draggedList = { kind: list.dataset.listKind, id: list.dataset.id };
+    event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', list.dataset.id);
+  });
+  sidebar.addEventListener('dragover', (event) => {
+    const destination = event.target.closest('[data-view]');
+    if (!destination || (!ui.draggedTaskId && !ui.draggedList)) return;
+    event.preventDefault();
+    $$('.nav-item.drop-target', sidebar).forEach((item) => item.classList.remove('drop-target'));
+    destination.classList.add('drop-target');
+  });
+  sidebar.addEventListener('drop', handleSidebarDrop);
+  sidebar.addEventListener('dragend', () => { ui.draggedList = null; $$('.nav-item.drop-target', sidebar).forEach((item) => item.classList.remove('drop-target')); });
 
   content.addEventListener('click', handleContentClick);
   content.addEventListener('keydown', handleContentKeydown);
@@ -604,6 +672,22 @@ function effectiveProjectTags(project) { return [...new Set([...(areaById(projec
 function projectIsActive(project) { return project && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat; }
 function projectIsToday(project, today = localDay()) { return projectIsActive(project) && (project.bucket === 'today' || (project.scheduledFor && project.scheduledFor <= today) || (project.deadline && project.deadline <= today)); }
 
+function upcomingTaskEntries(today, taskFilter) {
+  const dated = ui.state.tasks.filter((task) => taskFilter(task) && ((task.scheduledFor && task.scheduledFor > today) || (!task.scheduledFor && task.deadline && task.deadline > today))).map((task) => ({
+    ...task,
+    agendaDay: task.scheduledFor && task.scheduledFor > today ? task.scheduledFor : task.deadline,
+    agendaDeadlineOnly: !(task.scheduledFor && task.scheduledFor > today),
+  }));
+  const repeating = ui.state.tasks.filter((task) => task.status === 'open' && task.repeat && !task.repeat.paused && task.repeat.nextDate > today).map((task) => ({ ...task, agendaDay: task.repeat.nextDate, agendaPreview: true }));
+  return [...dated, ...repeating];
+}
+
+function upcomingProjectEntries(today) {
+  const dated = ui.state.projects.filter((project) => projectIsActive(project) && ((project.scheduledFor && project.scheduledFor > today) || (!project.scheduledFor && project.deadline && project.deadline > today))).map((project) => ({ ...project, agendaDay: project.scheduledFor && project.scheduledFor > today ? project.scheduledFor : project.deadline }));
+  const repeating = ui.state.projects.filter((project) => project.status === 'open' && project.repeat && !project.repeat.paused && project.repeat.nextDate > today).map((project) => ({ ...project, agendaDay: project.repeat.nextDate, agendaPreview: true }));
+  return [...dated, ...repeating];
+}
+
 function taskCount(type, id) {
   const today = localDay();
   return openTasks().filter((task) => {
@@ -616,7 +700,7 @@ function taskCount(type, id) {
 }
 
 function projectProgress(projectId) {
-  const tasks = ui.state.tasks.filter((task) => task.projectId === projectId && task.status !== 'cancelled' && !task.repeat);
+  const tasks = ui.state.tasks.filter((task) => task.projectId === projectId && !isTrashed(task) && task.status !== 'canceled' && !task.repeat);
   if (!tasks.length) return 0;
   return Math.round(tasks.filter((task) => task.status === 'completed').length / tasks.length * 100);
 }
@@ -646,15 +730,15 @@ function renderSidebar() {
   const areasHtml = ui.state.areas.sort((a, b) => a.order - b.order).map((area) => {
     const areaProjects = ui.state.projects.filter((project) => project.areaId === area.id && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today)).sort((a, b) => a.order - b.order);
     return `<li>
-      <button class="nav-item ${ui.view.type === 'area' && ui.view.id === area.id ? 'active' : ''}" data-view="area" data-id="${area.id}">
+      <button class="nav-item ${ui.view.type === 'area' && ui.view.id === area.id ? 'active' : ''}" data-view="area" data-id="${area.id}" data-list-kind="area" draggable="true">
         <span class="nav-symbol" style="color:${esc(area.color || '#999')}">●</span><span class="nav-title">${esc(area.title)}</span><span class="nav-count">${taskCount('area', area.id) || ''}</span>
       </button>
-      ${areaProjects.length ? `<ul class="nav-list">${areaProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" style="padding-left:37px">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('')}</ul>` : ''}
+      ${areaProjects.length ? `<ul class="nav-list">${areaProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" data-list-kind="project" draggable="true" style="padding-left:37px">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('')}</ul>` : ''}
     </li>`;
   }).join('');
 
   const looseProjects = ui.state.projects.filter((project) => !project.areaId && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today));
-  const projectsHtml = looseProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('');
+  const projectsHtml = looseProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" data-list-kind="project" draggable="true">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('');
 
   sidebar.innerHTML = `<ul class="nav-list">${standardHtml}</ul>
     <ul class="nav-list"><li class="nav-section-title"><span>My lists</span></li>${areasHtml || ''}${projectsHtml || ''}</ul>`;
@@ -666,11 +750,11 @@ function viewDefinition() {
   const definitions = {
     inbox: { title: 'Inbox', icon: 'inbox', eyebrow: 'Collect now, decide later', subtitle: 'Unsorted thoughts and to-dos waiting for a home.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.bucket === 'inbox') },
     today: { title: 'Today', icon: 'star', eyebrow: new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date()), subtitle: 'Your clear, focused plan for the day.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'today' || (t.scheduledFor && t.scheduledFor <= today && t.bucket !== 'someday' && t.bucket !== 'inbox') || (t.deadline && t.deadline <= today))), projects: ui.state.projects.filter((p) => projectIsToday(p, today)) },
-    upcoming: { title: 'Upcoming', icon: 'calendar', eyebrow: 'Plan ahead', subtitle: 'A calm view of what the next days hold.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.scheduledFor && t.scheduledFor > today), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.scheduledFor && p.scheduledFor > today) },
+    upcoming: { title: 'Upcoming', icon: 'calendar', eyebrow: 'Plan ahead', subtitle: 'Start dates, repeating plans, deadlines, and calendar events in one agenda.', tasks: upcomingTaskEntries(today, taskFilter), projects: upcomingProjectEntries(today) },
     anytime: { title: 'Anytime', icon: 'layers', eyebrow: 'Available now', subtitle: 'Everything active that you could make progress on.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'anytime' || t.bucket === 'today') && (!t.scheduledFor || t.scheduledFor <= today)), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.bucket !== 'someday' && (!p.scheduledFor || p.scheduledFor <= today)) },
     someday: { title: 'Someday', icon: 'archive', eyebrow: 'Ideas for later', subtitle: 'Possibilities worth keeping, without a commitment.', tasks: ui.state.tasks.filter((t) => (t.status === 'open' || isCompletedButVisible(t)) && !t.repeat && t.bucket === 'someday'), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.bucket === 'someday') },
     logbook: { title: 'Logbook', icon: 'check', eyebrow: 'Completed', subtitle: 'A record of the progress you have made.', tasks: ui.state.tasks.filter((t) => isLogged(t)), projects: ui.state.projects.filter((p) => isLogged(p)) },
-    trash: { title: 'Trash', icon: 'trash', eyebrow: 'Discarded', subtitle: 'Items moved here stay available for recovery.', tasks: ui.state.tasks.filter((t) => t.status === 'cancelled'), projects: ui.state.projects.filter((p) => p.status === 'cancelled') },
+    trash: { title: 'Trash', icon: 'trash', eyebrow: 'Discarded', subtitle: 'Items moved here stay available for recovery.', tasks: ui.state.tasks.filter(isTrashed), projects: ui.state.projects.filter(isTrashed) },
     tomorrow: { title: 'Tomorrow', icon: 'calendar', eyebrow: formatDate(addDays(today, 1), { weekday: 'long', month: 'long', day: 'numeric' }), subtitle: 'Everything planned for the next day.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.scheduledFor === addDays(today, 1)), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.scheduledFor === addDays(today, 1)) },
     deadlines: { title: 'Deadlines', icon: 'flag', eyebrow: 'Commitments', subtitle: 'Open items ordered by the date they must be finished.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.deadline), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.deadline).sort((a, b) => a.deadline.localeCompare(b.deadline)) },
     repeating: { title: 'Repeating', icon: 'repeat', eyebrow: 'Templates', subtitle: 'Routines that create fresh to-dos and projects on their schedule.', tasks: ui.state.tasks.filter((t) => t.status === 'open' && t.repeat), repeatingProjects: ui.state.projects.filter((p) => p.status === 'open' && p.repeat) },
@@ -679,7 +763,7 @@ function viewDefinition() {
   if (ui.view.type === 'project') {
     const project = projectById(ui.view.id);
     if (!project) return definitions.today;
-    return { title: project.title, icon: project.status === 'completed' ? 'check' : project.status === 'cancelled' ? 'trash' : 'list', eyebrow: project.status === 'completed' ? 'Completed project' : project.status === 'cancelled' ? 'In Trash' : areaById(project.areaId)?.title || 'Project', subtitle: project.notes || 'A focused set of steps toward one outcome.', deadline: project.deadline, tasks: ui.state.tasks.filter((t) => t.projectId === project.id && (isLogged(project) ? isLogged(t) : project.status === 'cancelled' ? t.status === 'cancelled' : (t.status === 'open' || isCompletedButVisible(t)) && !t.repeat)), project };
+    return { title: project.title, icon: isLogged(project) ? 'check' : isTrashed(project) ? 'trash' : 'list', eyebrow: project.status === 'completed' ? 'Completed project' : project.status === 'canceled' ? 'Canceled project' : isTrashed(project) ? 'In Trash' : areaById(project.areaId)?.title || 'Project', subtitle: project.notes || 'A focused set of steps toward one outcome.', deadline: project.deadline, tasks: ui.state.tasks.filter((t) => t.projectId === project.id && (isLogged(project) ? isLogged(t) : isTrashed(project) ? isTrashed(t) : (t.status === 'open' || isCompletedButVisible(t)) && !t.repeat)), project };
   }
   if (ui.view.type === 'area') {
     const area = areaById(ui.view.id);
@@ -715,7 +799,7 @@ function renderContent() {
     if (ui.view.type === 'repeating') return (a.repeat?.nextDate || '').localeCompare(b.repeat?.nextDate || '');
     return a.order - b.order;
   });
-  const headerActions = `${ui.view.type === 'today' ? `<button class="icon-button" data-action="toggle-group" aria-label="Group Today by list">${icon('layers')}</button>` : ''}${ui.view.type === 'project' ? `${view.project?.status === 'open' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button>` : ''}<button class="icon-button" data-action="project-menu" aria-label="Project options">${icon('more')}</button>` : ''}${ui.view.type === 'area' ? `<button class="icon-button" data-action="area-menu" aria-label="Area options">${icon('more')}</button>` : ''}`;
+  const headerActions = `${ui.view.type === 'today' ? `<button class="icon-button" data-action="toggle-group" aria-label="Group Today by list">${icon('layers')}</button>` : ''}${ui.view.type === 'trash' && (view.tasks.length || view.projects.length) ? `<button class="button" data-action="empty-trash">Empty Trash</button>` : ''}${ui.view.type === 'project' ? `${view.project?.status === 'open' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button>` : ''}<button class="icon-button" data-action="project-menu" aria-label="Project options">${icon('more')}</button>` : ''}${ui.view.type === 'area' ? `<button class="icon-button" data-action="area-menu" aria-label="Area options">${icon('more')}</button>` : ''}`;
   const deadline = view.deadline ? ` · Deadline ${formatDate(view.deadline, { month: 'short', day: 'numeric' })}` : '';
   const progress = view.project ? projectProgress(view.project.id) : null;
   const sections = buildSections(sorted);
@@ -756,7 +840,7 @@ function renderCalendarEvents(viewType) {
 
 function renderProjectCards(projects) {
   if (!projects.length) return `<div class="empty-state">${icon('list')}<h2>No projects here</h2><p>Projects will appear here as their status changes.</p></div>`;
-  return `<div class="project-card-list">${projects.map((project) => `<button class="project-card" data-project-card="${project.id}"><h2>${esc(project.title)}</h2><p>${project.repeat ? `${esc(repeatLabel(project.repeat))} · ` : ''}${project.deadline ? `Deadline ${esc(deadlineLabel(project.deadline))} · ` : ''}${esc(project.status === 'cancelled' ? 'In Trash' : areaById(project.areaId)?.title || 'Project')} · ${projectProgress(project.id)}% complete</p></button>`).join('')}</div>`;
+  return `<div class="project-card-list">${projects.map((project) => `<button class="project-card" data-project-card="${project.id}"><h2>${esc(project.title)}</h2><p>${project.agendaDay ? `${esc(relativeDateLabel(project.agendaDay))} · ` : ''}${project.repeat ? `${esc(repeatLabel(project.repeat))} · ` : ''}${project.deadline ? `Deadline ${esc(deadlineLabel(project.deadline))} · ` : ''}${esc(isTrashed(project) ? 'In Trash' : project.status === 'canceled' ? 'Canceled' : areaById(project.areaId)?.title || 'Project')} · ${projectProgress(project.id)}% complete</p></button>`).join('')}</div>`;
 }
 
 function buildSections(tasks) {
@@ -774,11 +858,16 @@ function buildSections(tasks) {
       return { key, title: heading?.title || (ui.state.headings.some((h) => h.projectId === ui.view.id && !h.archived) ? 'To-dos' : ''), tasks: items, heading };
     });
   }
-  if (!tasks.length) return [];
   if (ui.view.type === 'upcoming') {
-    const groups = groupBy(tasks, (task) => task.scheduledFor);
-    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, items]) => ({ key: day, title: relativeDateLabel(day), meta: formatDate(day, { month: 'short', day: 'numeric' }), tasks: items }));
+    const groups = groupBy(tasks, (task) => task.agendaDay || task.scheduledFor || task.deadline);
+    const today = localDay();
+    for (let offset = 1; offset <= 7; offset += 1) {
+      const day = addDays(today, offset);
+      if (!groups.has(day)) groups.set(day, []);
+    }
+    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, items]) => ({ key: day, title: relativeDateLabel(day), meta: formatDate(day, { month: 'short', day: 'numeric' }), tasks: items, agenda: true }));
   }
+  if (!tasks.length) return [];
   if (ui.view.type === 'logbook') {
     const groups = groupBy(tasks, (task) => localDay(new Date(task.completedAt || task.createdAt)));
     return [...groups.entries()].sort(([a], [b]) => b.localeCompare(a)).map(([day, items]) => ({ key: day, title: day === localDay() ? 'Today' : formatDate(day, { weekday: 'long' }), meta: formatDate(day, { month: 'short', day: 'numeric' }), tasks: items }));
@@ -832,14 +921,15 @@ function groupBy(items, getKey) {
 
 function renderSection(section) {
   const headingActions = section.heading ? `<span class="heading-actions"><button class="icon-button" data-action="heading-menu" data-heading-id="${section.heading.id}" aria-label="Heading options">${icon('more')}</button></span>` : '';
-  const title = section.title ? `<div class="section-header ${section.heading ? 'heading-header' : ''}" ${section.heading ? `data-heading-id="${section.heading.id}"` : ''}><h2>${esc(section.title)}</h2>${section.meta ? `<span class="section-meta">${esc(section.meta)}</span>` : ''}${section.symbol ? `<span class="section-symbol">${section.symbol}</span>` : ''}${headingActions}</div>` : '';
-  return `<section class="section" data-section="${esc(section.key)}">${title}<ul class="task-list">${section.tasks.map(renderTask).join('')}</ul>${canQuickAdd() ? renderQuickAdd(section.key, section.title || viewDefinition().title) : ''}</section>`;
+  const title = section.title ? `<div class="section-header ${section.heading ? 'heading-header' : ''}" ${section.heading ? `data-heading-id="${section.heading.id}" draggable="true"` : ''}><h2>${esc(section.title)}</h2>${section.meta ? `<span class="section-meta">${esc(section.meta)}</span>` : ''}${section.symbol ? `<span class="section-symbol">${section.symbol}</span>` : ''}${headingActions}</div>` : '';
+  const emptyAgenda = section.agenda && !section.tasks.length ? '<p class="agenda-empty">No plans</p>' : '';
+  return `<section class="section" data-section="${esc(section.key)}">${title}<ul class="task-list">${section.tasks.map(renderTask).join('')}</ul>${emptyAgenda}${canQuickAdd() ? renderQuickAdd(section.key, section.title || viewDefinition().title) : ''}</section>`;
 }
 
 function renderTask(task) {
   const project = projectById(task.projectId);
   const area = areaById(task.areaId);
-  const completed = task.status === 'completed';
+  const completed = ['completed', 'canceled'].includes(task.status);
   const checked = task.status !== 'open';
   const meta = [];
   if (project && ui.view.type !== 'project') meta.push(`<span class="meta-item">${icon('list')}${esc(project.title)}</span>`);
@@ -847,10 +937,12 @@ function renderTask(task) {
   if (task.deadline) meta.push(`<span class="meta-item deadline">${icon('flag')} ${deadlineLabel(task.deadline)}</span>`);
   if (task.reminderAt) meta.push(`<span class="meta-item reminder">${icon('bell')} ${formatReminderTime(task.reminderAt)}</span>`);
   if (task.repeat) meta.push(`<span class="meta-item">${icon('repeat')} ${repeatLabel(task.repeat)}</span>`);
+  if (task.agendaDeadlineOnly) meta.push(`<span class="meta-item deadline">Deadline date</span>`);
+  if (task.agendaPreview) meta.push(`<span class="meta-item">Upcoming copy</span>`);
   if (task.checklist?.length) meta.push(`<span class="meta-item">${icon('list')} ${task.checklist.filter((i) => i.done).length}/${task.checklist.length}</span>`);
   if (effectiveTags(task).length) meta.push(...effectiveTags(task).slice(0, 2).map((tag) => `<span class="meta-item"><i class="tag-dot"></i>${esc(tag)}</span>`));
   const star = ui.view.type === 'anytime' && task.bucket === 'today' ? icon('star', 'today-star') : '';
-  return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${completed ? 'completed' : ''}" data-task-id="${task.id}" draggable="true">
+  return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="true">
     <button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${checked ? 'Restore' : 'Complete'} ${esc(task.title)}"><span class="check-visual">${checked ? icon('check') : ''}</span></button>
     <div class="task-main" data-action="select-task" role="button" tabindex="0" aria-label="Open details for ${esc(task.title)}"><span class="task-title">${star}${esc(task.title)}</span>${task.notes ? `<div class="task-notes-preview">${esc(task.notes)}</div>` : ''}${meta.length ? `<div class="task-meta">${meta.join('')}</div>` : ''}</div>
     ${icon('chevron', 'task-chevron')}
@@ -918,6 +1010,15 @@ function handleContentClick(event) {
     scheduleSave();
     renderContent();
   }
+  if (action === 'empty-trash') {
+    confirmAction('Empty Trash?', 'Every discarded to-do, project, and heading will be permanently deleted. This cannot be undone.', 'Empty Trash', () => {
+      const projectIds = new Set(ui.state.projects.filter(isTrashed).map((project) => project.id));
+      ui.state.tasks = ui.state.tasks.filter((task) => !isTrashed(task) && !projectIds.has(task.projectId));
+      ui.state.headings = ui.state.headings.filter((heading) => !projectIds.has(heading.projectId));
+      ui.state.projects = ui.state.projects.filter((project) => !projectIds.has(project.id));
+      scheduleSave(); render(); showToast('Trash emptied');
+    });
+  }
   if (action === 'new-heading') openHeadingModal();
   if (action === 'project-menu') openProjectModal(ui.view.id);
   if (action === 'area-menu') openAreaModal(ui.view.id);
@@ -950,6 +1051,10 @@ function handleContentKeydown(event) {
 }
 
 function handleDragStart(event) {
+  const heading = event.target.closest('[data-heading-id]');
+  if (heading && !event.target.closest('button')) {
+    ui.draggedHeadingId = heading.dataset.headingId; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', ui.draggedHeadingId); return;
+  }
   const row = event.target.closest('[data-task-id]');
   if (!row) return;
   ui.draggedTaskId = row.dataset.taskId;
@@ -961,7 +1066,7 @@ function handleDragStart(event) {
 function handleDragOver(event) {
   const row = event.target.closest('[data-task-id]');
   const section = event.target.closest('[data-section]');
-  if (!row && section && ui.draggedTaskId) {
+  if (!row && section && (ui.draggedTaskId || ui.draggedHeadingId)) {
     event.preventDefault();
     $$('.section.drop-target', content).forEach((item) => item.classList.remove('drop-target'));
     section.classList.add('drop-target');
@@ -978,8 +1083,36 @@ function handleDrop(event) {
   const targetSection = event.target.closest('[data-section]');
   const source = ui.state.tasks.find((task) => task.id === ui.draggedTaskId);
   const target = ui.state.tasks.find((task) => task.id === targetRow?.dataset.taskId);
+  if (ui.draggedHeadingId && targetSection && ui.view.type === 'project') {
+    event.preventDefault();
+    const heading = ui.state.headings.find((item) => item.id === ui.draggedHeadingId);
+    const targetHeading = ui.state.headings.find((item) => item.id === targetSection.dataset.section);
+    if (heading && targetHeading && heading.id !== targetHeading.id) {
+      heading.order = targetHeading.order + (event.clientY > targetSection.getBoundingClientRect().top + targetSection.getBoundingClientRect().height / 2 ? .5 : -.5);
+      ui.state.headings.filter((item) => item.projectId === heading.projectId && !item.archived).sort((a, b) => a.order - b.order).forEach((item, index) => { item.order = index; });
+      scheduleSave(); renderContent();
+    }
+    ui.draggedHeadingId = null; return;
+  }
   if (!source || (!target && !targetSection) || source.id === target?.id) return;
   event.preventDefault();
+  const destinationKey = targetSection?.dataset.section || targetRow?.closest('[data-section]')?.dataset.section;
+  if (ui.view.type === 'upcoming' && destinationKey) {
+    if (source.repeat) {
+      source.repeat.nextDate = destinationKey;
+      source.scheduledFor = destinationKey;
+    } else {
+      moveReminderToDate(source, destinationKey);
+      source.scheduledFor = destinationKey;
+      source.bucket = destinationKey <= localDay() ? 'today' : 'upcoming';
+      source.evening = false;
+    }
+  }
+  if (ui.view.type === 'today') {
+    const evening = Boolean(target?.evening || destinationKey?.startsWith('evening'));
+    source.bucket = 'today'; source.scheduledFor = localDay(); source.evening = evening;
+    moveReminderToDate(source, source.scheduledFor);
+  }
   if (target) {
     const rect = targetRow.getBoundingClientRect();
     source.order = target.order + (event.clientY > rect.top + rect.height / 2 ? 0.5 : -0.5);
@@ -998,8 +1131,50 @@ function handleDrop(event) {
 
 function handleDragEnd() {
   ui.draggedTaskId = null;
+  ui.draggedHeadingId = null;
   $$('.task-row.dragging, .task-row.drag-over', content).forEach((item) => item.classList.remove('dragging', 'drag-over'));
   $$('.section.drop-target', content).forEach((item) => item.classList.remove('drop-target'));
+  $$('.nav-item.drop-target', sidebar).forEach((item) => item.classList.remove('drop-target'));
+}
+
+function handleSidebarDrop(event) {
+  const destination = event.target.closest('[data-view]');
+  if (destination && ui.draggedList) {
+    event.preventDefault();
+    const source = ui.draggedList.kind === 'area' ? areaById(ui.draggedList.id) : projectById(ui.draggedList.id);
+    const targetKind = destination.dataset.listKind;
+    const target = targetKind === 'area' ? areaById(destination.dataset.id) : targetKind === 'project' ? projectById(destination.dataset.id) : null;
+    if (!source || source === target) return;
+    if (ui.draggedList.kind === 'project' && targetKind === 'area') { source.areaId = target.id; source.order = Math.max(0, ...ui.state.projects.filter((item) => item.areaId === target.id).map((item) => item.order || 0)) + 1; }
+    else if (ui.draggedList.kind === 'project' && targetKind === 'project') { source.areaId = target.areaId || null; source.order = (target.order || 0) + .5; }
+    else if (ui.draggedList.kind === 'area' && targetKind === 'area') source.order = (target.order || 0) + .5;
+    else return;
+    const collection = ui.draggedList.kind === 'area' ? ui.state.areas : ui.state.projects;
+    collection.sort((a, b) => (a.order || 0) - (b.order || 0)).forEach((item, index) => { item.order = index; });
+    if (ui.draggedList.kind === 'project') ui.state.tasks.filter((item) => item.projectId === source.id).forEach((item) => { item.areaId = source.areaId || null; });
+    ui.draggedList = null; scheduleSave(); render(); showToast('List moved'); return;
+  }
+  const task = ui.state.tasks.find((item) => item.id === ui.draggedTaskId);
+  if (!destination || !task || task.repeat) return;
+  event.preventDefault();
+  const type = destination.dataset.view;
+  const id = destination.dataset.id || null;
+  if (type === 'inbox') {
+    task.bucket = 'inbox'; task.scheduledFor = null; task.evening = false; task.projectId = null; task.headingId = null; task.areaId = null; moveReminderToDate(task, null);
+  } else if (type === 'today') {
+    task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = false; moveReminderToDate(task, task.scheduledFor);
+  } else if (type === 'upcoming') {
+    task.bucket = 'upcoming'; task.scheduledFor = task.scheduledFor > localDay() ? task.scheduledFor : addDays(localDay(), 1); task.evening = false; moveReminderToDate(task, task.scheduledFor);
+  } else if (type === 'anytime') {
+    task.bucket = 'anytime'; task.scheduledFor = null; task.evening = false; moveReminderToDate(task, null);
+  } else if (type === 'someday') {
+    task.bucket = 'someday'; task.scheduledFor = null; task.evening = false; moveReminderToDate(task, null);
+  } else if (type === 'area' && id) {
+    task.projectId = null; task.headingId = null; task.areaId = id; if (task.bucket === 'inbox') task.bucket = 'anytime';
+  } else if (type === 'project' && id) {
+    const project = projectById(id); task.projectId = id; task.headingId = null; task.areaId = project?.areaId || null; if (task.bucket === 'inbox') task.bucket = 'anytime';
+  } else return;
+  ui.draggedTaskId = null; scheduleSave(); render(); showToast(`Moved “${task.title}”`);
 }
 
 function beginQuickAdd(fromMagicButton = false) {
@@ -1061,6 +1236,7 @@ function createTaskFromParsed(parsed, options = {}) {
   scheduleSave();
   render();
   setTimeout(() => $('#inspector-title')?.focus(), 30);
+  return task;
 }
 
 function toggleTask(taskId, row) {
@@ -1142,7 +1318,7 @@ function renderInspector() {
   const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => h.projectId === task.projectId && !h.archived).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
   const repeat = task.repeat;
   inspector.innerHTML = `<div class="inspector-scroll">
-    <div class="inspector-top"><span class="inspector-status"><i class="sync-state" id="sync-state"></i>${task.status === 'completed' ? 'Completed' : task.status === 'cancelled' ? 'In trash' : 'To-do'}</span><button class="icon-button" data-inspector-action="close" aria-label="Close details">${icon('x')}</button></div>
+    <div class="inspector-top"><span class="inspector-status"><i class="sync-state" id="sync-state"></i>${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><button class="icon-button" data-inspector-action="close" aria-label="Close details">${icon('x')}</button></div>
     <textarea id="inspector-title" class="inspector-title" data-field="title" rows="2" placeholder="To-do title">${esc(task.title)}</textarea>
     ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)">${esc(task.notes)}</textarea>`}
     <button class="markdown-toggle" data-inspector-action="markdown">${ui.markdownPreview ? 'Edit notes' : 'Preview Markdown'}</button>
@@ -1156,7 +1332,7 @@ function renderInspector() {
     <div class="detail-group"><label class="detail-label" for="task-tags">Tags</label><input id="task-tags" class="detail-input" type="text" data-field="tags" value="${esc(task.tags.join(', '))}" placeholder="Errand, Focused"></div>
     <div class="detail-group"><span class="detail-label">Checklist</span><div class="checklist">${task.checklist.map((item) => `<div class="checklist-item" data-check-id="${item.id}" draggable="true"><input type="checkbox" data-check-field="done" ${item.done ? 'checked' : ''} ${repeat ? 'disabled' : ''} aria-label="${repeat ? 'Checklist items can be completed on generated copies only' : 'Complete checklist item'}"><input type="text" data-check-field="title" value="${esc(item.title)}" aria-label="Checklist item"><button class="checklist-remove" data-inspector-action="remove-check" aria-label="Remove checklist item">×</button></div>`).join('')}</div>${repeat ? '<p class="detail-help">Complete checklist items on each generated copy. This template controls future copies.</p>' : ''}<button class="checklist-add" data-inspector-action="add-check">+ Add item</button></div>
     <div class="detail-group"><span class="detail-label">Repeat</span>${repeat ? `<div class="repeat-grid"><select class="detail-select" data-repeat-field="mode"><option value="fixed" ${repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-repeat-field="frequency"><option value="daily" ${repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" max="365" data-repeat-field="interval" value="${repeat.interval || 1}" aria-label="Repeat interval"><input class="detail-input" type="date" data-repeat-field="nextDate" value="${repeat.nextDate || localDay()}" aria-label="Next occurrence"></div>${repeat.frequency === 'weekly' ? `<div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(repeat.weekdays || []).includes(day) ? 'active' : ''}" data-weekday="${day}" aria-label="Repeat on ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}">${label}</button>`).join('')}</div>` : ''}<div class="settings-row"><label for="repeat-paused">Pause schedule</label><input id="repeat-paused" type="checkbox" data-repeat-field="paused" ${repeat.paused ? 'checked' : ''}></div><button class="checklist-add" data-inspector-action="stop-repeat">Stop repeating</button>` : `<button class="checklist-add" data-inspector-action="start-repeat">Make repeating…</button>`}</div>
-    <div class="inspector-actions">${task.status !== 'cancelled' ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>` : ''}${task.status === 'cancelled' ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}</div>
+    <div class="inspector-actions">${!isTrashed(task) ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === 'open' && !task.repeat ? '<button class="button" data-inspector-action="cancel">Cancel to-do</button>' : ''}` : ''}${isTrashed(task) ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}</div>
   </div>`;
   syncSidebarAccessibility();
 }
@@ -1320,15 +1496,21 @@ function handleInspectorClick(event) {
       const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
       if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
     }
-    task.status = 'cancelled'; task.completedAt = null; task.loggedAt = null; task.completedWithProjectId = null; task.trashedAt = new Date().toISOString(); scheduleSave(); closeInspector(); showToast('Moved to Trash');
+    task.previousStatus = task.status; task.status = 'trashed'; task.loggedAt = null; task.trashedAt = new Date().toISOString(); scheduleSave(); closeInspector(); showToast('Moved to Trash');
+  }
+  if (action === 'cancel') {
+    task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = null; task.completedWithProjectId = null;
+    applyLogbookPolicy(); scheduleSave(); closeInspector(); render(); showToast('To-do canceled', 'Undo', () => {
+      task.status = 'open'; task.completedAt = null; task.loggedAt = null; scheduleSave(); render();
+    });
   }
   if (action === 'restore') {
     const parent = projectById(task.projectId);
-    if (parent?.status === 'cancelled') {
-      parent.status = 'open'; parent.trashedAt = null;
-      ui.state.tasks.filter((item) => item.projectId === parent.id && item.status === 'cancelled').forEach((item) => { item.status = item.previousStatus || 'open'; item.previousStatus = null; item.trashedAt = null; });
+    if (isTrashed(parent)) {
+      parent.status = parent.previousStatus || 'open'; parent.previousStatus = null; parent.trashedAt = null;
+      ui.state.tasks.filter((item) => item.projectId === parent.id && isTrashed(item)).forEach((item) => { item.status = item.previousStatus || 'open'; item.previousStatus = null; item.trashedAt = null; });
     } else task.status = task.previousStatus || 'open';
-    task.completedAt = null; task.loggedAt = null; task.completedWithProjectId = null; task.previousStatus = null; scheduleSave(); closeInspector(); showToast(parent?.status === 'open' ? 'Project restored' : 'To-do restored');
+    task.trashedAt = null; task.previousStatus = null; applyLogbookPolicy(); scheduleSave(); closeInspector(); showToast(parent && !isTrashed(parent) ? 'Project restored' : 'To-do restored');
   }
   if (action === 'delete-forever') {
     confirmAction('Delete this to-do forever?', 'This cannot be undone.', 'Delete forever', () => {
@@ -1420,6 +1602,7 @@ function openMoveTaskModal(task) {
 
 function openSearch(initialQuery = '') {
   ui.focusedSearchIndex = 0;
+  ui.searchEverything = false;
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal quick-find" role="dialog" aria-modal="true" aria-label="Quick find"><div class="modal-header">${icon('search')}<input id="search-input" class="modal-search" type="search" value="${esc(initialQuery)}" placeholder="Jump to a list or find a to-do…" autocomplete="off"><span class="key-hint">esc</span></div><div id="search-results" class="search-results"></div></div></div>`;
   activateModal();
   $('#search-input').addEventListener('input', renderSearchResults);
@@ -1442,10 +1625,12 @@ function searchItems(query) {
   const projects = ui.state.projects.filter((p) => p.status === 'open' || isCompletedButVisible(p)).map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:areaById(p.areaId)?.title || 'Project', icon:'list' }));
   const headings = ui.state.headings.filter((h) => !h.archived).map((heading) => ({ kind:'heading', id:heading.id, projectId:heading.projectId, title:heading.title, meta:projectById(heading.projectId)?.title || 'Heading', icon:'heading' }));
   const tags = [...new Set([...ui.state.tasks.flatMap((task) => effectiveTags(task)), ...ui.state.projects.flatMap((project) => effectiveProjectTags(project)), ...ui.state.areas.flatMap((area) => area.tags || [])])].map((tag) => ({ kind:'view', type:'tag', id:tag, title:tag, meta:'Tag', icon:'tag' }));
-  const taskSource = q ? ui.state.tasks : sourceTasks();
-  const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:task.repeat ? 'Repeating template' : isLogged(task) ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do', icon:task.repeat ? 'repeat' : 'circle', searchText:`${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` }));
+  const taskSource = ui.searchEverything ? ui.state.tasks : sourceTasks();
+  const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:task.repeat ? 'Repeating template' : isLogged(task) ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do', icon:task.repeat ? 'repeat' : 'circle', searchText: ui.searchEverything ? `${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` : `${task.title} ${effectiveTags(task).join(' ')}` }));
   const actions = [{ kind:'settings', title:'Settings', meta:'App preferences', icon:'settings' }];
-  return [...lists, ...special, ...actions, ...areas, ...projects, ...headings, ...tags, ...tasks].filter((item) => !q || `${item.title} ${item.meta} ${item.searchText || ''}`.toLowerCase().includes(q)).slice(0, 24);
+  const matches = [...lists, ...special, ...actions, ...areas, ...projects, ...headings, ...tags, ...tasks].filter((item) => !q || `${item.title} ${item.meta} ${item.searchText || ''}`.toLowerCase().includes(q)).slice(0, 24);
+  if (q && !ui.searchEverything) matches.push({ kind:'continue', title:'Continue Search', meta:'Include notes, checklists, Logbook, and Trash', icon:'search' });
+  return matches;
 }
 
 function renderSearchResults() {
@@ -1472,6 +1657,9 @@ function handleSearchClick(event) {
 }
 
 function chooseSearchResult(item) {
+  if (item.kind === 'continue') {
+    ui.searchEverything = true; ui.focusedSearchIndex = 0; renderSearchResults(); return;
+  }
   closeModal();
   if (item.kind === 'settings') openSettings();
   else if (item.kind === 'view') setView(item.type, item.id || null);
@@ -1480,7 +1668,7 @@ function chooseSearchResult(item) {
     const task = ui.state.tasks.find((t) => t.id === item.id);
     if (task.repeat) setView('repeating');
     else if (isLogged(task)) setView('logbook');
-    else if (task.status === 'cancelled') setView('trash');
+    else if (isTrashed(task)) setView('trash');
     else if (task.projectId) setView('project', task.projectId);
     else if (task.areaId) setView('area', task.areaId);
     else setView(task.bucket === 'upcoming' ? 'upcoming' : task.bucket);
@@ -1562,10 +1750,10 @@ function openProjectModal(projectId) {
   if (!project) return;
   const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}" ${project.areaId === area.id ? 'selected' : ''}>${esc(area.title)}</option>`)].join('');
   const archivedHeadings = ui.state.headings.filter((heading) => heading.projectId === project.id && heading.archived);
-  const projectActions = project.status === 'cancelled'
+  const projectActions = isTrashed(project)
     ? `<button class="button" type="button" data-project-action="restore-trash">Restore project</button><button class="danger-button" type="button" data-project-action="delete-forever">${icon('trash')} Delete forever</button>`
-    : `<button class="button" type="button" data-project-action="duplicate">Duplicate project</button><button class="button" type="button" data-project-action="${project.status === 'completed' ? 'restore' : 'complete'}">${project.status === 'completed' ? 'Restore project' : 'Complete project'}</button><button class="danger-button" type="button" data-project-action="delete">${icon('trash')} Move to Trash</button>`;
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="project-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Project options</h2><p>Edit the outcome, move it, duplicate it, or send it to the Logbook.</p><div class="form-field"><label for="project-title">Name</label><input id="project-title" required value="${esc(project.title)}"></div><div class="form-field"><label for="project-notes">Notes</label><textarea id="project-notes" rows="4">${esc(project.notes || '')}</textarea></div><div class="form-field"><label for="project-area">Area</label><select id="project-area">${areaOptions}</select></div><div class="repeat-grid"><div class="form-field"><label for="project-when">When</label><select id="project-when"><option value="anytime" ${project.bucket === 'anytime' ? 'selected' : ''}>Anytime</option><option value="today" ${project.bucket === 'today' ? 'selected' : ''}>Today</option><option value="upcoming" ${project.bucket === 'upcoming' ? 'selected' : ''}>Upcoming</option><option value="someday" ${project.bucket === 'someday' ? 'selected' : ''}>Someday</option></select></div><div class="form-field"><label for="project-start">Start date</label><input id="project-start" type="date" value="${project.scheduledFor || ''}"></div><div class="form-field"><label for="project-deadline">Deadline</label><input id="project-deadline" type="date" value="${project.deadline || ''}"></div></div><div class="form-field"><label for="project-tags">Tags</label><input id="project-tags" value="${esc((project.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}${project.status === 'open' ? `<div class="settings-section"><h3>Repeat</h3>${project.repeat ? `<div class="repeat-grid"><select class="detail-select" data-project-repeat-field="mode"><option value="fixed" ${project.repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${project.repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-project-repeat-field="frequency"><option value="daily" ${project.repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${project.repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${project.repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${project.repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" data-project-repeat-field="interval" value="${project.repeat.interval || 1}" aria-label="Project repeat interval"><input class="detail-input" type="date" data-project-repeat-field="nextDate" value="${project.repeat.nextDate || addDays(localDay(), 7)}" aria-label="Project next occurrence"></div><button class="checklist-add" type="button" data-project-action="stop-repeat">Stop repeating</button>` : `<button class="button" type="button" data-project-action="repeat">Make project repeating…</button>`}</div>` : ''}<div class="settings-section button-row">${projectActions}</div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
+    : `<button class="button" type="button" data-project-action="duplicate">Duplicate project</button><button class="button" type="button" data-project-action="${['completed', 'canceled'].includes(project.status) ? 'restore' : 'complete'}">${['completed', 'canceled'].includes(project.status) ? 'Restore project' : 'Complete project'}</button>${project.status === 'open' ? '<button class="button" type="button" data-project-action="cancel">Cancel project</button>' : ''}<button class="danger-button" type="button" data-project-action="delete">${icon('trash')} Move to Trash</button>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="project-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Project options</h2><p>Edit the outcome, move it, duplicate it, or send it to the Logbook.</p><div class="form-field"><label for="project-title">Name</label><input id="project-title" required value="${esc(project.title)}"></div><div class="form-field"><label for="project-notes">Notes</label><textarea id="project-notes" rows="4">${esc(project.notes || '')}</textarea></div><div class="form-field"><label for="project-area">Area</label><select id="project-area">${areaOptions}</select></div><div class="repeat-grid"><div class="form-field"><label for="project-when">When</label><select id="project-when"><option value="anytime" ${project.bucket === 'anytime' ? 'selected' : ''}>Anytime</option><option value="today" ${project.bucket === 'today' ? 'selected' : ''}>Today</option><option value="upcoming" ${project.bucket === 'upcoming' ? 'selected' : ''}>Upcoming</option><option value="someday" ${project.bucket === 'someday' ? 'selected' : ''}>Someday</option></select></div><div class="form-field"><label for="project-start">Start date</label><input id="project-start" type="date" value="${project.scheduledFor || ''}"></div><div class="form-field"><label for="project-deadline">Deadline</label><input id="project-deadline" type="date" value="${project.deadline || ''}"></div></div><div class="form-field"><label for="project-tags">Tags</label><input id="project-tags" value="${esc((project.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}${project.status === 'open' ? `<div class="settings-section"><h3>Repeat</h3>${project.repeat ? `<div class="repeat-grid"><select class="detail-select" data-project-repeat-field="mode"><option value="fixed" ${project.repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${project.repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-project-repeat-field="frequency"><option value="daily" ${project.repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${project.repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${project.repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${project.repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" data-project-repeat-field="interval" value="${project.repeat.interval || 1}" aria-label="Project repeat interval"><input class="detail-input" type="date" data-project-repeat-field="nextDate" value="${project.repeat.nextDate || addDays(localDay(), 7)}" aria-label="Project next occurrence"></div>${project.repeat.frequency === 'weekly' ? `<div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(project.repeat.weekdays || []).includes(day) ? 'active' : ''}" type="button" data-project-weekday="${day}">${label}</button>`).join('')}</div>` : ''}<button class="checklist-add" type="button" data-project-action="stop-repeat">Stop repeating</button>` : `<button class="button" type="button" data-project-action="repeat">Make project repeating…</button>`}</div>` : ''}<div class="settings-section button-row">${projectActions}</div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -1591,6 +1779,11 @@ function openProjectModal(projectId) {
     if (heading) heading.archived = false;
     scheduleSave(); closeModal(); render(); showToast('Heading restored');
   }));
+  $$('[data-project-weekday]').forEach((button) => button.addEventListener('click', () => {
+    const day = Number(button.dataset.projectWeekday); project.repeat.weekdays ||= [];
+    project.repeat.weekdays = project.repeat.weekdays.includes(day) ? project.repeat.weekdays.filter((value) => value !== day) : [...project.repeat.weekdays, day].sort();
+    scheduleSave(); openProjectModal(project.id);
+  }));
   $$('[data-project-action]').forEach((button) => button.addEventListener('click', () => {
     const action = button.dataset.projectAction;
     if (action === 'delete') {
@@ -1599,16 +1792,16 @@ function openProjectModal(projectId) {
           const template = projectById(project.repeatTemplateId);
           if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
         }
-        project.status = 'cancelled'; project.trashedAt = new Date().toISOString();
-        ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.previousStatus = task.status; task.status = 'cancelled'; task.trashedAt = project.trashedAt; });
+        project.previousStatus = project.status; project.status = 'trashed'; project.trashedAt = new Date().toISOString(); project.loggedAt = null;
+        ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.previousStatus = task.status; task.status = 'trashed'; task.trashedAt = project.trashedAt; task.loggedAt = null; });
         scheduleSave(); setView('trash'); showToast('Project moved to Trash');
       });
       return;
     }
     if (action === 'restore-trash') {
-      project.status = 'open'; project.trashedAt = null;
-      ui.state.tasks.filter((task) => task.projectId === project.id && task.status === 'cancelled').forEach((task) => { task.status = task.previousStatus || 'open'; task.previousStatus = null; task.trashedAt = null; });
-      scheduleSave(); closeModal(); setView('project', project.id); showToast('Project restored'); return;
+      project.status = project.previousStatus || 'open'; project.previousStatus = null; project.trashedAt = null;
+      ui.state.tasks.filter((task) => task.projectId === project.id && isTrashed(task)).forEach((task) => { task.status = task.previousStatus || 'open'; task.previousStatus = null; task.trashedAt = null; });
+      applyLogbookPolicy(); scheduleSave(); closeModal(); setView(isLogged(project) ? 'logbook' : 'project', isLogged(project) ? null : project.id); showToast('Project restored'); return;
     }
     if (action === 'delete-forever') {
       confirmAction('Delete this project forever?', 'The project, its headings, and every to-do inside it will be permanently deleted.', 'Delete forever', () => {
@@ -1620,14 +1813,9 @@ function openProjectModal(projectId) {
       return;
     }
     if (action === 'complete') {
-      project.status = 'completed'; project.completedAt = new Date().toISOString(); project.loggedAt = null;
-      ui.state.tasks.filter((task) => task.projectId === project.id && task.status === 'open' && !task.repeat).forEach((task) => { task.status = 'completed'; task.completedAt = project.completedAt; task.loggedAt = null; task.completedWithProjectId = project.id; });
-      if (project.repeatTemplateId) {
-        const template = projectById(project.repeatTemplateId);
-        if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
-      }
-      applyLogbookPolicy();
-      setView(isLogged(project) ? 'loggedProjects' : 'project', isLogged(project) ? null : project.id); showToast('Project completed');
+      closeModal(); resolveProjectCompletion(project); return;
+    } else if (action === 'cancel') {
+      finishProject(project, 'canceled', 'canceled');
     } else if (action === 'restore') {
       project.status = 'open'; project.completedAt = null; project.loggedAt = null;
       ui.state.tasks.filter((task) => task.completedWithProjectId === project.id).forEach((task) => { task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.completedWithProjectId = null; });
@@ -1645,6 +1833,33 @@ function openProjectModal(projectId) {
   }));
 }
 
+function resolveProjectCompletion(project) {
+  const remaining = ui.state.tasks.filter((task) => task.projectId === project.id && task.status === 'open' && !task.repeat);
+  if (!remaining.length) { finishProject(project, 'completed', 'completed'); return; }
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal" role="alertdialog" aria-modal="true" aria-labelledby="finish-project-title"><h2 id="finish-project-title">${remaining.length} unfinished to-do${remaining.length === 1 ? '' : 's'}</h2><p>Things keeps an accurate history by recording whether the remaining work was finished or canceled.</p><div class="completion-choices"><button class="button primary" type="button" data-finish-remaining="completed">Mark all completed</button><button class="button" type="button" data-finish-remaining="canceled">Mark unfinished as canceled</button></div><div class="form-actions"><button class="button" type="button" data-confirm-cancel>Keep project open</button></div></div></div>`;
+  activateModal();
+  $('[data-confirm-cancel]').addEventListener('click', closeModal);
+  $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
+  $$('[data-finish-remaining]').forEach((button) => button.addEventListener('click', () => {
+    closeModal(); finishProject(project, 'completed', button.dataset.finishRemaining);
+  }));
+}
+
+function finishProject(project, projectStatus, remainingStatus) {
+  const finishedAt = new Date().toISOString();
+  project.status = projectStatus; project.completedAt = finishedAt; project.loggedAt = null;
+  ui.state.tasks.filter((task) => task.projectId === project.id && task.status === 'open' && !task.repeat).forEach((task) => {
+    task.status = remainingStatus; task.completedAt = finishedAt; task.loggedAt = null; task.completedWithProjectId = project.id;
+  });
+  if (project.repeatTemplateId) {
+    const template = projectById(project.repeatTemplateId);
+    if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
+  }
+  applyLogbookPolicy(); scheduleSave();
+  setView(isLogged(project) ? 'loggedProjects' : 'project', isLogged(project) ? null : project.id);
+  showToast(projectStatus === 'canceled' ? 'Project canceled' : 'Project completed');
+}
+
 function duplicateProject(project) {
   const copy = { ...project, id: uid('project'), title: `${project.title} copy`, tags: [...(project.tags || [])], repeat: project.repeat ? { ...project.repeat, weekdays: [...(project.repeat.weekdays || [])] } : null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
   ui.state.projects.push(copy);
@@ -1653,7 +1868,7 @@ function duplicateProject(project) {
     const duplicate = { ...heading, id: uid('heading'), projectId: copy.id };
     headingMap.set(heading.id, duplicate.id); ui.state.headings.push(duplicate);
   });
-  ui.state.tasks.filter((task) => task.projectId === project.id && task.status !== 'cancelled').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, tags: [...(task.tags || [])], repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
+  ui.state.tasks.filter((task) => task.projectId === project.id && !isTrashed(task)).forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, tags: [...(task.tags || [])], repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
   setView('project', copy.id); showToast('Project duplicated');
 }
 
@@ -1677,13 +1892,14 @@ function openAreaModal(areaId) {
 
 function openSettings() {
   const settings = ui.state.settings;
+  const managedTags = [...new Set([...ui.state.areas.flatMap((area) => area.tags || []), ...ui.state.projects.flatMap((project) => project.tags || []), ...ui.state.tasks.flatMap((task) => task.tags || [])])].sort((a, b) => a.localeCompare(b));
   const pwa = getPwaStatus();
   const pendingLogCount = [...ui.state.tasks, ...ui.state.projects].filter(isCompletedButVisible).length;
   const logbookHelp = settings.logCompletedItems === 'immediately' ? 'Completed items move to the Logbook as soon as they are checked.' : settings.logCompletedItems === 'manually' ? 'Completed items stay in their original lists until you log them.' : 'Completed items stay visible for the rest of the day and move to the Logbook after midnight.';
   const installLabel = pwa.installed ? 'Installed' : pwa.canPromptInstall ? 'Install Objects' : 'Installation help';
   const installHelp = pwa.installed ? 'Objects is running as an installed app.' : pwa.ios ? 'On iPhone or iPad, use Share → Add to Home Screen. Notifications are available only after installation.' : 'Install from this button when available, or use your browser’s Install app / Add to Home Screen menu.';
   const notificationLabel = pwa.notificationPermission === 'unsupported' ? 'Not supported here' : pwa.notificationPermission === 'denied' ? 'Blocked in browser settings' : settings.notifications && pwa.notificationPermission === 'granted' ? 'Disable notifications' : 'Enable notifications';
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings"><h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p><div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div><div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div><div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div><div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div><div class="settings-section"><h3>Reminders</h3><p>Notifications work on desktop and mobile, including notification taps that reopen the task. Scheduled reminders are reliable while Objects is open; closed-app delivery needs a server push scheduler.</p><button class="button" type="button" data-settings-action="notifications" ${pwa.notificationPermission === 'denied' ? 'disabled' : ''}>${esc(notificationLabel)}</button></div><div class="settings-section"><h3>Calendar</h3><p>Add an event manually or import a standard .ics calendar file. Events remain private in your Objects data.</p><div class="form-field"><label for="event-title">Event</label><input id="event-title" placeholder="Event title"></div><div class="repeat-grid"><div class="form-field"><label for="event-start">Starts</label><input id="event-start" type="datetime-local"></div><div class="form-field"><label for="event-end">Ends</label><input id="event-end" type="datetime-local"></div></div><div class="button-row"><button class="button" type="button" data-settings-action="add-event">Add event</button><label class="button" for="ics-import">Import .ics</label><input class="hidden-file" id="ics-import" type="file" accept=".ics,text/calendar"></div></div><div class="settings-section"><h3>Data</h3><p>Export a complete backup or import one from another Objects installation.</p><div class="button-row"><button class="button" type="button" data-settings-action="export">${icon('download')} Export JSON</button><label class="button" for="json-import">${icon('upload')} Import JSON</label><input class="hidden-file" id="json-import" type="file" accept="application/json,.json"></div></div><div class="settings-section"><h3>Automation</h3><p>Open <code>/?title=Call%20Maya%20tomorrow</code> while signed in, or use the authenticated <code>POST /api/tasks</code> Lakebed endpoint.</p></div><div class="form-actions"><button class="button primary" type="button" data-cancel>Done</button></div></div></div>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings"><h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p><div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div><div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div><div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div><div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div><div class="settings-section"><h3>Reminders</h3><p>Notifications work on desktop and mobile, including notification taps that reopen the task. Scheduled reminders are reliable while Objects is open; closed-app delivery needs a server push scheduler.</p><button class="button" type="button" data-settings-action="notifications" ${pwa.notificationPermission === 'denied' ? 'disabled' : ''}>${esc(notificationLabel)}</button></div><div class="settings-section"><h3>Calendar</h3><p>Add an event manually or import a standard .ics calendar file. Events remain private in your Objects data.</p><div class="form-field"><label for="event-title">Event</label><input id="event-title" placeholder="Event title"></div><div class="repeat-grid"><div class="form-field"><label for="event-start">Starts</label><input id="event-start" type="datetime-local"></div><div class="form-field"><label for="event-end">Ends</label><input id="event-end" type="datetime-local"></div></div><div class="button-row"><button class="button" type="button" data-settings-action="add-event">Add event</button><label class="button" for="ics-import">Import .ics</label><input class="hidden-file" id="ics-import" type="file" accept=".ics,text/calendar"></div></div><div class="settings-section"><h3>Tags</h3><p>Rename a tag everywhere or remove it from all items.</p><div class="tag-manager">${managedTags.length ? managedTags.map((tag) => `<div class="settings-row tag-manager-row"><input class="detail-input" value="${esc(tag)}" data-tag-original="${esc(tag)}" aria-label="Rename ${esc(tag)}"><button class="button" type="button" data-delete-tag="${esc(tag)}">Remove</button></div>`).join('') : '<p>No tags yet.</p>'}</div></div><div class="settings-section"><h3>Data</h3><p>Export a complete backup or import one from another Objects installation.</p><div class="button-row"><button class="button" type="button" data-settings-action="export">${icon('download')} Export JSON</button><label class="button" for="json-import">${icon('upload')} Import JSON</label><input class="hidden-file" id="json-import" type="file" accept="application/json,.json"></div></div><div class="settings-section"><h3>Automation</h3><p>Open <code>/?title=Call%20Maya%20tomorrow</code> while signed in, or use the authenticated <code>POST /api/tasks</code> Lakebed endpoint.</p></div><div class="form-actions"><button class="button primary" type="button" data-cancel>Done</button></div></div></div>`;
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -1693,7 +1909,24 @@ function openSettings() {
   $$('[data-settings-action]').forEach((button) => button.addEventListener('click', () => handleSettingsAction(button.dataset.settingsAction)));
   $('#json-import').addEventListener('change', importJsonFile);
   $('#ics-import').addEventListener('change', importIcsFile);
+  $$('[data-tag-original]').forEach((input) => input.addEventListener('change', () => renameTag(input.dataset.tagOriginal, input.value.trim())));
+  $$('[data-delete-tag]').forEach((button) => button.addEventListener('click', () => removeTag(button.dataset.deleteTag)));
   bindLogbookSettings(settings);
+}
+
+function updateTagsEverywhere(transform) {
+  [...ui.state.areas, ...ui.state.projects, ...ui.state.tasks].forEach((item) => { item.tags = [...new Set((item.tags || []).map(transform).filter(Boolean))]; });
+}
+
+function renameTag(from, to) {
+  if (!to || to === from) { openSettings(); return; }
+  updateTagsEverywhere((tag) => tag === from ? to : tag); scheduleSave(); openSettings(); showToast(`Renamed “${from}” to “${to}”`);
+}
+
+function removeTag(tag) {
+  confirmAction(`Remove “${tag}”?`, 'The tag will be removed from every area, project, and to-do. The items themselves will not be deleted.', 'Remove tag', () => {
+    updateTagsEverywhere((value) => value === tag ? null : value); scheduleSave(); openSettings(); showToast(`Removed “${tag}”`);
+  });
 }
 
 async function handleSettingsAction(action) {
@@ -1851,11 +2084,27 @@ function handleGlobalKeydown(event) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); return; }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); openSearch(); return; }
   if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'n') { event.preventDefault(); beginQuickAdd(true); return; }
+  if ((event.metaKey || event.ctrlKey) && event.altKey && event.key.toLowerCase() === 'n') { event.preventDefault(); openNewListModal(); return; }
   if ((event.metaKey || event.ctrlKey) && /^[1-6]$/.test(event.key)) {
     const destinations = ['inbox', 'today', 'upcoming', 'anytime', 'someday', 'logbook'];
     event.preventDefault(); setView(destinations[Number(event.key) - 1]); return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key === '.' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 't' && ui.selectedTaskId) {
+    event.preventDefault(); const task = currentTask(); task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = false; moveReminderToDate(task, task.scheduledFor); scheduleSave(); render(); return;
+  }
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'r' && ui.selectedTaskId) {
+    event.preventDefault(); renderInspector(); setTimeout(() => $('[data-field="scheduledFor"]', inspector)?.focus(), 20); return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r' && ui.selectedTaskId) {
+    event.preventDefault(); const task = currentTask(); if (!task.repeat) { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(); } return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f' && ui.selectedTaskId) { event.preventDefault(); openMoveTaskModal(currentTask()); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') { event.preventDefault(); const logged = logCompletedNow(); scheduleSave(); render(); showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`); return; }
+  if (event.altKey && event.key === 'Backspace' && ui.selectedTaskId && currentTask()?.status === 'open') {
+    event.preventDefault(); const task = currentTask(); task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = null; applyLogbookPolicy(); scheduleSave(); closeInspector(); render(); showToast('To-do canceled'); return;
+  }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd' && ui.selectedTaskId) { event.preventDefault(); const task = currentTask(); const copy = { ...task, id: uid('task'), title: `${task.title} copy`, tags: [...(task.tags || [])], repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); selectTask(copy.id); scheduleSave(); showToast('To-do duplicated'); return; }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'n' && ui.view.type === 'project') { event.preventDefault(); openHeadingModal(); return; }
   if (!event.metaKey && !event.ctrlKey && !event.altKey && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {

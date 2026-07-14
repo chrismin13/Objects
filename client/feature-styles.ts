@@ -31,6 +31,22 @@ export const featureStyles = `
 .markdown-task.done { text-decoration: line-through; color: var(--muted); }
 .markdown-task.cancelled { text-decoration: line-through; opacity: .65; }
 .project-card-list + .section { margin-top: 24px; }
+.agenda-empty {
+  margin: 2px 0 8px 37px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+.nav-item.drop-target {
+  background: var(--blue-soft);
+  color: var(--blue);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 35%, transparent);
+}
+.task-row.canceled .task-title { text-decoration-style: wavy; opacity: .66; }
+.completion-choices { display: grid; gap: 8px; margin: 20px 0; }
+.tag-manager { display: grid; gap: 8px; }
+.tag-manager-row { gap: 8px; }
+.tag-manager-row .detail-input { min-width: 0; }
 .form-field textarea {
   width: 100%;
   resize: vertical;

@@ -25,8 +25,8 @@ export function isObjectsState(value: unknown): value is ObjectsState {
 export function createSeed(): ObjectsState {
   const createdAt = new Date().toISOString();
   return {
-    version: 4,
-    updatedAt: "seed-v4",
+    version: 5,
+    updatedAt: "seed-v5",
     settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily" },
     areas: [
       { id: "area-work", title: "Work", color: "#5b7cfa", tags: [], order: 0 },
@@ -62,6 +62,11 @@ export function addCapturedTask(state: ObjectsState, input: Record<string, unkno
   const areaId = typeof input.areaId === "string" ? input.areaId : null;
   const project = state.projects.find((item) => item.id === projectId);
   const bucket = typeof input.bucket === "string" ? input.bucket : scheduledFor ? (scheduledFor <= isoDay() ? "today" : "upcoming") : projectId || areaId ? "anytime" : "inbox";
+  const checklist = Array.isArray(input.checklist) ? input.checklist.slice(0, 200).map((item, index) => {
+    if (typeof item === "string") return { id: `check-${Date.now().toString(36)}-${index}`, title: item.slice(0, 1000), done: false };
+    const value = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    return { id: `check-${Date.now().toString(36)}-${index}`, title: typeof value.title === "string" ? value.title.slice(0, 1000) : "", done: Boolean(value.done) };
+  }).filter((item) => item.title.trim()) : [];
   const task = {
     id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
     title,
@@ -76,7 +81,9 @@ export function addCapturedTask(state: ObjectsState, input: Record<string, unkno
     headingId: typeof input.headingId === "string" ? input.headingId : null,
     areaId: areaId ?? (typeof project?.areaId === "string" ? project.areaId : null),
     tags: Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 50) : [],
-    checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now()
+    checklist,
+    repeat: input.repeat && typeof input.repeat === "object" ? input.repeat : null,
+    createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now()
   };
   state.tasks.push(task);
   state.updatedAt = new Date().toISOString();
