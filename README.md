@@ -4,6 +4,8 @@ Objects is a polished, full-featured task manager inspired by Things 3 and built
 
 It uses Lakebed’s Preact client, database API v1, live queries, mutations, hosted runtime, and first-party Google authentication. There are no OAuth keys, database credentials, runtime dependencies, or external services to configure.
 
+Live app: [objects.lakebed.app](https://objects.lakebed.app)
+
 ## Features
 
 - Inbox, Today, This Evening, Upcoming, Anytime, Someday, Logbook, and Trash
