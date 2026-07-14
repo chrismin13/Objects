@@ -447,8 +447,18 @@ function parseNaturalDate(phrase, today = localDay()) {
   const date = new Date(`${today}T12:00:00`);
   if (/^d/.test(unit)) date.setDate(date.getDate() + amount);
   else if (/^w/.test(unit)) date.setDate(date.getDate() + amount * 7);
-  else if (/^mo/.test(unit)) date.setMonth(date.getMonth() + amount);
-  else date.setFullYear(date.getFullYear() + amount);
+  else if (/^mo/.test(unit)) {
+    const targetDay = date.getDate();
+    date.setDate(1); date.setMonth(date.getMonth() + amount);
+    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    date.setDate(Math.min(targetDay, lastDay));
+  } else {
+    const month = date.getMonth();
+    const targetDay = date.getDate();
+    date.setDate(1); date.setFullYear(date.getFullYear() + amount); date.setMonth(month);
+    const lastDay = new Date(date.getFullYear(), month + 1, 0).getDate();
+    date.setDate(Math.min(targetDay, lastDay));
+  }
   return localDay(date);
 }
 
@@ -507,7 +517,8 @@ function handleCaptureUrl() {
   }
   if (params.get('search')) setTimeout(() => openSearch(params.get('search')), 0);
   if (!taskId && !requestedView && !title && params.get('capture') !== '1') return;
-  history.replaceState({}, '', location.pathname);
+  const localGuest = params.get('lakebed_guest');
+  history.replaceState({}, '', localGuest ? `${location.pathname}?lakebed_guest=${encodeURIComponent(localGuest)}` : location.pathname);
   if (params.get('capture') === '1') setTimeout(() => beginQuickAdd(true), 0);
 }
 
@@ -732,15 +743,16 @@ function settleSidebarGesture(open) {
 function syncSidebarAccessibility() {
   const mobile = matchMedia('(max-width: 820px)').matches;
   const inspectorOpen = app.classList.contains('inspector-open');
-  const hidden = mobile && (!app.classList.contains('sidebar-open') || inspectorOpen);
+  const sidebarOpen = app.classList.contains('sidebar-open');
+  const hidden = mobile && (!sidebarOpen || inspectorOpen);
   sidebarPanel.inert = hidden;
   if (hidden) sidebarPanel.setAttribute('aria-hidden', 'true');
   else sidebarPanel.removeAttribute('aria-hidden');
   const mainPane = $('.main-pane', app);
-  mainPane.inert = mobile && inspectorOpen;
+  mainPane.inert = mobile && (inspectorOpen || sidebarOpen);
   if (mainPane.inert) mainPane.setAttribute('aria-hidden', 'true');
   else mainPane.removeAttribute('aria-hidden');
-  $('#sidebar-open')?.setAttribute('aria-expanded', String(mobile && app.classList.contains('sidebar-open')));
+  $('#sidebar-open')?.setAttribute('aria-expanded', String(mobile && sidebarOpen));
 }
 
 function setView(type, id = null) {
@@ -1271,6 +1283,7 @@ function handleSidebarDrop(event) {
 }
 
 function beginQuickAdd(fromMagicButton = false) {
+  if (ui.selectedTaskId) closeInspector({ restoreFocus: false });
   if (!canQuickAdd()) setView('inbox');
   let row = $('.quick-add-row:not([hidden])', content) || $('.quick-add-row', content);
   if (!row && fromMagicButton) {
@@ -1335,6 +1348,11 @@ function createTaskFromParsed(parsed, options = {}) {
 function toggleTask(taskId, row) {
   const task = ui.state.tasks.find((item) => item.id === taskId);
   if (!task) return;
+  if (isTrashed(task)) {
+    const restoredProject = restoreTrashedTask(task);
+    scheduleSave(); render(); showToast(restoredProject ? 'Project restored' : 'To-do restored');
+    return;
+  }
   if (task.repeat) { selectTask(task.id); showToast('Edit or pause this repeating template in its details'); return; }
   if (task.status === 'open') {
     ui.lastCompleted = { id: task.id, status: task.status, completedAt: task.completedAt, loggedAt: task.loggedAt || null, completedWithProjectId: task.completedWithProjectId || null };
@@ -1381,6 +1399,27 @@ function undoComplete() {
   ui.lastCompleted = null;
 }
 
+function restoreTrashedTask(task) {
+  const parent = projectById(task.projectId);
+  const restoredProject = isTrashed(parent);
+  if (restoredProject) {
+    parent.status = parent.previousStatus || 'open';
+    parent.previousStatus = null;
+    parent.trashedAt = null;
+    ui.state.tasks.filter((item) => item.projectId === parent.id && isTrashed(item)).forEach((item) => {
+      item.status = item.previousStatus || 'open';
+      item.previousStatus = null;
+      item.trashedAt = null;
+    });
+  } else {
+    task.status = task.previousStatus || 'open';
+    task.previousStatus = null;
+    task.trashedAt = null;
+  }
+  applyLogbookPolicy();
+  return restoredProject;
+}
+
 function selectTask(taskId) {
   if (ui.selectedTaskId !== taskId) ui.markdownPreview = false;
   ui.selectedTaskId = taskId;
@@ -1392,7 +1431,7 @@ function selectTask(taskId) {
   setTimeout(() => inspector.focus(), 20);
 }
 
-function closeInspector() {
+function closeInspector({ restoreFocus = true } = {}) {
   const returnTaskId = ui.selectedTaskId;
   ui.selectedTaskId = null;
   app.classList.remove('inspector-open');
@@ -1400,7 +1439,7 @@ function closeInspector() {
   renderContent();
   inspector.innerHTML = '';
   syncSidebarAccessibility();
-  setTimeout(() => $(`[data-task-id="${returnTaskId}"] .task-main`, content)?.focus(), 20);
+  if (restoreFocus) setTimeout(() => $(`[data-task-id="${returnTaskId}"] .task-main`, content)?.focus(), 20);
 }
 
 function renderInspector() {
@@ -1598,12 +1637,8 @@ function handleInspectorClick(event) {
     });
   }
   if (action === 'restore') {
-    const parent = projectById(task.projectId);
-    if (isTrashed(parent)) {
-      parent.status = parent.previousStatus || 'open'; parent.previousStatus = null; parent.trashedAt = null;
-      ui.state.tasks.filter((item) => item.projectId === parent.id && isTrashed(item)).forEach((item) => { item.status = item.previousStatus || 'open'; item.previousStatus = null; item.trashedAt = null; });
-    } else task.status = task.previousStatus || 'open';
-    task.trashedAt = null; task.previousStatus = null; applyLogbookPolicy(); scheduleSave(); closeInspector(); showToast(parent && !isTrashed(parent) ? 'Project restored' : 'To-do restored');
+    const restoredProject = restoreTrashedTask(task);
+    scheduleSave(); closeInspector(); showToast(restoredProject ? 'Project restored' : 'To-do restored');
   }
   if (action === 'delete-forever') {
     confirmAction('Delete this to-do forever?', 'This cannot be undone.', 'Delete forever', () => {
@@ -1872,11 +1907,15 @@ function openProjectModal(projectId) {
     if (heading) heading.archived = false;
     scheduleSave(); closeModal(); render(); showToast('Heading restored');
   }));
-  $$('[data-project-weekday]').forEach((button) => button.addEventListener('click', () => {
-    const day = Number(button.dataset.projectWeekday); project.repeat.weekdays ||= [];
-    project.repeat.weekdays = project.repeat.weekdays.includes(day) ? project.repeat.weekdays.filter((value) => value !== day) : [...project.repeat.weekdays, day].sort();
-    scheduleSave(); openProjectModal(project.id);
-  }));
+  $$('[data-project-weekday]').forEach((button) => {
+    const day = Number(button.dataset.projectWeekday);
+    button.setAttribute('aria-label', `Repeat project on ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}`);
+    button.addEventListener('click', () => {
+      project.repeat.weekdays ||= [];
+      project.repeat.weekdays = project.repeat.weekdays.includes(day) ? project.repeat.weekdays.filter((value) => value !== day) : [...project.repeat.weekdays, day].sort();
+      scheduleSave(); openProjectModal(project.id);
+    });
+  });
   $$('[data-project-action]').forEach((button) => button.addEventListener('click', () => {
     const action = button.dataset.projectAction;
     if (action === 'delete') {

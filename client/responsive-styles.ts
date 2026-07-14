@@ -48,8 +48,10 @@ export const responsiveStyles = `
 }
 .modal:focus { outline: none; }
 .inspector:focus { outline: none; }
+.heading-actions:focus-within { opacity: 1; }
 
 @media (max-width: 820px) {
+  .heading-actions { opacity: 1; }
   .sidebar,
   .main-pane {
     touch-action: pan-y;
@@ -133,6 +135,12 @@ export const responsiveStyles = `
   .form-field input,
   .form-field select {
     min-height: 44px;
+    font-size: 16px;
+  }
+  .form-field textarea,
+  .inspector-notes,
+  .checklist-item input[type="text"] {
+    font-size: 16px;
   }
   .checklist-item {
     grid-template-columns: 24px minmax(0, 1fr) 44px;
