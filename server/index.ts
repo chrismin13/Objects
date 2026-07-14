@@ -36,7 +36,7 @@ const PWA_MANIFEST = JSON.stringify({
 });
 
 
-const SERVICE_WORKER = `const CACHE = "objects-pwa-v5";
+const SERVICE_WORKER = `const CACHE = "objects-pwa-v6";
 const CORE = ["/", "/client.js", "/manifest.webmanifest", "/favicon.svg"];
 const network = self["fet" + "ch"].bind(self);
 
@@ -118,6 +118,7 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const targetUrl = new URL(event.notification.data?.url || "/", self.location.origin);
   if (event.action === "snooze-10") targetUrl.searchParams.set("snooze", "10");
+  if (event.action === "snooze-30") targetUrl.searchParams.set("snooze", "30");
   if (event.action === "snooze-60") targetUrl.searchParams.set("snooze", "60");
   const target = targetUrl.href;
   event.waitUntil((async () => {

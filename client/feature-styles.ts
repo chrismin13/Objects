@@ -93,6 +93,45 @@ export const featureStyles = `
 }
 .task-row.canceled .task-title { text-decoration-style: wavy; opacity: .66; }
 .completion-choices { display: grid; gap: 8px; margin: 20px 0; }
+.archived-section { margin-top: 42px; opacity: .82; }
+.archived-heading-header { border-top: 1px solid var(--border); }
+.archived-heading-header .section-meta { color: var(--green); }
+.heading-restore { min-height: 28px; padding: 4px 9px; font-size: 11px; }
+.note-tools { display: flex; gap: 14px; }
+.note-find-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 30px 30px 30px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.note-find-bar input { min-width: 0; border: 0; outline: 0; background: transparent; }
+.note-find-bar span { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.note-find-bar .icon-button { width: 30px; height: 30px; }
+.magic-add.dragging { opacity: .45; transform: scale(.92); }
+.task-row { touch-action: pan-y; }
+.task-row.task-swiping {
+  z-index: 2;
+  transform: translateX(var(--task-swipe-x, 0));
+  transition: none;
+  box-shadow: 0 5px 18px rgba(0,0,0,.08);
+}
+.task-row.task-swiping::after {
+  content: attr(data-swipe-action);
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 12px);
+  transform: translateY(-50%);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 700;
+}
+#move-destination { min-height: 180px; padding: 6px; }
+#move-destination option { padding: 7px 8px; border-radius: 5px; }
 .tag-manager { display: grid; gap: 8px; }
 .tag-manager-row { gap: 8px; }
 .tag-manager-row .detail-input { min-width: 0; }

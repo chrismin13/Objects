@@ -172,6 +172,7 @@ export async function showTaskReminder(task: { id: string; title: string; notes?
     data: { url: `/?task=${encodeURIComponent(task.id)}` },
     actions: [
       { action: "snooze-10", title: "Snooze 10 min" },
+      { action: "snooze-30", title: "Snooze 30 min" },
       { action: "snooze-60", title: "Snooze 1 hour" },
     ],
   };

@@ -94,7 +94,7 @@ const ui = {
   lastCompleted: null,
   focusedSearchIndex: 0,
   searchEverything: false,
-  activeTag: null,
+  activeTags: new Set(),
   markdownPreview: false,
   draggedTaskId: null,
   draggedHeadingId: null,
@@ -104,6 +104,11 @@ const ui = {
   reminderCheckRunning: false,
   pwaUpdateNotified: false,
   syncTimer: null,
+  noteFindOpen: false,
+  noteFindQuery: '',
+  noteFindIndex: 0,
+  draggingMagicAdd: false,
+  suppressClickUntil: 0,
 };
 
 let app;
@@ -117,6 +122,7 @@ let staticEventsBound = false;
 let logbookTimer = null;
 let modalReturnFocus = null;
 let sidebarGesture = null;
+let taskGesture = null;
 
 export function mountObjects(serializedState, options) {
   app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
@@ -264,6 +270,13 @@ function createTagInPicker(button) {
 
 function bindTagPicker(root) {
   $$('[data-create-tag]', root).forEach((button) => button.addEventListener('click', () => createTagInPicker(button)));
+  root.addEventListener('keydown', (event) => {
+    const input = event.target.closest('[data-new-tag]');
+    if (input && event.key === 'Enter') {
+      event.preventDefault();
+      createTagInPicker($(`[data-create-tag="${input.dataset.newTag}"]`, input.closest('[data-tag-picker]')));
+    }
+  });
   root.addEventListener('change', (event) => {
     const picker = event.target.closest('[data-tag-picker]');
     if (event.target.dataset.tagChoice && picker) refreshTagPickerSummary(picker);
@@ -632,11 +645,20 @@ function nextWeekday(name, today = localDay()) {
 
 function handleCaptureUrl() {
   const params = new URLSearchParams(location.search);
-  const taskId = params.get('task');
-  const requestedView = params.get('view');
+  const showId = params.get('id');
+  const taskId = params.get('task') || (ui.state.tasks.some((task) => task.id === showId) ? showId : null);
+  const viewAliases = { 'all-projects': 'allProjects', 'logged-projects': 'loggedProjects' };
+  let requestedView = params.get('view');
+  if (!requestedView && showId) {
+    requestedView = viewAliases[showId] || showId;
+    if (ui.state.projects.some((project) => project.id === showId)) { requestedView = 'project'; }
+    if (ui.state.areas.some((area) => area.id === showId)) { requestedView = 'area'; }
+    if (getKnownTags().some((tag) => tag.toLocaleLowerCase() === showId.toLocaleLowerCase())) { requestedView = 'tag'; }
+  }
+  requestedView = viewAliases[requestedView] || requestedView;
   const sharedText = params.get('text');
   const sharedUrl = params.get('url');
-  const sharedTitle = params.get('title');
+  const sharedTitle = params.get('title') || params.get('titles')?.split(/\r?\n/).find(Boolean);
   const title = sharedTitle || sharedText;
 
   const snoozeMinutes = Number(params.get('snooze'));
@@ -649,16 +671,32 @@ function handleCaptureUrl() {
     }
   }
 
-  if (requestedView && ['inbox', 'today', 'upcoming', 'anytime', 'someday', 'logbook', 'trash', 'tomorrow', 'deadlines', 'repeating', 'allProjects', 'loggedProjects'].includes(requestedView)) setView(requestedView);
+  if (requestedView === 'project') setView('project', showId);
+  else if (requestedView === 'area') setView('area', showId);
+  else if (requestedView === 'tag') setView('tag', getKnownTags().find((tag) => tag.toLocaleLowerCase() === showId?.toLocaleLowerCase()) || showId);
+  else if (requestedView && ['inbox', 'today', 'upcoming', 'anytime', 'someday', 'logbook', 'trash', 'tomorrow', 'deadlines', 'repeating', 'allProjects', 'loggedProjects'].includes(requestedView)) setView(requestedView);
+  else if (params.get('query')) {
+    const result = searchItems(params.get('query')).find((item) => ['view', 'heading'].includes(item.kind));
+    if (result?.kind === 'view') setView(result.type, result.id || null);
+    else if (result?.kind === 'heading') setView('project', result.projectId);
+  }
+  const requestedFilters = cleanTagList((params.get('filter') || '').split(','));
+  if (requestedFilters.length && ui.view.type !== 'tag') {
+    ui.activeTags = new Set(requestedFilters);
+    renderContent();
+  }
   if (taskId && ui.state.tasks.some((task) => task.id === taskId)) selectTask(taskId);
   if (title) {
     const parsed = parseNaturalTask(title);
     const notes = [params.get('notes'), sharedTitle ? sharedText : null, sharedUrl].filter(Boolean).join('\n');
-    const listTarget = params.get('list') || params.get('project');
+    const listTarget = params.get('list-id') || params.get('list') || params.get('project');
     const project = ui.state.projects.find((item) => item.id === listTarget || item.title.toLowerCase() === listTarget?.toLowerCase());
     const area = ui.state.areas.find((item) => item.id === listTarget || item.title.toLowerCase() === listTarget?.toLowerCase());
     const task = createTaskFromParsed(parsed, { notes, projectId: project?.id || null, useCurrentView: false });
     if (area && !project) { task.areaId = area.id; task.bucket = 'anytime'; }
+    const headingName = params.get('heading');
+    const heading = headingName && ui.state.headings.find((item) => !item.archived && (item.id === headingName || item.title.toLocaleLowerCase() === headingName.toLocaleLowerCase()) && (!project || item.projectId === project.id));
+    if (heading) { const parent = projectById(heading.projectId); task.headingId = heading.id; task.projectId = heading.projectId; task.areaId = parent?.areaId || null; task.bucket = task.bucket === 'inbox' ? 'anytime' : task.bucket; }
     const when = params.get('when');
     if (when) {
       if (when.toLowerCase() === 'someday') { task.bucket = 'someday'; task.scheduledFor = null; }
@@ -669,12 +707,15 @@ function handleCaptureUrl() {
     }
     task.deadline = parseNaturalDate(params.get('deadline')) || task.deadline;
     if (params.get('tags')) task.tags = cleanTagList([...task.tags, ...registerTags(params.get('tags').split(','))]);
-    if (params.get('checklist')) task.checklist = params.get('checklist').split(/\r?\n/).filter(Boolean).map((item) => ({ id: uid('check'), title: item, done: false }));
-    if (['completed', 'canceled'].includes(params.get('status'))) { task.status = params.get('status'); task.completedAt = new Date().toISOString(); task.loggedAt = null; applyLogbookPolicy(); }
+    const checklistItems = params.get('checklist-items') || params.get('checklist');
+    if (checklistItems) task.checklist = checklistItems.split(/\r?\n/).filter(Boolean).map((item) => ({ id: uid('check'), title: item, done: false }));
+    const requestedStatus = params.get('completed') === 'true' ? 'completed' : params.get('canceled') === 'true' ? 'canceled' : params.get('status');
+    if (['completed', 'canceled'].includes(requestedStatus)) { task.status = requestedStatus; task.completedAt = params.get('completion-date') || new Date().toISOString(); task.loggedAt = null; applyLogbookPolicy(); }
+    if (params.get('creation-date')) task.createdAt = params.get('creation-date');
     scheduleSave(); render();
   }
   if (params.get('search')) setTimeout(() => openSearch(params.get('search')), 0);
-  if (!taskId && !requestedView && !title && params.get('capture') !== '1') return;
+  if (!taskId && !requestedView && !params.get('query') && !title && params.get('capture') !== '1') return;
   const localGuest = params.get('lakebed_guest');
   history.replaceState({}, '', localGuest ? `${location.pathname}?lakebed_guest=${encodeURIComponent(localGuest)}` : location.pathname);
   if (params.get('capture') === '1') setTimeout(() => beginQuickAdd(true), 0);
@@ -720,12 +761,24 @@ function bindStaticEvents() {
   $('#sidebar-open').innerHTML = icon('menu');
   $('#sidebar-close').innerHTML = icon('x');
   $('#magic-add').innerHTML = icon('plus');
+  $('#magic-add').draggable = true;
   $('#new-list-button').innerHTML = `${icon('plus')}<span>New list</span>`;
   $('#settings-button').innerHTML = icon('settings');
   $('#search-button').addEventListener('click', () => openSearch());
   $('#mobile-search').addEventListener('click', () => openSearch());
   $('#magic-add').addEventListener('click', () => beginQuickAdd(true));
-  $('#new-list-button').addEventListener('click', openNewListModal);
+  $('#magic-add').addEventListener('dragstart', (event) => {
+    ui.draggingMagicAdd = true;
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('text/plain', 'new-to-do');
+    $('#magic-add').classList.add('dragging');
+  });
+  $('#magic-add').addEventListener('dragend', () => {
+    ui.draggingMagicAdd = false;
+    $('#magic-add').classList.remove('dragging');
+    handleDragEnd();
+  });
+  $('#new-list-button').addEventListener('click', () => openNewListModal());
   $('#settings-button').addEventListener('click', openSettings);
   $('#theme-button').addEventListener('click', cycleTheme);
   $('#sidebar-open').addEventListener('click', openSidebar);
@@ -751,7 +804,7 @@ function bindStaticEvents() {
   });
   sidebar.addEventListener('dragover', (event) => {
     const destination = event.target.closest('[data-view]');
-    if (!destination || (!ui.draggedTaskId && !ui.draggedList)) return;
+    if (!destination || (!ui.draggedTaskId && !ui.draggedList && !ui.draggingMagicAdd)) return;
     event.preventDefault();
     $$('.nav-item.drop-target', sidebar).forEach((item) => item.classList.remove('drop-target'));
     destination.classList.add('drop-target');
@@ -765,9 +818,14 @@ function bindStaticEvents() {
   content.addEventListener('dragover', handleDragOver);
   content.addEventListener('drop', handleDrop);
   content.addEventListener('dragend', handleDragEnd);
+  content.addEventListener('pointerdown', handleTaskGestureStart, { passive: true });
+  content.addEventListener('pointermove', handleTaskGestureMove, { passive: false });
+  content.addEventListener('pointerup', handleTaskGestureEnd, { passive: true });
+  content.addEventListener('pointercancel', handleTaskGestureCancel, { passive: true });
   inspector.addEventListener('input', handleInspectorInput);
   inspector.addEventListener('change', handleInspectorChange);
   inspector.addEventListener('click', handleInspectorClick);
+  inspector.addEventListener('keydown', handleInspectorKeydown);
   inspector.addEventListener('dragstart', handleChecklistDragStart);
   inspector.addEventListener('dragover', handleChecklistDragOver);
   inspector.addEventListener('drop', handleChecklistDrop);
@@ -918,7 +976,9 @@ function setView(type, id = null) {
   ui.view = { type, id };
   ui.selectedTaskId = null;
   clearTaskSelection(false);
-  ui.activeTag = type === 'tag' ? id : null;
+  ui.activeTags.clear();
+  ui.noteFindOpen = false;
+  ui.noteFindQuery = '';
   closeSidebar();
   render();
   content.scrollTop = 0;
@@ -1028,7 +1088,13 @@ function viewDefinition() {
   if (ui.view.type === 'project') {
     const project = projectById(ui.view.id);
     if (!project) return definitions.today;
-    return { title: project.title, icon: isLogged(project) ? 'check' : isTrashed(project) ? 'trash' : 'list', eyebrow: project.status === 'completed' ? 'Completed project' : project.status === 'canceled' ? 'Canceled project' : isTrashed(project) ? 'In Trash' : areaById(project.areaId)?.title || 'Project', subtitle: project.notes || 'A focused set of steps toward one outcome.', deadline: project.deadline, tasks: ui.state.tasks.filter((t) => t.projectId === project.id && (isLogged(project) ? isLogged(t) : isTrashed(project) ? isTrashed(t) : (t.status === 'open' || isCompletedButVisible(t)) && !t.repeat)), project };
+    return { title: project.title, icon: isLogged(project) ? 'check' : isTrashed(project) ? 'trash' : 'list', eyebrow: project.status === 'completed' ? 'Completed project' : project.status === 'canceled' ? 'Canceled project' : isTrashed(project) ? 'In Trash' : areaById(project.areaId)?.title || 'Project', subtitle: project.notes || 'A focused set of steps toward one outcome.', deadline: project.deadline, tasks: ui.state.tasks.filter((t) => {
+      if (t.projectId !== project.id || t.repeat) return false;
+      if (isLogged(project)) return isLogged(t);
+      if (isTrashed(project)) return isTrashed(t);
+      const archivedHeading = ui.state.headings.some((heading) => heading.id === t.headingId && heading.archived);
+      return archivedHeading || t.status === 'open' || isCompletedButVisible(t);
+    }), project };
   }
   if (ui.view.type === 'area') {
     const area = areaById(ui.view.id);
@@ -1056,8 +1122,9 @@ function render() {
 
 function renderContent() {
   const view = viewDefinition();
-  const visibleTasks = ui.activeTag ? view.tasks.filter((task) => effectiveTags(task).includes(ui.activeTag)) : view.tasks;
-  const visibleProjects = ui.activeTag ? (view.projects || []).filter((project) => effectiveProjectTags(project).includes(ui.activeTag)) : (view.projects || []);
+  const matchesActiveTags = (tags) => [...ui.activeTags].every((tag) => tags.includes(tag));
+  const visibleTasks = ui.activeTags.size ? view.tasks.filter((task) => matchesActiveTags(effectiveTags(task))) : view.tasks;
+  const visibleProjects = ui.activeTags.size ? (view.projects || []).filter((project) => matchesActiveTags(effectiveProjectTags(project))) : (view.projects || []);
   const sorted = [...visibleTasks].sort((a, b) => {
     if (ui.view.type === 'deadlines') return (a.deadline || '').localeCompare(b.deadline || '');
     if (ui.view.type === 'logbook') return (b.completedAt || '').localeCompare(a.completedAt || '');
@@ -1078,7 +1145,7 @@ function renderContent() {
       <div class="view-title-row">${icon(view.icon, 'view-icon')}<h1>${esc(view.title)}</h1><div class="header-actions">${headerActions}</div></div>
       <p class="view-subtitle">${esc(view.subtitle)}</p>
       ${progress !== null ? `<div class="progress-line" aria-label="Project ${progress}% complete"><span style="width:${progress}%"></span></div>` : ''}
-      ${tags.length && ui.view.type !== 'tag' ? `<div class="filter-bar"><button class="chip ${!ui.activeTag ? 'active' : ''}" data-filter-tag="">All</button>${tags.map((tag) => `<button class="chip ${ui.activeTag === tag ? 'active' : ''}" data-filter-tag="${esc(tag)}">${esc(tag)}</button>`).join('')}</div>` : ''}
+      ${tags.length && ui.view.type !== 'tag' ? `<div class="filter-bar" aria-label="Filter by tags"><button class="chip ${!ui.activeTags.size ? 'active' : ''}" data-filter-tag="">All</button>${tags.map((tag) => `<button class="chip ${ui.activeTags.has(tag) ? 'active' : ''}" data-filter-tag="${esc(tag)}" aria-pressed="${ui.activeTags.has(tag)}">${esc(tag)}</button>`).join('')}</div>` : ''}
     </header>
     ${calendar}
     ${projectSection}${view.repeatingProjects?.length ? `<section class="section"><div class="section-header"><h2>Repeating projects</h2></div>${renderProjectCards(view.repeatingProjects)}</section>` : ''}${sections.length ? sections.map(renderSection).join('') : projectSection || view.repeatingProjects?.length ? '' : renderEmpty(view)}
@@ -1110,11 +1177,13 @@ function renderProjectCards(projects) {
 
 function buildSections(tasks) {
   if (ui.view.type === 'project') {
-    const groups = groupBy(tasks, (task) => ui.state.headings.some((heading) => heading.id === task.headingId && !heading.archived) ? task.headingId : 'no-heading');
+    const archivedHeadings = ui.state.headings.filter((item) => item.projectId === ui.view.id && item.archived).sort((a, b) => a.order - b.order);
+    const archivedIds = new Set(archivedHeadings.map((heading) => heading.id));
+    const groups = groupBy(tasks.filter((task) => !archivedIds.has(task.headingId)), (task) => ui.state.headings.some((heading) => heading.id === task.headingId && !heading.archived) ? task.headingId : 'no-heading');
     for (const heading of ui.state.headings.filter((item) => item.projectId === ui.view.id && !item.archived)) {
       if (!groups.has(heading.id)) groups.set(heading.id, []);
     }
-    return [...groups.entries()].sort(([a], [b]) => {
+    const activeSections = [...groups.entries()].sort(([a], [b]) => {
       if (a === 'no-heading') return -1;
       if (b === 'no-heading') return 1;
       return (ui.state.headings.find((h) => h.id === a)?.order || 0) - (ui.state.headings.find((h) => h.id === b)?.order || 0);
@@ -1127,6 +1196,15 @@ function buildSections(tasks) {
       });
       return { key, title: heading?.title || (ui.state.headings.some((h) => h.projectId === ui.view.id && !h.archived) ? 'To-dos' : ''), tasks: items, heading };
     });
+    const loggedSections = archivedHeadings.map((heading) => ({
+      key: `archived-${heading.id}`,
+      title: heading.title,
+      meta: 'Logged',
+      tasks: tasks.filter((task) => task.headingId === heading.id).sort((a, b) => a.order - b.order),
+      heading,
+      archived: true,
+    }));
+    return [...activeSections, ...loggedSections];
   }
   if (ui.view.type === 'upcoming') {
     const groups = groupBy(tasks, (task) => task.agendaDay || task.scheduledFor || task.deadline);
@@ -1190,10 +1268,10 @@ function groupBy(items, getKey) {
 }
 
 function renderSection(section) {
-  const headingActions = section.heading ? `<span class="heading-actions"><button class="icon-button" data-action="heading-menu" data-heading-id="${section.heading.id}" aria-label="Heading options">${icon('more')}</button></span>` : '';
-  const title = section.title ? `<div class="section-header ${section.heading ? 'heading-header' : ''}" ${section.heading ? `data-heading-id="${section.heading.id}" draggable="true"` : ''}><h2>${esc(section.title)}</h2>${section.meta ? `<span class="section-meta">${esc(section.meta)}</span>` : ''}${section.symbol ? `<span class="section-symbol">${section.symbol}</span>` : ''}${headingActions}</div>` : '';
+  const headingActions = section.heading ? `<span class="heading-actions">${section.archived ? `<button class="button heading-restore" data-action="restore-heading" data-heading-id="${section.heading.id}">Restore</button>` : `<button class="icon-button" data-action="heading-menu" data-heading-id="${section.heading.id}" aria-label="Heading options">${icon('more')}</button>`}</span>` : '';
+  const title = section.title ? `<div class="section-header ${section.heading ? 'heading-header' : ''} ${section.archived ? 'archived-heading-header' : ''}" ${section.heading && !section.archived ? `data-heading-id="${section.heading.id}" draggable="true"` : ''}><h2>${esc(section.title)}</h2>${section.meta ? `<span class="section-meta">${esc(section.meta)}</span>` : ''}${section.symbol ? `<span class="section-symbol">${section.symbol}</span>` : ''}${headingActions}</div>` : '';
   const emptyAgenda = section.agenda && !section.tasks.length ? '<p class="agenda-empty">No plans</p>' : '';
-  return `<section class="section" data-section="${esc(section.key)}">${title}<ul class="task-list">${section.tasks.map(renderTask).join('')}</ul>${emptyAgenda}${canQuickAdd() ? renderQuickAdd(section.key, section.title || viewDefinition().title) : ''}</section>`;
+  return `<section class="section ${section.archived ? 'archived-section' : ''}" data-section="${esc(section.key)}">${title}<ul class="task-list">${section.tasks.map(renderTask).join('')}</ul>${emptyAgenda}${!section.archived && canQuickAdd() ? renderQuickAdd(section.key, section.title || viewDefinition().title) : ''}</section>`;
 }
 
 function renderTask(task) {
@@ -1212,7 +1290,7 @@ function renderTask(task) {
   if (task.agendaDeadlineOnly) meta.push(`<span class="meta-item deadline">Deadline date</span>`);
   if (task.agendaPreview) meta.push(`<span class="meta-item">Upcoming copy</span>`);
   if (task.checklist?.length) meta.push(`<span class="meta-item">${icon('list')} ${task.checklist.filter((i) => i.done).length}/${task.checklist.length}</span>`);
-  if (effectiveTags(task).length) meta.push(...effectiveTags(task).slice(0, 2).map((tag) => `<span class="meta-item"><i class="tag-dot"></i>${esc(tag)}</span>`));
+  if (task.tags?.length) meta.push(...task.tags.slice(0, 2).map((tag) => `<span class="meta-item"><i class="tag-dot"></i>${esc(tag)}</span>`));
   const star = ui.view.type === 'anytime' && task.bucket === 'today' ? icon('star', 'today-star') : '';
   const bulkSelected = ui.selectedTaskIds.has(task.id);
   return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${bulkSelected ? 'bulk-selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="true" aria-selected="${bulkSelected}">
@@ -1223,8 +1301,59 @@ function renderTask(task) {
   </li>`;
 }
 
+function handleTaskGestureStart(event) {
+  if (!matchMedia('(max-width: 820px)').matches || !event.isPrimary || event.target.closest('button, input, textarea, select, a')) return;
+  const row = event.target.closest('[data-task-id]');
+  if (!row) return;
+  taskGesture = { pointerId: event.pointerId, row, taskId: row.dataset.taskId, startX: event.clientX, startY: event.clientY, currentX: event.clientX, currentY: event.clientY, horizontal: false };
+}
+
+function handleTaskGestureMove(event) {
+  const gesture = taskGesture;
+  if (!gesture || event.pointerId !== gesture.pointerId) return;
+  gesture.currentX = event.clientX; gesture.currentY = event.clientY;
+  const dx = event.clientX - gesture.startX; const dy = event.clientY - gesture.startY;
+  if (!gesture.horizontal) {
+    if (Math.hypot(dx, dy) < 10) return;
+    if (Math.abs(dy) >= Math.abs(dx)) { taskGesture = null; return; }
+    gesture.horizontal = true; gesture.row.classList.add('task-swiping');
+  }
+  event.preventDefault();
+  gesture.row.style.setProperty('--task-swipe-x', `${Math.max(-82, Math.min(82, dx))}px`);
+  gesture.row.dataset.swipeAction = dx < 0 ? 'Select' : 'When';
+}
+
+function finishTaskGesture(event, canceled = false) {
+  const gesture = taskGesture;
+  if (!gesture || event.pointerId !== gesture.pointerId) return;
+  taskGesture = null;
+  gesture.row.classList.remove('task-swiping');
+  gesture.row.style.removeProperty('--task-swipe-x');
+  delete gesture.row.dataset.swipeAction;
+  if (!gesture.horizontal || canceled) return;
+  const dx = gesture.currentX - gesture.startX;
+  ui.suppressClickUntil = Date.now() + 450;
+  if (dx <= -56) selectTaskForBulk(gesture.taskId);
+  else if (dx >= 56) {
+    selectTask(gesture.taskId);
+    setTimeout(() => $('[data-field="scheduledFor"]', inspector)?.focus(), 20);
+  }
+}
+
+function handleTaskGestureEnd(event) { finishTaskGesture(event); }
+function handleTaskGestureCancel(event) { finishTaskGesture(event, true); }
+
 function selectedTasks() {
   return ui.state.tasks.filter((task) => ui.selectedTaskIds.has(task.id));
+}
+
+function draggedTasks() {
+  const primary = ui.state.tasks.find((task) => task.id === ui.draggedTaskId);
+  if (!primary) return [];
+  if (ui.selectedTaskIds.size > 1 && ui.selectedTaskIds.has(primary.id)) {
+    return ui.state.tasks.filter((task) => ui.selectedTaskIds.has(task.id)).sort((a, b) => a.order - b.order);
+  }
+  return [primary];
 }
 
 function clearTaskSelection(renderAfter = true) {
@@ -1385,6 +1514,7 @@ function deadlineLabel(day) {
 }
 
 function handleContentClick(event) {
+  if (Date.now() < ui.suppressClickUntil) { event.preventDefault(); return; }
   const taskRow = event.target.closest('[data-task-id]');
   const action = event.target.closest('[data-action]')?.dataset.action;
   const bulkAction = event.target.closest('[data-bulk-action]')?.dataset.bulkAction;
@@ -1423,8 +1553,21 @@ function handleContentClick(event) {
   if (action === 'project-menu') openProjectModal(ui.view.id);
   if (action === 'area-menu') openAreaModal(ui.view.id);
   if (action === 'heading-menu') openHeadingModal(event.target.closest('[data-heading-id]').dataset.headingId);
+  if (action === 'restore-heading') {
+    const heading = ui.state.headings.find((item) => item.id === event.target.closest('[data-heading-id]').dataset.headingId);
+    if (heading) { heading.archived = false; scheduleSave(); renderContent(); showToast('Heading restored'); }
+  }
   const tag = event.target.closest('[data-filter-tag]');
-  if (tag) { ui.activeTag = tag.dataset.filterTag || null; renderContent(); }
+  if (tag) {
+    const value = tag.dataset.filterTag;
+    if (!value) ui.activeTags.clear();
+    else if (event.metaKey || event.ctrlKey) {
+      if (ui.activeTags.has(value)) ui.activeTags.delete(value);
+      else ui.activeTags.add(value);
+    } else if (ui.activeTags.size === 1 && ui.activeTags.has(value)) ui.activeTags.clear();
+    else ui.activeTags = new Set([value]);
+    renderContent();
+  }
   const projectCard = event.target.closest('[data-project-card]');
   if (projectCard) setView('project', projectCard.dataset.projectCard);
   const sectionAdd = event.target.closest('[data-section-add]');
@@ -1466,7 +1609,7 @@ function handleDragStart(event) {
 function handleDragOver(event) {
   const row = event.target.closest('[data-task-id]');
   const section = event.target.closest('[data-section]');
-  if (!row && section && (ui.draggedTaskId || ui.draggedHeadingId)) {
+  if (!row && section && (ui.draggedTaskId || ui.draggedHeadingId || ui.draggingMagicAdd)) {
     event.preventDefault();
     $$('.section.drop-target', content).forEach((item) => item.classList.remove('drop-target'));
     section.classList.add('drop-target');
@@ -1481,7 +1624,15 @@ function handleDragOver(event) {
 function handleDrop(event) {
   const targetRow = event.target.closest('[data-task-id]');
   const targetSection = event.target.closest('[data-section]');
-  const source = ui.state.tasks.find((task) => task.id === ui.draggedTaskId);
+  if (ui.draggingMagicAdd) {
+    event.preventDefault();
+    ui.draggingMagicAdd = false;
+    if (ui.view.type === 'project' && event.clientX < content.getBoundingClientRect().left + 78) openHeadingModal();
+    else openQuickAdd(targetSection?.querySelector('.quick-add-row') || $('.quick-add-row', content));
+    return;
+  }
+  const sources = draggedTasks();
+  const source = sources[0];
   const target = ui.state.tasks.find((task) => task.id === targetRow?.dataset.taskId);
   if (ui.draggedHeadingId && targetSection && ui.view.type === 'project') {
     event.preventDefault();
@@ -1494,34 +1645,32 @@ function handleDrop(event) {
     }
     ui.draggedHeadingId = null; return;
   }
-  if (!source || (!target && !targetSection) || source.id === target?.id) return;
+  if (!source || (!target && !targetSection) || sources.some((item) => item.id === target?.id)) return;
   event.preventDefault();
   const destinationKey = targetSection?.dataset.section || targetRow?.closest('[data-section]')?.dataset.section;
   if (ui.view.type === 'upcoming' && destinationKey) {
-    if (source.repeat) {
-      source.repeat.nextDate = destinationKey;
-      source.scheduledFor = destinationKey;
-    } else {
-      moveReminderToDate(source, destinationKey);
-      source.scheduledFor = destinationKey;
-      source.bucket = destinationKey <= localDay() ? 'today' : 'upcoming';
-      source.evening = false;
-    }
+    sources.forEach((item) => {
+      if (item.repeat) { item.repeat.nextDate = destinationKey; item.scheduledFor = destinationKey; }
+      else { moveReminderToDate(item, destinationKey); item.scheduledFor = destinationKey; item.bucket = destinationKey <= localDay() ? 'today' : 'upcoming'; item.evening = false; }
+    });
   }
   if (ui.view.type === 'today') {
     const evening = Boolean(target?.evening || destinationKey?.startsWith('evening'));
-    source.bucket = 'today'; source.scheduledFor = localDay(); source.evening = evening;
-    moveReminderToDate(source, source.scheduledFor);
+    sources.forEach((item) => { item.bucket = 'today'; item.scheduledFor = localDay(); item.evening = evening; moveReminderToDate(item, item.scheduledFor); });
   }
   if (target) {
     const rect = targetRow.getBoundingClientRect();
-    source.order = target.order + (event.clientY > rect.top + rect.height / 2 ? 0.5 : -0.5);
-    if (ui.view.type === 'project') source.headingId = target.headingId || null;
+    const after = event.clientY > rect.top + rect.height / 2;
+    sources.forEach((item, index) => {
+      item.order = target.order + (after ? 0.5 : -0.5) + index / 1000;
+      if (ui.view.type === 'project') item.headingId = target.headingId || null;
+    });
   } else {
     const sectionKey = targetSection.dataset.section;
-    if (ui.view.type === 'project') source.headingId = sectionKey === 'no-heading' ? null : sectionKey;
-    const sectionTasks = ui.state.tasks.filter((task) => task.headingId === source.headingId && task.id !== source.id);
-    source.order = Math.max(0, ...sectionTasks.map((task) => task.order)) + 1;
+    if (ui.view.type === 'project') sources.forEach((item) => { item.headingId = sectionKey === 'no-heading' ? null : sectionKey; });
+    const sectionTasks = ui.state.tasks.filter((task) => task.headingId === source.headingId && !sources.some((item) => item.id === task.id));
+    const startOrder = Math.max(0, ...sectionTasks.map((task) => task.order)) + 1;
+    sources.forEach((item, index) => { item.order = startOrder + index; });
   }
   const ordered = [...ui.state.tasks].sort((a, b) => a.order - b.order);
   ordered.forEach((task, index) => { task.order = index; });
@@ -1532,6 +1681,7 @@ function handleDrop(event) {
 function handleDragEnd() {
   ui.draggedTaskId = null;
   ui.draggedHeadingId = null;
+  ui.draggingMagicAdd = false;
   $$('.task-row.dragging, .task-row.drag-over', content).forEach((item) => item.classList.remove('dragging', 'drag-over'));
   $$('.section.drop-target', content).forEach((item) => item.classList.remove('drop-target'));
   $$('.nav-item.drop-target', sidebar).forEach((item) => item.classList.remove('drop-target'));
@@ -1539,6 +1689,18 @@ function handleDragEnd() {
 
 function handleSidebarDrop(event) {
   const destination = event.target.closest('[data-view]');
+  if (destination && ui.draggingMagicAdd) {
+    event.preventDefault();
+    ui.draggingMagicAdd = false;
+    const type = destination.dataset.view;
+    const id = destination.dataset.id || null;
+    if (type === 'area' && id) openNewListModal({ type: 'project', areaId: id });
+    else {
+      setView(['project', 'area', 'inbox', 'today', 'anytime', 'someday'].includes(type) ? type : 'inbox', id);
+      setTimeout(() => beginQuickAdd(true), 0);
+    }
+    return;
+  }
   if (destination && ui.draggedList) {
     event.preventDefault();
     const source = ui.draggedList.kind === 'area' ? areaById(ui.draggedList.id) : projectById(ui.draggedList.id);
@@ -1554,26 +1716,22 @@ function handleSidebarDrop(event) {
     if (ui.draggedList.kind === 'project') ui.state.tasks.filter((item) => item.projectId === source.id).forEach((item) => { item.areaId = source.areaId || null; });
     ui.draggedList = null; scheduleSave(); render(); showToast('List moved'); return;
   }
-  const task = ui.state.tasks.find((item) => item.id === ui.draggedTaskId);
-  if (!destination || !task || task.repeat) return;
+  const tasks = draggedTasks().filter((item) => !item.repeat);
+  const task = tasks[0];
+  if (!destination || !task) return;
   event.preventDefault();
   const type = destination.dataset.view;
   const id = destination.dataset.id || null;
-  if (type === 'inbox') {
-    task.bucket = 'inbox'; task.scheduledFor = null; task.evening = false; task.projectId = null; task.headingId = null; task.areaId = null; moveReminderToDate(task, null);
-  } else if (type === 'today') {
-    task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = false; moveReminderToDate(task, task.scheduledFor);
-  } else if (type === 'upcoming') {
-    task.bucket = 'upcoming'; task.scheduledFor = task.scheduledFor > localDay() ? task.scheduledFor : addDays(localDay(), 1); task.evening = false; moveReminderToDate(task, task.scheduledFor);
-  } else if (type === 'anytime') {
-    task.bucket = 'anytime'; task.scheduledFor = null; task.evening = false; moveReminderToDate(task, null);
-  } else if (type === 'someday') {
-    task.bucket = 'someday'; task.scheduledFor = null; task.evening = false; moveReminderToDate(task, null);
-  } else if (type === 'area' && id) {
-    task.projectId = null; task.headingId = null; task.areaId = id; if (task.bucket === 'inbox') task.bucket = 'anytime';
-  } else if (type === 'project' && id) {
-    const project = projectById(id); task.projectId = id; task.headingId = null; task.areaId = project?.areaId || null; if (task.bucket === 'inbox') task.bucket = 'anytime';
-  } else return;
+  if (!['inbox', 'today', 'upcoming', 'anytime', 'someday', 'area', 'project'].includes(type)) return;
+  tasks.forEach((item) => {
+    if (type === 'inbox') { item.bucket = 'inbox'; item.scheduledFor = null; item.evening = false; item.projectId = null; item.headingId = null; item.areaId = null; moveReminderToDate(item, null); }
+    else if (type === 'today') { item.bucket = 'today'; item.scheduledFor = localDay(); item.evening = false; moveReminderToDate(item, item.scheduledFor); }
+    else if (type === 'upcoming') { item.bucket = 'upcoming'; item.scheduledFor = item.scheduledFor > localDay() ? item.scheduledFor : addDays(localDay(), 1); item.evening = false; moveReminderToDate(item, item.scheduledFor); }
+    else if (type === 'anytime') { item.bucket = 'anytime'; item.scheduledFor = null; item.evening = false; moveReminderToDate(item, null); }
+    else if (type === 'someday') { item.bucket = 'someday'; item.scheduledFor = null; item.evening = false; moveReminderToDate(item, null); }
+    else if (type === 'area' && id) { item.projectId = null; item.headingId = null; item.areaId = id; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+    else if (type === 'project' && id) { const project = projectById(id); item.projectId = id; item.headingId = null; item.areaId = project?.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+  });
   ui.draggedTaskId = null; scheduleSave(); render(); showToast(`Moved “${task.title}”`);
 }
 
@@ -1716,7 +1874,12 @@ function restoreTrashedTask(task) {
 }
 
 function selectTask(taskId) {
-  if (ui.selectedTaskId !== taskId) ui.markdownPreview = false;
+  if (ui.selectedTaskId !== taskId) {
+    ui.markdownPreview = false;
+    ui.noteFindOpen = false;
+    ui.noteFindQuery = '';
+    ui.noteFindIndex = 0;
+  }
   ui.selectedTaskId = taskId;
   app.classList.add('inspector-open');
   renderContent();
@@ -1750,7 +1913,8 @@ function renderInspector() {
     <div class="inspector-top"><span class="inspector-status"><i class="sync-state" id="sync-state"></i>${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><button class="icon-button" data-inspector-action="close" aria-label="Close details">${icon('x')}</button></div>
     <textarea id="inspector-title" class="inspector-title" data-field="title" rows="2" placeholder="To-do title">${esc(task.title)}</textarea>
     ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)">${esc(task.notes)}</textarea>`}
-    <button class="markdown-toggle" data-inspector-action="markdown">${ui.markdownPreview ? 'Edit notes' : 'Preview Markdown'}</button>
+    <div class="note-tools"><button class="markdown-toggle" data-inspector-action="markdown">${ui.markdownPreview ? 'Edit notes' : 'Preview Markdown'}</button><button class="markdown-toggle" data-inspector-action="find-text">Find in notes</button></div>
+    ${ui.noteFindOpen ? `<div class="note-find-bar"><input type="search" data-note-find-query value="${esc(ui.noteFindQuery)}" placeholder="Find in notes" aria-label="Find in notes"><span data-note-find-count>${noteFindLabel(task)}</span><button class="icon-button" data-inspector-action="find-previous" aria-label="Previous match">↑</button><button class="icon-button" data-inspector-action="find-next" aria-label="Next match">↓</button><button class="icon-button" data-inspector-action="close-find" aria-label="Close find">${icon('x')}</button></div>` : ''}
     ${!repeat ? `<div class="detail-group"><span class="detail-label">When</span><div class="schedule-chips">
       ${[['inbox','Inbox'],['today','Today'],['evening','This evening'],['anytime','Anytime'],['someday','Someday']].map(([value, label]) => `<button class="chip ${schedule === value ? 'active' : ''}" data-schedule="${value}">${label}</button>`).join('')}
     </div><div class="detail-row" style="margin-top:9px"><input class="detail-input" type="date" data-field="scheduledFor" value="${task.scheduledFor || ''}" aria-label="Start date"><button class="checklist-add inline-add" type="button" data-inspector-action="clear-date">Clear</button></div></div>` : ''}
@@ -1813,6 +1977,43 @@ function inlineMarkdown(text) {
 
 function currentTask() { return ui.state.tasks.find((item) => item.id === ui.selectedTaskId); }
 
+function noteFindMatches(task) {
+  const query = ui.noteFindQuery.trim().toLocaleLowerCase();
+  if (!query) return [];
+  const text = String(task?.notes || '').toLocaleLowerCase();
+  const matches = [];
+  let offset = 0;
+  while ((offset = text.indexOf(query, offset)) >= 0) {
+    matches.push(offset);
+    offset += Math.max(1, query.length);
+  }
+  return matches;
+}
+
+function noteFindLabel(task) {
+  const matches = noteFindMatches(task);
+  return matches.length ? `${Math.min(ui.noteFindIndex + 1, matches.length)} of ${matches.length}` : ui.noteFindQuery ? 'No matches' : '';
+}
+
+function updateNoteFind(direction = 0, focusNote = false) {
+  const task = currentTask();
+  if (!task) return;
+  const queryInput = $('[data-note-find-query]', inspector);
+  if (queryInput) ui.noteFindQuery = queryInput.value;
+  const matches = noteFindMatches(task);
+  if (!matches.length) ui.noteFindIndex = 0;
+  else if (direction) ui.noteFindIndex = (ui.noteFindIndex + direction + matches.length) % matches.length;
+  else ui.noteFindIndex = Math.min(ui.noteFindIndex, matches.length - 1);
+  const count = $('[data-note-find-count]', inspector);
+  if (count) count.textContent = noteFindLabel(task);
+  const notes = $('.inspector-notes', inspector);
+  if (notes && matches.length) {
+    const start = matches[ui.noteFindIndex];
+    notes.setSelectionRange(start, start + ui.noteFindQuery.length);
+    if (focusNote) notes.focus();
+  }
+}
+
 function handleChecklistDragStart(event) {
   const row = event.target.closest('[data-check-id]');
   if (!row) return;
@@ -1844,6 +2045,11 @@ function handleChecklistDrop(event) {
 function handleInspectorInput(event) {
   const task = currentTask();
   if (!task) return;
+  if (event.target.matches('[data-note-find-query]')) {
+    ui.noteFindIndex = 0;
+    updateNoteFind();
+    return;
+  }
   const field = event.target.dataset.field;
   if (field === 'title' || field === 'notes') task[field] = event.target.value;
   const checkRow = event.target.closest('[data-check-id]');
@@ -1980,6 +2186,15 @@ function handleInspectorClick(event) {
   if (action === 'share') { void shareTask(task); return; }
   if (action === 'copy-link') { void copyTaskLink(task); return; }
   if (action === 'markdown') { ui.markdownPreview = !ui.markdownPreview; renderInspector(); }
+  if (action === 'find-text') {
+    ui.noteFindOpen = true;
+    ui.markdownPreview = false;
+    renderInspector();
+    setTimeout(() => $('[data-note-find-query]', inspector)?.focus(), 20);
+  }
+  if (action === 'find-previous') updateNoteFind(-1, true);
+  if (action === 'find-next') updateNoteFind(1, true);
+  if (action === 'close-find') { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(); }
   if (action === 'start-repeat') { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(); }
   if (action === 'stop-repeat') { task.repeat = null; scheduleSave(); render(); }
   if (action === 'add-check') { task.checklist.push({ id: uid('check'), title: '', done: false }); scheduleSave(); renderInspector(); $$('.checklist-item input[type="text"]', inspector).at(-1)?.focus(); }
@@ -1992,6 +2207,17 @@ function handleInspectorClick(event) {
     task.repeat.weekdays = task.repeat.weekdays.includes(day) ? task.repeat.weekdays.filter((item) => item !== day) : [...task.repeat.weekdays, day].sort();
     scheduleSave(); renderInspector();
   }
+}
+
+function handleInspectorKeydown(event) {
+  const input = event.target.closest('[data-new-tag="task"]');
+  if (!input || event.key !== 'Enter') return;
+  event.preventDefault();
+  const task = currentTask();
+  if (!task) return;
+  const picker = createTagInPicker($('[data-create-tag="task"]', input.closest('[data-tag-picker]')));
+  task.tags = selectedPickerTags(picker);
+  scheduleSave(); renderSidebar(); renderContent();
 }
 
 function taskAsText(task) {
@@ -2034,8 +2260,15 @@ function openMoveTaskModal(taskOrTasks) {
       ...ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(project.title)} › ${esc(heading.title)}</option>`)
     ])
   ].join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="move-task-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Move ${tasks.length === 1 ? 'to-do' : `${tasks.length} to-dos`}</h2><p>Move ${tasks.length === 1 ? 'it' : 'them'} to the Inbox, an area, a project, or directly under a heading.</p><div class="form-field"><label for="move-destination">Destination</label><select id="move-destination">${destinations}</select></div><div class="form-field"><label for="move-new-project">Or create a new project</label><input id="move-new-project" placeholder="New project name"></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Move</button></div></form></div>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="move-task-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Move ${tasks.length === 1 ? 'to-do' : `${tasks.length} to-dos`}</h2><p>Move ${tasks.length === 1 ? 'it' : 'them'} to the Inbox, an area, a project, or directly under a heading.</p><div class="form-field"><label for="move-search">Find a destination</label><input id="move-search" type="search" autocomplete="off" placeholder="Area, project, or heading"></div><div class="form-field"><label for="move-destination">Destination</label><select id="move-destination" size="7">${destinations}</select></div><div class="form-field"><label for="move-new-project">Or create a new project</label><input id="move-new-project" placeholder="New project name"></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Move</button></div></form></div>`;
   activateModal();
+  $('#move-search').addEventListener('input', (event) => {
+    const tokens = event.target.value.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+    const options = $$('option', $('#move-destination'));
+    options.forEach((option) => { option.hidden = !tokens.every((token) => option.textContent.toLocaleLowerCase().includes(token)); });
+    const firstVisible = options.find((option) => !option.hidden);
+    if ($('#move-destination').selectedOptions[0]?.hidden && firstVisible) firstVisible.selected = true;
+  });
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
   $('#move-task-form').addEventListener('submit', (event) => {
@@ -2086,10 +2319,14 @@ function searchItems(query) {
   const projects = ui.state.projects.filter((p) => p.status === 'open' || isCompletedButVisible(p)).map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:areaById(p.areaId)?.title || 'Project', icon:'list' }));
   const headings = ui.state.headings.filter((h) => !h.archived).map((heading) => ({ kind:'heading', id:heading.id, projectId:heading.projectId, title:heading.title, meta:projectById(heading.projectId)?.title || 'Heading', icon:'heading' }));
   const tags = [...new Set([...ui.state.tasks.flatMap((task) => effectiveTags(task)), ...ui.state.projects.flatMap((project) => effectiveProjectTags(project)), ...ui.state.areas.flatMap((area) => area.tags || [])])].map((tag) => ({ kind:'view', type:'tag', id:tag, title:tag, meta:'Tag', icon:'tag' }));
-  const taskSource = ui.searchEverything ? ui.state.tasks : sourceTasks();
+  const taskSource = ui.searchEverything ? ui.state.tasks : ui.state.tasks.filter((task) => task.status === 'open' || isCompletedButVisible(task));
   const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:task.repeat ? 'Repeating template' : isLogged(task) ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do', icon:task.repeat ? 'repeat' : 'circle', searchText: ui.searchEverything ? `${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` : `${task.title} ${effectiveTags(task).join(' ')}` }));
   const actions = [{ kind:'settings', title:'Settings', meta:'App preferences', icon:'settings' }];
-  const matches = [...lists, ...special, ...actions, ...areas, ...projects, ...headings, ...tags, ...tasks].filter((item) => !q || `${item.title} ${item.meta} ${item.searchText || ''}`.toLowerCase().includes(q)).slice(0, 24);
+  const queryTokens = q.split(/\s+/).filter(Boolean);
+  const matches = [...lists, ...special, ...actions, ...areas, ...projects, ...headings, ...tags, ...tasks].filter((item) => {
+    const haystack = `${item.title} ${item.meta} ${item.searchText || ''}`.toLowerCase();
+    return !q || queryTokens.every((token) => haystack.includes(token));
+  }).slice(0, 24);
   if (q && !ui.searchEverything) matches.push({ kind:'continue', title:'Continue Search', meta:'Include notes, checklists, Logbook, and Trash', icon:'search' });
   return matches;
 }
@@ -2127,6 +2364,7 @@ function chooseSearchResult(item) {
   else if (item.kind === 'heading') setView('project', item.projectId);
   else {
     const task = ui.state.tasks.find((t) => t.id === item.id);
+    if (!task) return;
     if (task.repeat) setView('repeating');
     else if (isLogged(task)) setView('logbook');
     else if (isTrashed(task)) setView('trash');
@@ -2137,10 +2375,12 @@ function chooseSearchResult(item) {
   }
 }
 
-function openNewListModal() {
+function openNewListModal(defaults = {}) {
   const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}">${esc(area.title)}</option>`)].join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="new-list-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Create a list</h2><p>Use projects for outcomes and areas for the ongoing parts of your life.</p><div class="form-field"><label for="list-type">Type</label><select id="list-type"><option value="project">Project</option><option value="area">Area</option></select></div><div class="form-field"><label for="list-title">Name</label><input id="list-title" required autocomplete="off" placeholder="e.g. Plan summer trip"></div><div class="form-field" id="area-field"><label for="list-area">Area</label><select id="list-area">${areaOptions}</select></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Create</button></div></form></div>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="new-list-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Create a list</h2><p>Use projects for outcomes and areas for the ongoing parts of your life.</p><div class="form-field"><label for="list-type">Type</label><select id="list-type"><option value="project" ${defaults.type !== 'area' ? 'selected' : ''}>Project</option><option value="area" ${defaults.type === 'area' ? 'selected' : ''}>Area</option></select></div><div class="form-field"><label for="list-title">Name</label><input id="list-title" required autocomplete="off" placeholder="e.g. Plan summer trip"></div><div class="form-field" id="area-field"><label for="list-area">Area</label><select id="list-area">${areaOptions}</select></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Create</button></div></form></div>`;
   activateModal();
+  if (defaults.areaId) $('#list-area').value = defaults.areaId;
+  $('#area-field').hidden = defaults.type === 'area';
   $('#list-type').addEventListener('change', (event) => { $('#area-field').hidden = event.target.value === 'area'; });
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -2186,6 +2426,11 @@ function openHeadingModal(headingId = null) {
   });
   $$('[data-heading-action]').forEach((button) => button.addEventListener('click', () => {
     if (button.dataset.headingAction === 'archive') {
+      const unfinished = ui.state.tasks.filter((task) => task.headingId === heading.id && task.status === 'open' && !task.repeat);
+      if (unfinished.length) {
+        showToast(`Complete or move ${unfinished.length} unfinished to-do${unfinished.length === 1 ? '' : 's'} first`);
+        return;
+      }
       heading.archived = true;
       showToast('Heading archived');
     } else if (button.dataset.headingAction === 'convert') {
@@ -2576,13 +2821,21 @@ function handleGlobalKeydown(event) {
   }
   if (event.key === 'Escape') {
     if ($('#modal-root').children.length) closeModal();
+    else if (ui.noteFindOpen) { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(); }
     else if (ui.selectedTaskIds.size) clearTaskSelection();
     else if (ui.selectedTaskId) closeInspector();
     else closeSidebar();
     return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); return; }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); openSearch(); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+    event.preventDefault();
+    if (document.activeElement?.matches('.inspector-notes, [data-check-field="title"]')) {
+      ui.noteFindOpen = true; ui.markdownPreview = false; renderInspector();
+      setTimeout(() => $('[data-note-find-query]', inspector)?.focus(), 20);
+    } else openSearch();
+    return;
+  }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
     event.preventDefault();
     $$('[data-task-id]', content).forEach((row) => ui.selectedTaskIds.add(row.dataset.taskId));
