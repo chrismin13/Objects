@@ -7,6 +7,7 @@ import { responsiveStyles } from "./responsive-styles";
 import { styles } from "./styles";
 import { featureStyles } from "./feature-styles";
 import { tagStyles } from "./tag-styles";
+import { thingsStyles } from "./things-styles";
 
 type AuthIdentity = ReturnType<typeof useAuth>;
 
@@ -167,7 +168,7 @@ export function App() {
 
   return (
     <>
-      <style>{`${styles}\n${responsiveStyles}\n${featureStyles}\n${tagStyles}`}</style>
+      <style>{`${styles}\n${responsiveStyles}\n${featureStyles}\n${tagStyles}\n${thingsStyles}`}</style>
       {auth.isLoading ? online && !authTimedOut ? <SignInScreen loading /> : <OfflineScreen /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
     </>
   );
