@@ -38,7 +38,7 @@ const OBJECTS_SHELL = `
     <aside id="sidebar" class="sidebar" aria-label="Lists">
       <div class="window-bar">
         <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="Close sidebar"></button>
-        <div class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+        <span aria-hidden="true" style="flex:1"></span>
         <button id="search-button" class="icon-button" type="button" aria-label="Quick find"></button>
       </div>
       <nav id="sidebar-nav" class="sidebar-nav"></nav>
