@@ -1,7 +1,8 @@
 import { SignInWithGoogle, signOut, useAuth, useMutation, useQuery } from "lakebed/client";
 import { Component } from "preact";
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { mountObjects, syncObjectsState } from "./objects";
+import { initializePwa } from "./pwa";
 import { styles } from "./styles";
 
 type AuthIdentity = ReturnType<typeof useAuth>;
@@ -33,8 +34,23 @@ function SignInScreen({ loading = false }: { loading?: boolean }) {
   );
 }
 
+function OfflineScreen() {
+  return (
+    <main className="auth-screen">
+      <section className="auth-card" aria-labelledby="offline-title">
+        <BrandMark />
+        <p className="auth-brand">Objects on Lakebed</p>
+        <h1 id="offline-title">Objects is offline</h1>
+        <p className="auth-copy">The installed app shell is ready. Reconnect to unlock your private workspace and resume syncing.</p>
+        <div className="auth-loading" role="status"><span /> Waiting for a connection…</div>
+        <p className="auth-footnote">Objects deliberately does not store private Lakebed API or authentication responses in the shared app cache.</p>
+      </section>
+    </main>
+  );
+}
+
 const OBJECTS_SHELL = `
-  <div id="app" class="app-shell" aria-busy="true">
+  <div id="objects-shell" class="app-shell" aria-busy="true">
     <aside id="sidebar" class="sidebar" aria-label="Lists">
       <div class="window-bar">
         <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="Close sidebar"></button>
@@ -70,10 +86,11 @@ class StableObjectsDom extends Component {
   render() { return <div dangerouslySetInnerHTML={{ __html: OBJECTS_SHELL }} />; }
 }
 
-function ObjectsShell({ auth }: { auth: AuthIdentity }) {
+function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean }) {
   const serializedState = useQuery<string>("state");
   const saveState = useMutation<[serialized: string], string>("saveState");
   const initialState = useRef<string | null>(null);
+  const [stateTimedOut, setStateTimedOut] = useState(false);
   if (!initialState.current && typeof serializedState === "string" && serializedState.length > 0) initialState.current = serializedState;
   const ready = Boolean(initialState.current);
 
@@ -93,20 +110,27 @@ function ObjectsShell({ auth }: { auth: AuthIdentity }) {
     if (typeof serializedState === "string" && serializedState.length > 0) syncObjectsState(serializedState);
   }, [serializedState]);
 
-  if (!ready) return <SignInScreen loading />;
+  useEffect(() => {
+    if (ready) { setStateTimedOut(false); return; }
+    const timer = window.setTimeout(() => setStateTimedOut(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, [ready]);
+
+  if (!ready) return online && !stateTimedOut ? <SignInScreen loading /> : <OfflineScreen />;
 
   return <StableObjectsDom />;
 }
 
 export function App() {
   const auth = useAuth();
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  const [authTimedOut, setAuthTimedOut] = useState(false);
   const localGuest = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   useEffect(() => {
     document.title = "Objects";
     const metadata = [
       ["link", "link[rel='manifest']", { rel: "manifest", href: "/manifest.webmanifest" }],
-      ["link", "link[rel='apple-touch-icon']", { rel: "apple-touch-icon", href: "/favicon.svg" }],
       ["meta", "meta[name='theme-color']", { name: "theme-color", content: "#2f80ed" }],
       ["meta", "meta[name='mobile-web-app-capable']", { name: "mobile-web-app-capable", content: "yes" }],
       ["meta", "meta[name='apple-mobile-web-app-capable']", { name: "apple-mobile-web-app-capable", content: "yes" }],
@@ -118,13 +142,29 @@ export function App() {
       if (!element) { element = document.createElement(tag); document.head.appendChild(element); }
       for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
     }
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    return initializePwa();
+  }, []);
+
+  useEffect(() => {
+    if (!auth.isLoading) { setAuthTimedOut(false); return; }
+    const timer = window.setTimeout(() => setAuthTimedOut(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, [auth.isLoading]);
+
+  useEffect(() => {
+    const syncOnlineState = () => setOnline(navigator.onLine);
+    window.addEventListener("online", syncOnlineState);
+    window.addEventListener("offline", syncOnlineState);
+    return () => {
+      window.removeEventListener("online", syncOnlineState);
+      window.removeEventListener("offline", syncOnlineState);
+    };
   }, []);
 
   return (
     <>
       <style>{styles}</style>
-      {auth.isLoading ? <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} />}
+      {auth.isLoading ? online && !authTimedOut ? <SignInScreen loading /> : <OfflineScreen /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
     </>
   );
 }

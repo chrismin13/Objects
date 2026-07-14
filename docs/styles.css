@@ -165,11 +165,18 @@ h1 {
   width: min(56%, 620px);
 }
 
-.cta {
+.actions {
   position: absolute;
   z-index: 3;
   top: 47%;
   left: 2%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.cta {
   display: inline-flex;
   align-items: center;
   gap: 12px;
@@ -231,6 +238,41 @@ h1 {
   outline-offset: 4px;
 }
 
+.github-link {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+  color: var(--muted);
+  text-decoration: none;
+  transition: background-color 220ms ease, box-shadow 220ms ease, color 220ms ease;
+}
+
+.github-link svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+
+.github-link:hover {
+  background: var(--surface-hover);
+  box-shadow: 0 14px 34px rgba(43, 44, 40, 0.1), 0 2px 7px rgba(43, 44, 40, 0.05);
+  color: var(--text);
+}
+
+.github-link:active {
+  box-shadow: var(--card-shadow);
+}
+
+.github-link:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--blue) 28%, transparent);
+  outline-offset: 4px;
+}
+
 @media (max-width: 760px) {
   body {
     background:
@@ -252,7 +294,7 @@ h1 {
 
   h1,
   .prompt,
-  .cta {
+  .actions {
     position: static;
   }
 
@@ -298,8 +340,10 @@ h1 {
     font-size: clamp(22px, 6.6vw, 28px);
   }
 
-  .cta {
+  .actions {
     align-self: flex-start;
+    flex-direction: row;
+    align-items: center;
     margin: 36px 0 4px 2px;
   }
 }

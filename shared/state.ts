@@ -25,9 +25,9 @@ export function isObjectsState(value: unknown): value is ObjectsState {
 export function createSeed(): ObjectsState {
   const createdAt = new Date().toISOString();
   return {
-    version: 2,
-    updatedAt: "seed-v2",
-    settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true },
+    version: 3,
+    updatedAt: "seed-v3",
+    settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily" },
     areas: [
       { id: "area-work", title: "Work", color: "#5b7cfa", tags: [], order: 0 },
       { id: "area-personal", title: "Personal", color: "#e49b3c", tags: [], order: 1 }
@@ -49,7 +49,7 @@ export function createSeed(): ObjectsState {
       { id: "task-ferry", title: "Check ferry times", notes: "", status: "open", bucket: "anytime", scheduledFor: null, evening: false, reminderAt: null, deadline: isoDay(14), projectId: "project-trip", headingId: null, areaId: "area-personal", tags: ["Quick"], checklist: [], repeat: null, createdAt, completedAt: null, order: 6 },
       { id: "task-chair", title: "Find a reading chair", notes: "Something compact, warm, and comfortable.", status: "open", bucket: "someday", scheduledFor: null, evening: false, reminderAt: null, deadline: null, projectId: "project-home", headingId: null, areaId: "area-personal", tags: ["Home"], checklist: [], repeat: null, createdAt, completedAt: null, order: 7 },
       { id: "task-weekly-review-template", title: "Weekly review", notes: "Clear the Inbox, scan every project, and choose next week’s priorities.", status: "open", bucket: "upcoming", scheduledFor: isoDay(5), evening: false, reminderAt: null, deadline: null, projectId: null, headingId: null, areaId: "area-work", tags: ["Focused"], checklist: [{ id: "check-review-1", title: "Process Inbox", done: false }, { id: "check-review-2", title: "Review projects", done: false }], repeat: { mode: "fixed", frequency: "weekly", interval: 1, weekdays: [], nextDate: isoDay(5), reminderTime: "09:00", paused: false }, createdAt, completedAt: null, order: 8 },
-      { id: "task-done", title: "Send weekly update", notes: "", status: "completed", bucket: "today", scheduledFor: isoDay(-1), evening: false, reminderAt: null, deadline: null, projectId: "project-launch", headingId: null, areaId: "area-work", tags: [], checklist: [], repeat: null, createdAt, completedAt: new Date(Date.now() - 86400000).toISOString(), order: 9 }
+      { id: "task-done", title: "Send weekly update", notes: "", status: "completed", bucket: "today", scheduledFor: isoDay(-1), evening: false, reminderAt: null, deadline: null, projectId: "project-launch", headingId: null, areaId: "area-work", tags: [], checklist: [], repeat: null, createdAt, completedAt: new Date(Date.now() - 86400000).toISOString(), loggedAt: new Date(Date.now() - 86400000).toISOString(), order: 9 }
     ]
   };
 }
@@ -76,7 +76,7 @@ export function addCapturedTask(state: ObjectsState, input: Record<string, unkno
     headingId: typeof input.headingId === "string" ? input.headingId : null,
     areaId: areaId ?? (typeof project?.areaId === "string" ? project.areaId : null),
     tags: Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 50) : [],
-    checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, order: Date.now()
+    checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now()
   };
   state.tasks.push(task);
   state.updatedAt = new Date().toISOString();

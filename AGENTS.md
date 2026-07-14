@@ -36,6 +36,13 @@ Your role is to build software within this capsule. Lakebed is the runtime, the 
 
 ## Commands
 
+### Completion workflow
+
+- For implementation tasks, do not stop after editing locally. Run the relevant checks and `npx lakebed build . --target anonymous --json`.
+- Deploy the validated result to the capsule's existing Lakebed deployment with `npx lakebed deploy`, then verify the hosted app or affected endpoints.
+- Commit the complete task-scoped change and push the current branch to its configured Git remote. A requested implementation is not complete until the deploy and push succeed, unless the user explicitly asks not to publish or an external credential/permission blocks publication.
+- Preserve unrelated user work. If a worktree contains changes outside the requested scope and the user has not explicitly included them, confirm scope before staging.
+
 Run locally:
 
 ```sh

@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { activatePwaUpdate, getPwaStatus, requestNotificationAccess, requestPwaInstall, showTaskReminder } from './pwa';
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -87,6 +89,8 @@ const ui = {
   draggedTaskId: null,
   draggedCheckId: null,
   reminderTimer: null,
+  reminderCheckRunning: false,
+  pwaUpdateNotified: false,
   syncTimer: null,
 };
 
@@ -98,18 +102,22 @@ let inspector;
 let persistState = async () => null;
 let performSignOut = async () => {};
 let staticEventsBound = false;
+let logbookTimer = null;
 
 export function mountObjects(serializedState, options) {
-  app = $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
+  app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
   persistState = options.saveState; performSignOut = options.signOut; ui.user = options.user;
   try {
-    ui.state = JSON.parse(serializedState); normalizeState(); materializeRecurringTasks(); applyTheme(); render(); handleCaptureUrl(); startReminderChecks();
+    ui.state = JSON.parse(serializedState); normalizeState();
+    const logged = applyLogbookPolicy();
+    materializeRecurringTasks(); applyTheme(); render(); handleCaptureUrl(); startReminderChecks(); startLogbookChecks();
+    if (logged) scheduleSave();
     if (!staticEventsBound) { bindStaticEvents(); staticEventsBound = true; render(); }
     app.setAttribute('aria-busy', 'false');
   } catch (error) {
     content.innerHTML = `<div class="empty-state">${icon('cloud')}<h2>Objects could not start</h2><p>${esc(error.message)}. Refresh this page and try again.</p></div>`;
   }
-  return () => { clearInterval(ui.reminderTimer); clearInterval(ui.syncTimer); clearTimeout(ui.saveTimer); };
+  return () => { clearInterval(ui.reminderTimer); clearInterval(ui.syncTimer); clearInterval(logbookTimer); clearTimeout(ui.saveTimer); };
 }
 
 export function syncObjectsState(serializedState) {
@@ -118,8 +126,10 @@ export function syncObjectsState(serializedState) {
     const remote = JSON.parse(serializedState);
     if (remote.updatedAt && remote.updatedAt !== ui.state.updatedAt) {
       const selected = ui.selectedTaskId; ui.state = remote; normalizeState();
+      const logged = applyLogbookPolicy();
       if (selected && !ui.state.tasks.some((task) => task.id === selected)) ui.selectedTaskId = null;
       render(); showToast('Changes synced from another device');
+      if (logged) scheduleSave();
     }
   } catch (_) {}
 }
@@ -129,6 +139,7 @@ function normalizeState() {
   ui.state.settings.notifications ??= false;
   ui.state.settings.weekStartsOn ??= 1;
   ui.state.settings.showCalendar ??= true;
+  if (!['immediately', 'daily', 'manually'].includes(ui.state.settings.logCompletedItems)) ui.state.settings.logCompletedItems = 'daily';
   ui.state.areas ||= [];
   ui.state.projects ||= [];
   ui.state.headings ||= [];
@@ -144,6 +155,8 @@ function normalizeState() {
     task.reminderAt ||= null;
     task.repeat ||= null;
     task.reminderSentAt ||= null;
+    if (task.status === 'completed' && task.loggedAt === undefined) task.loggedAt = task.completedAt || new Date().toISOString();
+    if (task.status !== 'completed') task.loggedAt = null;
     task.order ??= index;
   });
   ui.state.projects.forEach((project, index) => {
@@ -152,9 +165,77 @@ function normalizeState() {
     project.completedAt ||= null;
     project.repeat ||= null;
     project.repeatTemplateId ||= null;
+    if (project.status === 'completed' && project.loggedAt === undefined) project.loggedAt = project.completedAt || new Date().toISOString();
+    if (project.status !== 'completed') project.loggedAt = null;
     project.order ??= index;
   });
   ui.state.areas.forEach((area) => { area.tags ||= []; });
+}
+
+function isLogged(item) {
+  return item?.status === 'completed' && Boolean(item.loggedAt);
+}
+
+function isCompletedButVisible(item) {
+  return item?.status === 'completed' && !item.loggedAt;
+}
+
+export function applyLogbookPolicyToItems(items, policy, now = new Date()) {
+  if (policy === 'manually') return 0;
+  const today = localDay(now);
+  const loggedAt = now.toISOString();
+  let count = 0;
+  for (const item of items) {
+    if (!isCompletedButVisible(item)) continue;
+    if (policy === 'daily' && (!item.completedAt || localDay(new Date(item.completedAt)) >= today)) continue;
+    item.loggedAt = loggedAt;
+    count += 1;
+  }
+  return count;
+}
+
+function logCompletedNow() {
+  return applyLogbookPolicyToItems([...ui.state.tasks, ...ui.state.projects], 'immediately');
+}
+
+function applyLogbookPolicy() {
+  return applyLogbookPolicyToItems([...ui.state.tasks, ...ui.state.projects], ui.state.settings.logCompletedItems);
+}
+
+function startLogbookChecks() {
+  clearInterval(logbookTimer);
+  logbookTimer = setInterval(() => {
+    const logged = applyLogbookPolicy();
+    if (logged) { scheduleSave(); render(); }
+  }, 30000);
+}
+
+function bindLogbookSettings(settings) {
+  let field = $('#setting-logbook');
+  if (!field) {
+    const general = [...$$('.settings-section')].find((section) => $('h3', section)?.textContent === 'General');
+    if (!general) return;
+    const pending = [...ui.state.tasks, ...ui.state.projects].filter(isCompletedButVisible).length;
+    const help = settings.logCompletedItems === 'immediately' ? 'Completed items move to the Logbook as soon as they are checked.' : settings.logCompletedItems === 'manually' ? 'Completed items stay in their original lists until you log them.' : 'Completed items stay visible for the rest of the day and move to the Logbook after midnight.';
+    general.insertAdjacentHTML('afterend', `<div class="settings-section"><h3>Logbook</h3><p>${esc(help)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pending ? `<button class="button" type="button" data-log-completed-now>Log Completed Now (${pending})</button>` : ''}</div>`);
+    field = $('#setting-logbook');
+  }
+  field.addEventListener('change', (event) => {
+    settings.logCompletedItems = event.target.value;
+    const logged = applyLogbookPolicy();
+    scheduleSave(); render(); openSettings();
+    if (logged) showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`);
+  });
+  const logNow = $('[data-log-completed-now], [data-settings-action="log-now"]');
+  if (logNow) {
+    logNow.removeAttribute('data-settings-action');
+    logNow.setAttribute('data-log-completed-now', '');
+    logNow.addEventListener('click', () => {
+      const logged = logCompletedNow();
+      scheduleSave(); render(); openSettings();
+      showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`);
+    });
+  }
 }
 
 function nextRepeatDate(fromDay, repeat) {
@@ -211,6 +292,7 @@ function cloneRecurringTask(template, scheduledFor) {
     repeatTemplateId: template.id,
     createdAt: new Date().toISOString(),
     completedAt: null,
+    loggedAt: null,
     order: Date.now(),
   };
 }
@@ -252,14 +334,14 @@ function materializeRecurringProjects() {
 }
 
 function cloneProjectTemplate(template, scheduledFor) {
-  const copy = { ...template, id: uid('project'), title: template.title, repeat: null, repeatTemplateId: template.id, scheduledFor, deadline: Number.isFinite(template.repeat?.deadlineOffset) ? addDays(scheduledFor, template.repeat.deadlineOffset) : template.deadline, status: 'open', completedAt: null, order: Date.now() };
+  const copy = { ...template, id: uid('project'), title: template.title, repeat: null, repeatTemplateId: template.id, scheduledFor, deadline: Number.isFinite(template.repeat?.deadlineOffset) ? addDays(scheduledFor, template.repeat.deadlineOffset) : template.deadline, status: 'open', completedAt: null, loggedAt: null, order: Date.now() };
   ui.state.projects.push(copy);
   const headingMap = new Map();
   ui.state.headings.filter((heading) => heading.projectId === template.id).forEach((heading) => {
     const duplicate = { ...heading, id: uid('heading'), projectId: copy.id };
     headingMap.set(heading.id, duplicate.id); ui.state.headings.push(duplicate);
   });
-  ui.state.tasks.filter((task) => task.projectId === template.id && task.status === 'open').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, repeat: null, repeatTemplateId: null, scheduledFor: null, bucket: 'anytime', status: 'open', completedAt: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
+  ui.state.tasks.filter((task) => task.projectId === template.id && task.status === 'open').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, repeat: null, repeatTemplateId: null, scheduledFor: null, bucket: 'anytime', status: 'open', completedAt: null, loggedAt: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
 }
 
 function parseNaturalTask(rawTitle) {
@@ -310,32 +392,54 @@ function nextWeekday(name) {
 
 function handleCaptureUrl() {
   const params = new URLSearchParams(location.search);
-  const title = params.get('title');
-  if (!title) return;
-  const parsed = parseNaturalTask(title);
-  createTaskFromParsed(parsed, { notes: params.get('notes') || '', projectId: params.get('project') || null, useCurrentView: false });
+  const taskId = params.get('task');
+  const requestedView = params.get('view');
+  const sharedText = params.get('text');
+  const sharedUrl = params.get('url');
+  const sharedTitle = params.get('title');
+  const title = sharedTitle || sharedText;
+
+  if (requestedView && ['inbox', 'today', 'upcoming', 'anytime', 'someday', 'logbook'].includes(requestedView)) setView(requestedView);
+  if (taskId && ui.state.tasks.some((task) => task.id === taskId)) selectTask(taskId);
+  if (title) {
+    const parsed = parseNaturalTask(title);
+    const notes = [params.get('notes'), sharedTitle ? sharedText : null, sharedUrl].filter(Boolean).join('\n');
+    createTaskFromParsed(parsed, { notes, projectId: params.get('project') || null, useCurrentView: false });
+  }
+  if (!taskId && !requestedView && !title && params.get('capture') !== '1') return;
   history.replaceState({}, '', location.pathname);
+  if (params.get('capture') === '1') setTimeout(() => beginQuickAdd(true), 0);
 }
 
 function startReminderChecks() {
   clearInterval(ui.reminderTimer);
-  checkReminders();
-  ui.reminderTimer = setInterval(checkReminders, 30000);
+  void checkReminders();
+  ui.reminderTimer = setInterval(() => void checkReminders(), 30000);
 }
 
-function checkReminders() {
+async function checkReminders() {
+  if (ui.reminderCheckRunning) return;
+  ui.reminderCheckRunning = true;
+  const logged = applyLogbookPolicy();
+  if (logged) { scheduleSave(); render(); }
   materializeRecurringTasks();
-  if (!ui.state?.settings.notifications || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!ui.state?.settings.notifications || !('Notification' in window) || Notification.permission !== 'granted') {
+    ui.reminderCheckRunning = false;
+    return;
+  }
   const now = Date.now();
   let changed = false;
-  for (const task of openTasks()) {
-    if (!task.reminderAt || task.reminderSentAt) continue;
-    const due = new Date(task.reminderAt).getTime();
-    if (due <= now && due > now - 86400000) {
-      new Notification(task.title, { body: task.notes || 'Scheduled in Objects', icon: '/app-icon.svg', tag: task.id });
-      task.reminderSentAt = new Date().toISOString();
-      changed = true;
+  try {
+    for (const task of openTasks()) {
+      if (!task.reminderAt || task.reminderSentAt) continue;
+      const due = new Date(task.reminderAt).getTime();
+      if (due <= now && due > now - 86400000 && await showTaskReminder(task)) {
+        task.reminderSentAt = new Date().toISOString();
+        changed = true;
+      }
     }
+  } finally {
+    ui.reminderCheckRunning = false;
   }
   if (changed) scheduleSave();
 }
@@ -379,6 +483,14 @@ function bindStaticEvents() {
   inspector.addEventListener('dragover', handleChecklistDragOver);
   inspector.addEventListener('drop', handleChecklistDrop);
   document.addEventListener('keydown', handleGlobalKeydown);
+  window.addEventListener('objects:pwa-status', (event) => {
+    if (event.detail?.updateAvailable && !ui.pwaUpdateNotified) {
+      ui.pwaUpdateNotified = true;
+      showToast('An Objects update is ready', 'Update', () => activatePwaUpdate());
+    }
+  });
+  window.addEventListener('online', () => showToast('Back online'));
+  window.addEventListener('offline', () => showToast('You are offline; changes will sync after reconnecting'));
   syncSidebarAccessibility();
 }
 
@@ -424,9 +536,10 @@ function setView(type, id = null) {
 
 function projectAllowsTask(task) {
   const project = projectById(task.projectId);
-  return !project || (!project.repeat && (!project.scheduledFor || project.scheduledFor <= localDay()) && project.status === 'open');
+  return !project || (!project.repeat && (!project.scheduledFor || project.scheduledFor <= localDay()) && (project.status === 'open' || isCompletedButVisible(project)));
 }
 function openTasks() { return ui.state.tasks.filter((task) => task.status === 'open' && !task.repeat && projectAllowsTask(task)); }
+function sourceTasks() { return ui.state.tasks.filter((task) => (task.status === 'open' || isCompletedButVisible(task)) && !task.repeat && projectAllowsTask(task)); }
 function projectById(id) { return ui.state.projects.find((project) => project.id === id); }
 function areaById(id) { return ui.state.areas.find((area) => area.id === id); }
 function effectiveTags(task) { return [...new Set([...(areaById(task.areaId)?.tags || []), ...(projectById(task.projectId)?.tags || []), ...(task.tags || [])])]; }
@@ -471,7 +584,7 @@ function renderSidebar() {
   }).join('');
 
   const areasHtml = ui.state.areas.sort((a, b) => a.order - b.order).map((area) => {
-    const areaProjects = ui.state.projects.filter((project) => project.areaId === area.id && project.status === 'open' && !project.repeat && (!project.scheduledFor || project.scheduledFor <= today)).sort((a, b) => a.order - b.order);
+    const areaProjects = ui.state.projects.filter((project) => project.areaId === area.id && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && (!project.scheduledFor || project.scheduledFor <= today)).sort((a, b) => a.order - b.order);
     return `<li>
       <button class="nav-item ${ui.view.type === 'area' && ui.view.id === area.id ? 'active' : ''}" data-view="area" data-id="${area.id}">
         <span class="nav-symbol" style="color:${esc(area.color || '#999')}">●</span><span class="nav-title">${esc(area.title)}</span><span class="nav-count">${taskCount('area', area.id) || ''}</span>
@@ -480,7 +593,7 @@ function renderSidebar() {
     </li>`;
   }).join('');
 
-  const looseProjects = ui.state.projects.filter((project) => !project.areaId && project.status === 'open' && !project.repeat && (!project.scheduledFor || project.scheduledFor <= today));
+  const looseProjects = ui.state.projects.filter((project) => !project.areaId && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && (!project.scheduledFor || project.scheduledFor <= today));
   const projectsHtml = looseProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('');
 
   sidebar.innerHTML = `<ul class="nav-list">${standardHtml}</ul>
@@ -489,14 +602,14 @@ function renderSidebar() {
 
 function viewDefinition() {
   const today = localDay();
-  const taskFilter = (task) => task.status === 'open' && !task.repeat && projectAllowsTask(task);
+  const taskFilter = (task) => (task.status === 'open' || isCompletedButVisible(task)) && !task.repeat && projectAllowsTask(task);
   const definitions = {
     inbox: { title: 'Inbox', icon: 'inbox', eyebrow: 'Collect now, decide later', subtitle: 'Unsorted thoughts and to-dos waiting for a home.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.bucket === 'inbox') },
     today: { title: 'Today', icon: 'star', eyebrow: new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date()), subtitle: 'Your clear, focused plan for the day.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'today' || (t.scheduledFor && t.scheduledFor <= today && t.bucket !== 'someday' && t.bucket !== 'inbox') || (t.deadline && t.deadline <= today))) },
-    upcoming: { title: 'Upcoming', icon: 'calendar', eyebrow: 'Plan ahead', subtitle: 'A calm view of what the next days hold.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.scheduledFor && t.scheduledFor > today), futureProjects: ui.state.projects.filter((p) => p.status === 'open' && p.scheduledFor && p.scheduledFor > today) },
+    upcoming: { title: 'Upcoming', icon: 'calendar', eyebrow: 'Plan ahead', subtitle: 'A calm view of what the next days hold.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.scheduledFor && t.scheduledFor > today), futureProjects: ui.state.projects.filter((p) => (p.status === 'open' || isCompletedButVisible(p)) && p.scheduledFor && p.scheduledFor > today) },
     anytime: { title: 'Anytime', icon: 'layers', eyebrow: 'Available now', subtitle: 'Everything active that you could make progress on.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'anytime' || t.bucket === 'today') && (!t.scheduledFor || t.scheduledFor <= today)) },
     someday: { title: 'Someday', icon: 'archive', eyebrow: 'Ideas for later', subtitle: 'Possibilities worth keeping, without a commitment.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.bucket === 'someday') },
-    logbook: { title: 'Logbook', icon: 'check', eyebrow: 'Completed', subtitle: 'A record of the progress you have made.', tasks: ui.state.tasks.filter((t) => t.status === 'completed') },
+    logbook: { title: 'Logbook', icon: 'check', eyebrow: 'Completed', subtitle: 'A record of the progress you have made.', tasks: ui.state.tasks.filter((t) => isLogged(t)) },
     trash: { title: 'Trash', icon: 'trash', eyebrow: 'Discarded', subtitle: 'To-dos moved here stay available for recovery.', tasks: ui.state.tasks.filter((t) => t.status === 'cancelled') },
     tomorrow: { title: 'Tomorrow', icon: 'calendar', eyebrow: formatDate(addDays(today, 1), { weekday: 'long', month: 'long', day: 'numeric' }), subtitle: 'Everything planned for the next day.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.scheduledFor === addDays(today, 1)) },
     deadlines: { title: 'Deadlines', icon: 'flag', eyebrow: 'Commitments', subtitle: 'Open to-dos ordered by the date they must be finished.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.deadline) },
@@ -506,7 +619,7 @@ function viewDefinition() {
   if (ui.view.type === 'project') {
     const project = projectById(ui.view.id);
     if (!project) return definitions.today;
-    return { title: project.title, icon: project.status === 'completed' ? 'check' : 'list', eyebrow: project.status === 'completed' ? 'Completed project' : areaById(project.areaId)?.title || 'Project', subtitle: project.notes || 'A focused set of steps toward one outcome.', deadline: project.deadline, tasks: ui.state.tasks.filter((t) => t.projectId === project.id && (project.status === 'completed' ? t.status === 'completed' : t.status === 'open' && !t.repeat)), project };
+    return { title: project.title, icon: project.status === 'completed' ? 'check' : 'list', eyebrow: project.status === 'completed' ? 'Completed project' : areaById(project.areaId)?.title || 'Project', subtitle: project.notes || 'A focused set of steps toward one outcome.', deadline: project.deadline, tasks: ui.state.tasks.filter((t) => t.projectId === project.id && (isLogged(project) ? isLogged(t) : (t.status === 'open' || isCompletedButVisible(t)) && !t.repeat)), project };
   }
   if (ui.view.type === 'area') {
     const area = areaById(ui.view.id);
@@ -520,7 +633,7 @@ function viewDefinition() {
     return { title: 'All Projects', icon: 'list', eyebrow: 'Open projects', subtitle: 'Every active outcome across all areas.', tasks: [], projects: ui.state.projects.filter((p) => p.status === 'open') };
   }
   if (ui.view.type === 'loggedProjects') {
-    return { title: 'Logged Projects', icon: 'check', eyebrow: 'Completed projects', subtitle: 'Finished outcomes and their progress history.', tasks: [], projects: ui.state.projects.filter((p) => p.status === 'completed') };
+    return { title: 'Logged Projects', icon: 'check', eyebrow: 'Completed projects', subtitle: 'Finished outcomes and their progress history.', tasks: [], projects: ui.state.projects.filter((p) => isLogged(p)) };
   }
   return definitions.today;
 }
@@ -840,7 +953,7 @@ function createTaskFromParsed(parsed, options = {}) {
   const today = localDay();
   const task = {
     id: uid('task'), title: parsed.title, notes: options.notes || '', status: 'open', bucket: 'inbox', scheduledFor: null, evening: false, reminderAt: null, deadline: null,
-    projectId: options.projectId || null, headingId: null, areaId: null, tags: parsed.tags || [], checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, order: Date.now(),
+    projectId: options.projectId || null, headingId: null, areaId: null, tags: parsed.tags || [], checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now(),
   };
   if (options.useCurrentView !== false) {
     if (ui.view.type === 'today') { task.bucket = 'today'; task.scheduledFor = today; }
@@ -875,9 +988,10 @@ function toggleTask(taskId, row) {
   if (!task) return;
   if (task.repeat) { selectTask(task.id); showToast('Edit or pause this repeating template in its details'); return; }
   if (task.status === 'open') {
-    ui.lastCompleted = { id: task.id, status: task.status, completedAt: task.completedAt, completedWithProjectId: task.completedWithProjectId || null };
+    ui.lastCompleted = { id: task.id, status: task.status, completedAt: task.completedAt, loggedAt: task.loggedAt || null, completedWithProjectId: task.completedWithProjectId || null };
     task.status = 'completed';
     task.completedAt = new Date().toISOString();
+    task.loggedAt = null;
     task.completedWithProjectId = null;
     if (task.repeatTemplateId) {
       const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
@@ -886,15 +1000,18 @@ function toggleTask(taskId, row) {
         template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
       }
     }
-    row?.classList.add('completing');
+    applyLogbookPolicy();
+    if (isLogged(task)) row?.classList.add('completing');
     if (ui.selectedTaskId === task.id) ui.selectedTaskId = null;
     materializeRecurringTasks();
     scheduleSave();
     showToast('To-do completed', 'Undo', undoComplete);
-    setTimeout(render, 220);
+    if (isLogged(task)) setTimeout(render, 220);
+    else render();
   } else {
     task.status = 'open';
     task.completedAt = null;
+    task.loggedAt = null;
     task.completedWithProjectId = null;
     scheduleSave();
     render();
@@ -905,7 +1022,7 @@ function undoComplete() {
   if (!ui.lastCompleted) return;
   const task = ui.state.tasks.find((item) => item.id === ui.lastCompleted.id);
   if (task) {
-    task.status = ui.lastCompleted.status; task.completedAt = ui.lastCompleted.completedAt; task.completedWithProjectId = ui.lastCompleted.completedWithProjectId;
+    task.status = ui.lastCompleted.status; task.completedAt = ui.lastCompleted.completedAt; task.loggedAt = ui.lastCompleted.loggedAt; task.completedWithProjectId = ui.lastCompleted.completedWithProjectId;
     if (task.repeatTemplateId && ui.lastCompleted.repeatTemplateNextDate) {
       const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
       if (template?.repeat) template.repeat.nextDate = ui.lastCompleted.repeatTemplateNextDate;
@@ -1092,7 +1209,7 @@ function handleInspectorClick(event) {
     });
   }
   if (action === 'duplicate') {
-    const copy = { ...task, id: uid('task'), title: `${task.title} copy`, status: 'open', completedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })), repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null };
+    const copy = { ...task, id: uid('task'), title: `${task.title} copy`, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })), repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null };
     ui.state.tasks.push(copy); ui.selectedTaskId = copy.id; scheduleSave(); render(); showToast('To-do duplicated');
   }
   if (action === 'markdown') { ui.markdownPreview = !ui.markdownPreview; renderInspector(); }
@@ -1133,11 +1250,11 @@ function searchItems(query) {
     ['tomorrow','Tomorrow','calendar'], ['deadlines','Deadlines','flag'], ['repeating','Repeating','repeat'], ['allProjects','All Projects','list'], ['loggedProjects','Logged Projects','check']
   ].map(([type,title,iconName]) => ({ kind:'view', type, title, meta:'Special list', icon:iconName }));
   const areas = ui.state.areas.map((area) => ({ kind:'view', type:'area', id:area.id, title:area.title, meta:'Area', icon:'circle' }));
-  const projects = ui.state.projects.filter((p) => p.status === 'open').map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:areaById(p.areaId)?.title || 'Project', icon:'list' }));
+  const projects = ui.state.projects.filter((p) => p.status === 'open' || isCompletedButVisible(p)).map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:areaById(p.areaId)?.title || 'Project', icon:'list' }));
   const headings = ui.state.headings.filter((h) => !h.archived).map((heading) => ({ kind:'heading', id:heading.id, projectId:heading.projectId, title:heading.title, meta:projectById(heading.projectId)?.title || 'Heading', icon:'heading' }));
   const tags = [...new Set(ui.state.tasks.flatMap((task) => effectiveTags(task)))].map((tag) => ({ kind:'view', type:'tag', id:tag, title:tag, meta:'Tag', icon:'tag' }));
-  const taskSource = q ? ui.state.tasks : ui.state.tasks.filter((task) => task.status === 'open');
-  const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:task.repeat ? 'Repeating template' : task.status === 'completed' ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do', icon:task.repeat ? 'repeat' : 'circle', searchText:`${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` }));
+  const taskSource = q ? ui.state.tasks : sourceTasks();
+  const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:task.repeat ? 'Repeating template' : isLogged(task) ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do', icon:task.repeat ? 'repeat' : 'circle', searchText:`${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` }));
   return [...lists, ...special, ...areas, ...projects, ...headings, ...tags, ...tasks].filter((item) => !q || `${item.title} ${item.meta} ${item.searchText || ''}`.toLowerCase().includes(q)).slice(0, 24);
 }
 
@@ -1171,7 +1288,7 @@ function chooseSearchResult(item) {
   else {
     const task = ui.state.tasks.find((t) => t.id === item.id);
     if (task.repeat) setView('repeating');
-    else if (task.status === 'completed') setView('logbook');
+    else if (isLogged(task)) setView('logbook');
     else if (task.status === 'cancelled') setView('trash');
     else if (task.projectId) setView('project', task.projectId);
     else if (task.areaId) setView('area', task.areaId);
@@ -1269,16 +1386,17 @@ function openProjectModal(projectId) {
       return;
     }
     if (action === 'complete') {
-      project.status = 'completed'; project.completedAt = new Date().toISOString();
-      ui.state.tasks.filter((task) => task.projectId === project.id && task.status === 'open' && !task.repeat).forEach((task) => { task.status = 'completed'; task.completedAt = project.completedAt; task.completedWithProjectId = project.id; });
+      project.status = 'completed'; project.completedAt = new Date().toISOString(); project.loggedAt = null;
+      ui.state.tasks.filter((task) => task.projectId === project.id && task.status === 'open' && !task.repeat).forEach((task) => { task.status = 'completed'; task.completedAt = project.completedAt; task.loggedAt = null; task.completedWithProjectId = project.id; });
       if (project.repeatTemplateId) {
         const template = projectById(project.repeatTemplateId);
         if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
       }
-      setView('loggedProjects'); showToast('Project completed');
+      applyLogbookPolicy();
+      setView(isLogged(project) ? 'loggedProjects' : 'project', isLogged(project) ? null : project.id); showToast('Project completed');
     } else if (action === 'restore') {
-      project.status = 'open'; project.completedAt = null;
-      ui.state.tasks.filter((task) => task.completedWithProjectId === project.id).forEach((task) => { task.status = 'open'; task.completedAt = null; task.completedWithProjectId = null; });
+      project.status = 'open'; project.completedAt = null; project.loggedAt = null;
+      ui.state.tasks.filter((task) => task.completedWithProjectId === project.id).forEach((task) => { task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.completedWithProjectId = null; });
       setView('project', project.id); showToast('Project restored');
     } else if (action === 'repeat') {
       const nextDate = project.scheduledFor || addDays(localDay(), 7);
@@ -1294,14 +1412,14 @@ function openProjectModal(projectId) {
 }
 
 function duplicateProject(project) {
-  const copy = { ...project, id: uid('project'), title: `${project.title} copy`, status: 'open', completedAt: null, order: ui.state.projects.length };
+  const copy = { ...project, id: uid('project'), title: `${project.title} copy`, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
   ui.state.projects.push(copy);
   const headingMap = new Map();
   ui.state.headings.filter((heading) => heading.projectId === project.id).forEach((heading) => {
     const duplicate = { ...heading, id: uid('heading'), projectId: copy.id };
     headingMap.set(heading.id, duplicate.id); ui.state.headings.push(duplicate);
   });
-  ui.state.tasks.filter((task) => task.projectId === project.id && task.status !== 'cancelled').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, status: 'open', completedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
+  ui.state.tasks.filter((task) => task.projectId === project.id && task.status !== 'cancelled').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), projectId: copy.id, headingId: headingMap.get(task.headingId) || null, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
   setView('project', copy.id); showToast('Project duplicated');
 }
 
@@ -1324,7 +1442,13 @@ function openAreaModal(areaId) {
 
 function openSettings() {
   const settings = ui.state.settings;
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings"><h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p><div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div><div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div><div class="settings-section"><h3>Reminders</h3><p>Objects can show browser notifications while it is open.</p><button class="button" type="button" data-settings-action="notifications">${settings.notifications ? 'Notifications enabled' : 'Enable notifications'}</button></div><div class="settings-section"><h3>Calendar</h3><p>Add an event manually or import a standard .ics calendar file. Events remain private in your Objects data.</p><div class="form-field"><label for="event-title">Event</label><input id="event-title" placeholder="Event title"></div><div class="repeat-grid"><div class="form-field"><label for="event-start">Starts</label><input id="event-start" type="datetime-local"></div><div class="form-field"><label for="event-end">Ends</label><input id="event-end" type="datetime-local"></div></div><div class="button-row"><button class="button" type="button" data-settings-action="add-event">Add event</button><label class="button" for="ics-import">Import .ics</label><input class="hidden-file" id="ics-import" type="file" accept=".ics,text/calendar"></div></div><div class="settings-section"><h3>Data</h3><p>Export a complete backup or import one from another Objects installation.</p><div class="button-row"><button class="button" type="button" data-settings-action="export">${icon('download')} Export JSON</button><label class="button" for="json-import">${icon('upload')} Import JSON</label><input class="hidden-file" id="json-import" type="file" accept="application/json,.json"></div></div><div class="settings-section"><h3>Automation</h3><p>Open <code>/?title=Call%20Maya%20tomorrow</code> while signed in, or use the authenticated <code>POST /api/tasks</code> Lakebed endpoint.</p></div><div class="form-actions"><button class="button primary" type="button" data-cancel>Done</button></div></div></div>`;
+  const pwa = getPwaStatus();
+  const pendingLogCount = [...ui.state.tasks, ...ui.state.projects].filter(isCompletedButVisible).length;
+  const logbookHelp = settings.logCompletedItems === 'immediately' ? 'Completed items move to the Logbook as soon as they are checked.' : settings.logCompletedItems === 'manually' ? 'Completed items stay in their original lists until you log them.' : 'Completed items stay visible for the rest of the day and move to the Logbook after midnight.';
+  const installLabel = pwa.installed ? 'Installed' : pwa.canPromptInstall ? 'Install Objects' : 'Installation help';
+  const installHelp = pwa.installed ? 'Objects is running as an installed app.' : pwa.ios ? 'On iPhone or iPad, use Share → Add to Home Screen. Notifications are available only after installation.' : 'Install from this button when available, or use your browser’s Install app / Add to Home Screen menu.';
+  const notificationLabel = pwa.notificationPermission === 'unsupported' ? 'Not supported here' : pwa.notificationPermission === 'denied' ? 'Blocked in browser settings' : settings.notifications && pwa.notificationPermission === 'granted' ? 'Disable notifications' : 'Enable notifications';
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings"><h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p><div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div><div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div><div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div><div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div><div class="settings-section"><h3>Reminders</h3><p>Notifications work on desktop and mobile, including notification taps that reopen the task. Scheduled reminders are reliable while Objects is open; closed-app delivery needs a server push scheduler.</p><button class="button" type="button" data-settings-action="notifications" ${pwa.notificationPermission === 'denied' ? 'disabled' : ''}>${esc(notificationLabel)}</button></div><div class="settings-section"><h3>Calendar</h3><p>Add an event manually or import a standard .ics calendar file. Events remain private in your Objects data.</p><div class="form-field"><label for="event-title">Event</label><input id="event-title" placeholder="Event title"></div><div class="repeat-grid"><div class="form-field"><label for="event-start">Starts</label><input id="event-start" type="datetime-local"></div><div class="form-field"><label for="event-end">Ends</label><input id="event-end" type="datetime-local"></div></div><div class="button-row"><button class="button" type="button" data-settings-action="add-event">Add event</button><label class="button" for="ics-import">Import .ics</label><input class="hidden-file" id="ics-import" type="file" accept=".ics,text/calendar"></div></div><div class="settings-section"><h3>Data</h3><p>Export a complete backup or import one from another Objects installation.</p><div class="button-row"><button class="button" type="button" data-settings-action="export">${icon('download')} Export JSON</button><label class="button" for="json-import">${icon('upload')} Import JSON</label><input class="hidden-file" id="json-import" type="file" accept="application/json,.json"></div></div><div class="settings-section"><h3>Automation</h3><p>Open <code>/?title=Call%20Maya%20tomorrow</code> while signed in, or use the authenticated <code>POST /api/tasks</code> Lakebed endpoint.</p></div><div class="form-actions"><button class="button primary" type="button" data-cancel>Done</button></div></div></div>`;
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
   $('#setting-group').addEventListener('change', (event) => { settings.groupToday = event.target.checked; scheduleSave(); render(); });
@@ -1333,6 +1457,7 @@ function openSettings() {
   $$('[data-settings-action]').forEach((button) => button.addEventListener('click', () => handleSettingsAction(button.dataset.settingsAction)));
   $('#json-import').addEventListener('change', importJsonFile);
   $('#ics-import').addEventListener('change', importIcsFile);
+  bindLogbookSettings(settings);
 }
 
 async function handleSettingsAction(action) {
@@ -1341,10 +1466,29 @@ async function handleSettingsAction(action) {
     return;
   }
   if (action === 'notifications') {
-    if (!('Notification' in window)) { showToast('Notifications are not supported in this browser'); return; }
-    const permission = await Notification.requestPermission();
+    if (ui.state.settings.notifications && 'Notification' in window && Notification.permission === 'granted') {
+      ui.state.settings.notifications = false;
+      scheduleSave(); openSettings(); showToast('Notifications disabled in Objects');
+      return;
+    }
+    const permission = await requestNotificationAccess();
     ui.state.settings.notifications = permission === 'granted';
-    scheduleSave(); openSettings(); showToast(permission === 'granted' ? 'Notifications enabled' : 'Notification permission was not granted');
+    scheduleSave(); openSettings(); showToast(permission === 'granted' ? 'Notifications enabled' : permission === 'denied' ? 'Notifications are blocked in browser settings' : 'Notifications are not supported here');
+  }
+  if (action === 'install') {
+    const result = await requestPwaInstall();
+    openSettings();
+    if (result === 'accepted') showToast('Objects was installed');
+    if (result === 'dismissed') showToast('Installation cancelled');
+    if (result === 'instructions') showToast(getPwaStatus().ios ? 'Use Share → Add to Home Screen' : 'Use your browser menu → Install app');
+  }
+  if (action === 'update') {
+    if (!activatePwaUpdate()) showToast('The update will be applied on the next launch');
+  }
+  if (action === 'log-now') {
+    const logged = logCompletedNow();
+    scheduleSave(); render(); openSettings();
+    showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`);
   }
   if (action === 'add-event') {
     const title = $('#event-title').value.trim();
@@ -1430,7 +1574,7 @@ function handleGlobalKeydown(event) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); return; }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); openSearch(); return; }
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd' && ui.selectedTaskId) { event.preventDefault(); const task = currentTask(); const copy = { ...task, id: uid('task'), title: `${task.title} copy`, status: 'open', completedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); selectTask(copy.id); scheduleSave(); showToast('To-do duplicated'); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd' && ui.selectedTaskId) { event.preventDefault(); const task = currentTask(); const copy = { ...task, id: uid('task'), title: `${task.title} copy`, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); selectTask(copy.id); scheduleSave(); showToast('To-do duplicated'); return; }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'n' && ui.view.type === 'project') { event.preventDefault(); openHeadingModal(); return; }
   if (!event.metaKey && !event.ctrlKey && !event.altKey && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
     if (event.key.toLowerCase() === 'n') { event.preventDefault(); beginQuickAdd(true); }

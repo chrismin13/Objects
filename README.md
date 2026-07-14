@@ -18,6 +18,7 @@ Live app: [objects.lakebed.app](https://objects.lakebed.app)
 - Quick Find across titles, notes, checklist items, tags, headings, completed items, and special lists
 - Tomorrow, Deadlines, Repeating, All Projects, and Logged Projects views
 - Tag filtering, drag-and-drop ordering, duplication, completion undo, Markdown notes, project completion, and restoration
+- Things-style Logbook timing: log completed to-dos and projects immediately, daily at midnight, or manually
 - Responsive desktop/mobile layouts and light, dark, and system themes
 - Installable PWA with standalone display and an offline application shell
 - JSON backup and guarded import
@@ -84,7 +85,9 @@ npx lakebed domains add objects.lakebed.app
 
 ## Install as an app
 
-Open the hosted app in a supporting browser and choose **Install Objects** or **Add to Home Screen**. The PWA opens in a standalone window and caches its application shell for offline startup. Authentication, live sync, and uncached account data still require a network connection; private Lakebed API, auth, and storage responses are deliberately excluded from the service-worker cache.
+Open the hosted app and use **Settings → App**, the browser’s **Install app** command, or **Share → Add to Home Screen** on iPhone and iPad. The PWA opens in a standalone window, exposes Today/Inbox/New to-do shortcuts where supported, accepts shared text and links on supporting mobile platforms, and caches its application shell for offline startup. Authentication, live sync, and uncached account data still require a network connection; private Lakebed API, auth, and storage responses are deliberately excluded from the service-worker cache.
+
+Notification permission is requested only from the Settings button. Reminders use persistent service-worker notifications so they work on mobile browsers as well as desktop browsers, and tapping a notification opens its task. The reminder timer itself runs while Objects is open. Reliable delivery after the app is fully closed would require a hosted Web Push scheduler, which Lakebed capsules do not currently provide; browsers do not offer a portable, reliable local background timer.
 
 ## Data model
 
