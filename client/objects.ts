@@ -48,6 +48,12 @@ function esc(value = '') {
   return String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
+function suppressRepeatedActivation(event) {
+  if (event.detail < 2 || !event.target.closest?.('button, [role="button"], [data-task-id], [data-view], [data-modal-close], a[href], input[type="checkbox"], input[type="radio"], label[for]')) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
 function localDay(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -560,6 +566,7 @@ async function checkReminders() {
 }
 
 function bindStaticEvents() {
+  document.addEventListener('click', suppressRepeatedActivation, true);
   $('#search-button').innerHTML = icon('search');
   $('#mobile-search').innerHTML = icon('search');
   $('#sidebar-open').innerHTML = icon('menu');
