@@ -82,6 +82,7 @@ const ui = {
   view: { type: 'today', id: null },
   selectedTaskId: null,
   saveTimer: null,
+  savesInFlight: 0,
   lastCompleted: null,
   focusedSearchIndex: 0,
   searchEverything: false,
@@ -126,7 +127,10 @@ export function mountObjects(serializedState, options) {
 }
 
 export function syncObjectsState(serializedState) {
-  if (!ui.state || ui.saveTimer) return;
+  // The save mutation normalizes updatedAt on the server. Ignore its live-query
+  // echo until the mutation returns that timestamp, otherwise we rebuild the UI
+  // around whichever control the user is still editing.
+  if (!ui.state || ui.saveTimer || ui.savesInFlight) return;
   try {
     const remote = JSON.parse(serializedState);
     if (remote.updatedAt && remote.updatedAt !== ui.state.updatedAt) {
@@ -1445,11 +1449,13 @@ function closeInspector({ restoreFocus = true } = {}) {
 function renderInspector() {
   const task = ui.state.tasks.find((item) => item.id === ui.selectedTaskId);
   if (!task) { app.classList.remove('inspector-open'); inspector.innerHTML = ''; syncSidebarAccessibility(); return; }
+  const previousPane = $('.inspector-scroll', inspector);
+  const previousScrollTop = previousPane?.dataset.taskId === task.id ? previousPane.scrollTop : 0;
   const schedule = task.bucket === 'today' ? (task.evening ? 'evening' : 'today') : task.bucket;
   const projectOptions = [`<option value="">No project</option>`, ...ui.state.projects.filter((p) => p.status === 'open').map((p) => `<option value="${p.id}" ${task.projectId === p.id ? 'selected' : ''}>${esc(p.title)}</option>`)].join('');
   const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => h.projectId === task.projectId && !h.archived).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
   const repeat = task.repeat;
-  inspector.innerHTML = `<div class="inspector-scroll">
+  inspector.innerHTML = `<div class="inspector-scroll" data-task-id="${esc(task.id)}">
     <div class="inspector-top"><span class="inspector-status"><i class="sync-state" id="sync-state"></i>${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><button class="icon-button" data-inspector-action="close" aria-label="Close details">${icon('x')}</button></div>
     <textarea id="inspector-title" class="inspector-title" data-field="title" rows="2" placeholder="To-do title">${esc(task.title)}</textarea>
     ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)">${esc(task.notes)}</textarea>`}
@@ -1466,6 +1472,8 @@ function renderInspector() {
     <div class="detail-group"><span class="detail-label">Repeat</span>${repeat ? `<div class="repeat-grid"><select class="detail-select" data-repeat-field="mode"><option value="fixed" ${repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-repeat-field="frequency"><option value="daily" ${repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" max="365" data-repeat-field="interval" value="${repeat.interval || 1}" aria-label="Repeat interval"><input class="detail-input" type="date" data-repeat-field="nextDate" value="${repeat.nextDate || localDay()}" aria-label="Next occurrence"></div>${repeat.frequency === 'weekly' ? `<div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(repeat.weekdays || []).includes(day) ? 'active' : ''}" data-weekday="${day}" aria-label="Repeat on ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}">${label}</button>`).join('')}</div>` : ''}<div class="settings-row"><label for="repeat-paused">Pause schedule</label><input id="repeat-paused" type="checkbox" data-repeat-field="paused" ${repeat.paused ? 'checked' : ''}></div><button class="checklist-add" data-inspector-action="stop-repeat">Stop repeating</button>` : `<button class="checklist-add" data-inspector-action="start-repeat">Make repeating…</button>`}</div>
     <div class="inspector-actions">${!isTrashed(task) ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === 'open' && !task.repeat ? '<button class="button" data-inspector-action="cancel">Cancel to-do</button>' : ''}` : ''}${isTrashed(task) ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}</div>
   </div>`;
+  const nextPane = $('.inspector-scroll', inspector);
+  if (nextPane && previousScrollTop) nextPane.scrollTop = previousScrollTop;
   syncSidebarAccessibility();
 }
 
@@ -1606,7 +1614,22 @@ function handleInspectorChange(event) {
     if (item) item.done = event.target.checked;
   }
   scheduleSave();
-  render();
+  const inspectorStructureChanged = field === 'projectId' || repeatField === 'frequency';
+  if (inspectorStructureChanged) {
+    render();
+    return;
+  }
+
+  // Keep native date/time pickers and other active controls mounted. Replacing
+  // the inspector here dismisses mobile pickers and resets its scroll position.
+  const scheduledForInput = $('[data-field="scheduledFor"]', inspector);
+  const reminderAtInput = $('[data-field="reminderAt"]', inspector);
+  const deadlineInput = $('[data-field="deadline"]', inspector);
+  if (scheduledForInput) scheduledForInput.value = task.scheduledFor || '';
+  if (reminderAtInput) reminderAtInput.value = task.reminderAt || '';
+  if (deadlineInput) deadlineInput.value = task.deadline || '';
+  renderSidebar();
+  renderContent();
 }
 
 function handleInspectorClick(event) {
@@ -2255,6 +2278,7 @@ function scheduleSave(renderAfter = false) {
   clearTimeout(ui.saveTimer);
   ui.saveTimer = setTimeout(async () => {
     ui.saveTimer = null;
+    ui.savesInFlight += 1;
     try {
       ui.state.updatedAt = new Date().toISOString();
       const updatedAt = await persistState(JSON.stringify(ui.state));
@@ -2264,6 +2288,8 @@ function scheduleSave(renderAfter = false) {
     } catch (error) {
       markSaving('error');
       showToast('Could not save changes');
+    } finally {
+      ui.savesInFlight -= 1;
     }
   }, 350);
 }
