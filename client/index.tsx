@@ -132,6 +132,7 @@ export function App() {
   useEffect(() => {
     document.title = "Objects";
     const metadata = [
+      ["meta", "meta[name='viewport']", { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" }],
       ["link", "link[rel='manifest']", { rel: "manifest", href: "/manifest.webmanifest" }],
       ["meta", "meta[name='theme-color']", { name: "theme-color", content: "#2f80ed" }],
       ["meta", "meta[name='mobile-web-app-capable']", { name: "mobile-web-app-capable", content: "yes" }],

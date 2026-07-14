@@ -1,4 +1,9 @@
 export const responsiveStyles = `
+:root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 .check-button {
   border: 0;
   background: transparent;
@@ -76,20 +81,20 @@ export const responsiveStyles = `
     transition: none;
   }
   .mobile-header {
-    height: calc(60px + env(safe-area-inset-top));
-    padding: calc(8px + env(safe-area-inset-top)) 8px 8px;
+    height: calc(60px + var(--safe-area-top));
+    padding: calc(8px + var(--safe-area-top)) 8px 8px;
   }
   .content {
-    padding-top: calc(90px + env(safe-area-inset-top));
-    padding-bottom: calc(110px + env(safe-area-inset-bottom));
+    padding-top: calc(90px + var(--safe-area-top));
+    padding-bottom: calc(110px + var(--safe-area-bottom));
   }
   .sidebar {
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-top: var(--safe-area-top);
+    padding-bottom: var(--safe-area-bottom);
   }
   .inspector-scroll {
-    padding-top: calc(23px + env(safe-area-inset-top));
-    padding-bottom: calc(30px + env(safe-area-inset-bottom));
+    padding-top: calc(23px + var(--safe-area-top));
+    padding-bottom: calc(30px + var(--safe-area-bottom));
   }
   .icon-button,
   .magic-add {
@@ -97,7 +102,7 @@ export const responsiveStyles = `
     height: 44px;
   }
   .magic-add {
-    top: calc(8px + env(safe-area-inset-top));
+    top: calc(8px + var(--safe-area-top));
     right: 60px;
   }
   .nav-item,
@@ -141,10 +146,18 @@ export const responsiveStyles = `
   .checklist-remove { width: 44px; height: 44px; }
   .inspector-actions { flex-wrap: wrap; }
   .search-result { min-height: 52px; }
-  .toast-region { bottom: calc(18px + env(safe-area-inset-bottom)); }
+  .toast-region { bottom: calc(18px + var(--safe-area-bottom)); }
 }
 
 @media (max-width: 520px) {
   .key-hint { display: none; }
+  .auth-card {
+    padding-top: calc(28px + var(--safe-area-top));
+    padding-bottom: calc(28px + var(--safe-area-bottom));
+  }
+  .modal-backdrop {
+    padding-top: calc(12px + var(--safe-area-top));
+    padding-bottom: calc(12px + var(--safe-area-bottom));
+  }
 }
 `;
