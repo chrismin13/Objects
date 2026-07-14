@@ -17,6 +17,7 @@ Live app: [objects.lakebed.app](https://objects.lakebed.app)
 - Tomorrow, Deadlines, Repeating, All Projects, and Logged Projects views
 - Tag filtering, drag-and-drop ordering, duplication, completion undo, Markdown notes, project completion, and restoration
 - Responsive desktop/mobile layouts and light, dark, and system themes
+- Installable PWA with standalone display and an offline application shell
 - JSON backup and guarded import
 - URL capture through `/?title=Call%20Maya%20tomorrow`
 - An authenticated `POST /api/tasks` Lakebed endpoint
@@ -78,6 +79,10 @@ After the deploy is claimed, reserve a Lakebed hostname if desired:
 ```sh
 npx lakebed domains add objects.lakebed.app
 ```
+
+## Install as an app
+
+Open the hosted app in a supporting browser and choose **Install Objects** or **Add to Home Screen**. The PWA opens in a standalone window and caches its application shell for offline startup. Authentication, live sync, and uncached account data still require a network connection; private Lakebed API, auth, and storage responses are deliberately excluded from the service-worker cache.
 
 ## Data model
 

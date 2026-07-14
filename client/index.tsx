@@ -102,7 +102,24 @@ export function App() {
   const auth = useAuth();
   const localGuest = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
-  useEffect(() => { document.title = "Objects"; }, []);
+  useEffect(() => {
+    document.title = "Objects";
+    const metadata = [
+      ["link", "link[rel='manifest']", { rel: "manifest", href: "/manifest.webmanifest" }],
+      ["link", "link[rel='apple-touch-icon']", { rel: "apple-touch-icon", href: "/favicon.svg" }],
+      ["meta", "meta[name='theme-color']", { name: "theme-color", content: "#2f80ed" }],
+      ["meta", "meta[name='mobile-web-app-capable']", { name: "mobile-web-app-capable", content: "yes" }],
+      ["meta", "meta[name='apple-mobile-web-app-capable']", { name: "apple-mobile-web-app-capable", content: "yes" }],
+      ["meta", "meta[name='apple-mobile-web-app-title']", { name: "apple-mobile-web-app-title", content: "Objects" }],
+      ["meta", "meta[name='apple-mobile-web-app-status-bar-style']", { name: "apple-mobile-web-app-status-bar-style", content: "default" }]
+    ] as const;
+    for (const [tag, selector, attributes] of metadata) {
+      let element = document.head.querySelector(selector);
+      if (!element) { element = document.createElement(tag); document.head.appendChild(element); }
+      for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+    }
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  }, []);
 
   return (
     <>
