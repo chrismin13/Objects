@@ -27,7 +27,7 @@ export function createSeed(): ObjectsState {
   return {
     version: 5,
     updatedAt: "seed-v5",
-    settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily" },
+    settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily", tags: ["Creative", "Deep work", "Errand", "Focused", "Home", "Quick"] },
     areas: [
       { id: "area-work", title: "Work", color: "#5b7cfa", tags: [], order: 0 },
       { id: "area-personal", title: "Personal", color: "#e49b3c", tags: [], order: 1 }

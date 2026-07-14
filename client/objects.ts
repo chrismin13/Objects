@@ -228,9 +228,8 @@ function tagSelectionSummary(tags) {
 
 function renderTagPicker(selectedTags, field) {
   const tags = getKnownTags();
-  if (!tags.length) return '<p class="detail-help tag-picker-empty">No tags yet. Add one in Settings first.</p>';
   const selected = new Set(selectedTags || []);
-  return `<details class="tag-picker" data-tag-picker="${esc(field)}"><summary><span data-tag-summary>${esc(tagSelectionSummary([...selected]))}</span>${icon('chevron')}</summary><div class="tag-picker-menu" role="group" aria-label="Available tags">${tags.map((tag) => `<label><input type="checkbox" value="${esc(tag)}" data-tag-choice="${esc(field)}" ${selected.has(tag) ? 'checked' : ''}><span>${esc(tag)}</span></label>`).join('')}</div></details>`;
+  return `<details class="tag-picker" data-tag-picker="${esc(field)}"><summary><span data-tag-summary>${esc(tagSelectionSummary([...selected]))}</span>${icon('chevron')}</summary><div class="tag-picker-menu" role="group" aria-label="Available tags"><div class="tag-picker-create"><input type="text" maxlength="40" autocomplete="off" data-new-tag="${esc(field)}" placeholder="New tag name" aria-label="New tag name"><button class="button" type="button" data-create-tag="${esc(field)}">Add</button></div><div class="tag-picker-options">${tags.map((tag) => `<label><input type="checkbox" value="${esc(tag)}" data-tag-choice="${esc(field)}" ${selected.has(tag) ? 'checked' : ''}><span>${esc(tag)}</span></label>`).join('')}</div></div></details>`;
 }
 
 function selectedPickerTags(root) {
@@ -240,6 +239,35 @@ function selectedPickerTags(root) {
 function refreshTagPickerSummary(picker) {
   const summary = $('[data-tag-summary]', picker);
   if (summary) summary.textContent = tagSelectionSummary(selectedPickerTags(picker));
+}
+
+function createTagInPicker(button) {
+  const picker = button.closest('[data-tag-picker]');
+  const input = $('[data-new-tag]', picker);
+  const requested = cleanTagList([input?.value])[0];
+  if (!requested) { showToast('Enter a tag name'); input?.focus(); return picker; }
+  let tag = getKnownTags().find((existing) => existing.toLocaleLowerCase() === requested.toLocaleLowerCase());
+  const created = !tag;
+  if (!tag) tag = registerTags([requested])[0];
+  let checkbox = $$('[data-tag-choice]', picker).find((choice) => choice.value.toLocaleLowerCase() === tag.toLocaleLowerCase());
+  if (!checkbox) {
+    const field = picker.dataset.tagPicker;
+    $('.tag-picker-options', picker).insertAdjacentHTML('beforeend', `<label><input type="checkbox" value="${esc(tag)}" data-tag-choice="${esc(field)}" checked><span>${esc(tag)}</span></label>`);
+    checkbox = $$('[data-tag-choice]', picker).find((choice) => choice.value === tag);
+  }
+  checkbox.checked = true;
+  input.value = '';
+  refreshTagPickerSummary(picker);
+  if (created) { scheduleSave(false); showToast(`Added “${tag}”`); }
+  return picker;
+}
+
+function bindTagPicker(root) {
+  $$('[data-create-tag]', root).forEach((button) => button.addEventListener('click', () => createTagInPicker(button)));
+  root.addEventListener('change', (event) => {
+    const picker = event.target.closest('[data-tag-picker]');
+    if (event.target.dataset.tagChoice && picker) refreshTagPickerSummary(picker);
+  });
 }
 
 function isLogged(item) {
@@ -1904,6 +1932,13 @@ function handleInspectorChange(event) {
 function handleInspectorClick(event) {
   const task = currentTask();
   if (!task) return;
+  const createTag = event.target.closest('[data-create-tag="task"]');
+  if (createTag) {
+    const picker = createTagInPicker(createTag);
+    task.tags = selectedPickerTags(picker);
+    scheduleSave(); renderSidebar(); renderContent();
+    return;
+  }
   const schedule = event.target.closest('[data-schedule]')?.dataset.schedule;
   if (schedule) {
     const nextDate = ['today', 'evening'].includes(schedule) ? localDay() : null;
@@ -2183,6 +2218,11 @@ function openProjectModal(projectId) {
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
+  const projectTagInput = $('#project-tags');
+  projectTagInput.previousElementSibling?.removeAttribute('for');
+  projectTagInput.insertAdjacentHTML('afterend', renderTagPicker(project.tags, 'project'));
+  projectTagInput.remove();
+  bindTagPicker($('#project-form'));
   $('#project-form').addEventListener('submit', (event) => {
     event.preventDefault();
     project.title = $('#project-title').value.trim() || project.title;
@@ -2194,7 +2234,7 @@ function openProjectModal(projectId) {
     if (['anytime', 'someday'].includes(project.bucket)) project.scheduledFor = null;
     if (project.bucket === 'upcoming' && !project.scheduledFor) project.scheduledFor = addDays(localDay(), 1);
     project.deadline = $('#project-deadline').value || null;
-    project.tags = registerTags($('#project-tags').value.split(','));
+    project.tags = selectedPickerTags($('#project-form'));
     $$('[data-project-repeat-field]').forEach((field) => { project.repeat[field.dataset.projectRepeatField] = field.dataset.projectRepeatField === 'interval' ? Math.max(1, Number(field.value) || 1) : field.value; });
     if (project.repeat) project.repeat.deadlineOffset = dayDistance(project.repeat.nextDate, project.deadline);
     ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.areaId = project.areaId; });
@@ -2309,7 +2349,12 @@ function openAreaModal(areaId) {
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
-  $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.color = $('#area-color').value; area.tags = registerTags($('#area-tags').value.split(',')); scheduleSave(); closeModal(); render(); });
+  const areaTagInput = $('#area-tags');
+  areaTagInput.previousElementSibling?.removeAttribute('for');
+  areaTagInput.insertAdjacentHTML('afterend', renderTagPicker(area.tags, 'area'));
+  areaTagInput.remove();
+  bindTagPicker($('#area-form'));
+  $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.color = $('#area-color').value; area.tags = selectedPickerTags($('#area-form')); scheduleSave(); closeModal(); render(); });
   $('[data-area-delete]').addEventListener('click', () => {
     confirmAction('Delete this area?', 'Its projects and to-dos will be kept.', 'Delete area', () => {
       ui.state.areas = ui.state.areas.filter((item) => item.id !== area.id);
