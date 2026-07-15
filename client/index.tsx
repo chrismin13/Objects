@@ -92,7 +92,8 @@ class StableObjectsDom extends Component {
 
 function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean }) {
   const serializedState = useQuery<string>("state");
-  const saveState = useMutation<[serialized: string], string>("saveState");
+  const initializeNormalized = useMutation<[serialized: string], string>("initializeNormalized");
+  const applyChanges = useMutation<[serialized: string], string>("applyChanges");
   const initialState = useRef<string | null>(null);
   const [stateTimedOut, setStateTimedOut] = useState(false);
   if (!initialState.current && typeof serializedState === "string" && serializedState.length > 0) initialState.current = serializedState;
@@ -101,7 +102,8 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
   useEffect(() => {
     if (!ready) return;
     return mountObjects(initialState.current!, {
-      saveState,
+      initializeState: initializeNormalized,
+      saveChanges: applyChanges,
       user: auth,
       signOut: async () => {
         await signOut();

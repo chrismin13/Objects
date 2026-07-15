@@ -83,14 +83,106 @@ function uid(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+const ENTITY_KINDS = ['areas', 'projects', 'headings', 'calendarEvents', 'tasks'];
+
+function cloneData(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function sameValue(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function recordPatch(previous = {}, current = {}) {
+  const patch = {};
+  for (const key of new Set([...Object.keys(previous || {}), ...Object.keys(current || {})])) {
+    if (key === 'id' || current[key] === undefined || sameValue(previous[key], current[key])) continue;
+    patch[key] = current[key];
+  }
+  return patch;
+}
+
+function buildChangeSet() {
+  if (!ui.state || !ui.syncedState) return null;
+  const changes = { mutationId: uid('mutation'), settings: recordPatch(ui.syncedState.settings, ui.state.settings), entities: {}, deletes: {} };
+  let changed = Object.keys(changes.settings).length > 0;
+  for (const kind of ENTITY_KINDS) {
+    const previous = new Map((ui.syncedState[kind] || []).map((item) => [item.id, item]));
+    const current = new Map((ui.state[kind] || []).map((item) => [item.id, item]));
+    const patches = [];
+    const deletes = [];
+    for (const [id, item] of current) {
+      const patch = recordPatch(previous.get(id), item);
+      if (!previous.has(id)) {
+        for (const [key, value] of Object.entries(item)) if (key !== 'id') patch[key] = value;
+      }
+      if (Object.keys(patch).length) patches.push({ id, patch });
+    }
+    for (const id of previous.keys()) if (!current.has(id)) deletes.push(id);
+    if (patches.length) { changes.entities[kind] = patches; changed = true; }
+    if (deletes.length) { changes.deletes[kind] = deletes; changed = true; }
+  }
+  return changed ? changes : null;
+}
+
+function acknowledgeChanges(changes, serializedAck) {
+  const ack = JSON.parse(serializedAck);
+  const baseline = cloneData(ui.syncedState);
+  baseline.settings = { ...baseline.settings, ...(changes.settings || {}) };
+  for (const kind of ENTITY_KINDS) {
+    const deleted = new Set(changes.deletes?.[kind] || []);
+    const items = new Map((baseline[kind] || []).filter((item) => !deleted.has(item.id)).map((item) => [item.id, item]));
+    for (const change of changes.entities?.[kind] || []) {
+      items.set(change.id, { ...(items.get(change.id) || { id: change.id }), ...cloneData(change.patch) });
+    }
+    baseline[kind] = [...items.values()];
+  }
+  baseline.updatedAt = ack.updatedAt;
+  baseline.syncMutationId = ack.mutationId;
+  ui.syncedState = baseline;
+  ui.state.updatedAt = ack.updatedAt;
+  ui.state.syncMutationId = ack.mutationId;
+  ui.ownMutationIds.delete(ack.mutationId);
+}
+
+function mergeRecord(previous, local, remote) {
+  if (!remote) return previous ? undefined : local ? cloneData(local) : undefined;
+  if (!local) return previous ? undefined : cloneData(remote);
+  const merged = { id: remote.id || local.id };
+  for (const key of new Set([...Object.keys(previous || {}), ...Object.keys(local), ...Object.keys(remote)])) {
+    if (key === 'id') continue;
+    const localChanged = !sameValue(local[key], previous?.[key]);
+    const value = localChanged ? local[key] : remote[key];
+    if (value !== undefined) merged[key] = cloneData(value);
+  }
+  return merged;
+}
+
+function mergeCollection(previousItems = [], localItems = [], remoteItems = []) {
+  const previous = new Map(previousItems.map((item) => [item.id, item]));
+  const local = new Map(localItems.map((item) => [item.id, item]));
+  const remote = new Map(remoteItems.map((item) => [item.id, item]));
+  const merged = [];
+  for (const id of new Set([...previous.keys(), ...local.keys(), ...remote.keys()])) {
+    const item = mergeRecord(previous.get(id), local.get(id), remote.get(id));
+    if (item) merged.push(item);
+  }
+  return merged;
+}
+
 const ui = {
   state: null,
+  syncedState: null,
   user: null,
   view: { type: 'today', id: null },
   selectedTaskId: null,
   selectedTaskIds: new Set(),
   selectionAnchorId: null,
   saveTimer: null,
+  saveInFlight: false,
+  saveQueued: false,
+  renderAfterSave: false,
+  ownMutationIds: new Set(),
   lastCompleted: null,
   focusedSearchIndex: 0,
   searchEverything: false,
@@ -116,7 +208,8 @@ let content;
 let sidebar;
 let sidebarPanel;
 let inspector;
-let persistState = async () => null;
+let persistChanges = async () => null;
+let initializePersistentState = async (serialized) => serialized;
 let performSignOut = async () => {};
 let staticEventsBound = false;
 let logbookTimer = null;
@@ -126,14 +219,18 @@ let taskGesture = null;
 
 export function mountObjects(serializedState, options) {
   app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
-  persistState = options.saveState; performSignOut = options.signOut; ui.user = options.user;
+  persistChanges = options.saveChanges; initializePersistentState = options.initializeState; performSignOut = options.signOut; ui.user = options.user;
   try {
     ui.state = JSON.parse(serializedState); normalizeState();
+    ui.syncedState = cloneData(ui.state);
     const logged = applyLogbookPolicy();
     materializeRecurringTasks(); applyTheme(); render(); handleCaptureUrl(); startReminderChecks(); startLogbookChecks();
     if (logged) scheduleSave();
     if (!staticEventsBound) { bindStaticEvents(); staticEventsBound = true; render(); }
     app.setAttribute('aria-busy', 'false');
+    void initializePersistentState(JSON.stringify(ui.syncedState)).then(syncObjectsState).catch(() => {
+      markSaving('error'); showToast('Could not prepare sync');
+    });
   } catch (error) {
     content.innerHTML = `<div class="empty-state">${icon('cloud')}<h2>Objects could not start</h2><p>${esc(error.message)}. Refresh this page and try again.</p></div>`;
   }
@@ -141,17 +238,29 @@ export function mountObjects(serializedState, options) {
 }
 
 export function syncObjectsState(serializedState) {
-  if (!ui.state || ui.saveTimer) return;
+  if (!ui.state) return;
   try {
     const remote = JSON.parse(serializedState);
-    if (remote.updatedAt && remote.updatedAt !== ui.state.updatedAt) {
-      const selected = ui.selectedTaskId; ui.state = remote; normalizeState();
-      const logged = applyLogbookPolicy();
-      if (selected && !ui.state.tasks.some((task) => task.id === selected)) ui.selectedTaskId = null;
-      ui.selectedTaskIds = new Set([...ui.selectedTaskIds].filter((id) => ui.state.tasks.some((task) => task.id === id)));
-      render(); showToast('Changes synced from another device');
-      if (logged) scheduleSave();
-    }
+    if (!remote.updatedAt || (remote.updatedAt === ui.syncedState?.updatedAt && remote.syncMutationId === ui.syncedState?.syncMutationId)) return;
+    const previous = ui.syncedState || remote;
+    const local = ui.state;
+    const merged = {
+      version: remote.version,
+      updatedAt: remote.updatedAt,
+      syncMutationId: remote.syncMutationId,
+      settings: mergeRecord(previous.settings, { id: 'settings', ...local.settings }, { id: 'settings', ...remote.settings })
+    };
+    delete merged.settings.id;
+    for (const kind of ENTITY_KINDS) merged[kind] = mergeCollection(previous[kind], local[kind], remote[kind]);
+    ui.syncedState = cloneData(remote);
+    ui.state = merged; normalizeState();
+    const selected = ui.selectedTaskId;
+    const logged = applyLogbookPolicy();
+    if (selected && !ui.state.tasks.some((task) => task.id === selected)) ui.selectedTaskId = null;
+    ui.selectedTaskIds = new Set([...ui.selectedTaskIds].filter((id) => ui.state.tasks.some((task) => task.id === id)));
+    if (remote.syncMutationId) ui.ownMutationIds.delete(remote.syncMutationId);
+    render();
+    if (logged || buildChangeSet()) scheduleSave();
   } catch (_) {}
 }
 
@@ -2880,20 +2989,40 @@ function markSaving(state = 'saving') {
 
 function scheduleSave(renderAfter = false) {
   markSaving();
+  ui.renderAfterSave ||= renderAfter;
   clearTimeout(ui.saveTimer);
-  ui.saveTimer = setTimeout(async () => {
-    ui.saveTimer = null;
-    try {
-      ui.state.updatedAt = new Date().toISOString();
-      const updatedAt = await persistState(JSON.stringify(ui.state));
-      if (updatedAt) ui.state.updatedAt = updatedAt;
+  ui.saveTimer = setTimeout(flushSave, 350);
+}
+
+async function flushSave() {
+  ui.saveTimer = null;
+  if (ui.saveInFlight) { ui.saveQueued = true; return; }
+  const changes = buildChangeSet();
+  if (!changes) {
+    markSaving('');
+    if (ui.renderAfterSave) { ui.renderAfterSave = false; render(); }
+    return;
+  }
+  ui.saveInFlight = true;
+  ui.saveQueued = false;
+  ui.ownMutationIds.add(changes.mutationId);
+  try {
+    const serializedAck = await persistChanges(JSON.stringify(changes));
+    acknowledgeChanges(changes, serializedAck);
+  } catch (error) {
+    ui.ownMutationIds.delete(changes.mutationId);
+    markSaving('error');
+    showToast('Could not save changes');
+  } finally {
+    ui.saveInFlight = false;
+    if (ui.saveQueued || buildChangeSet()) {
+      clearTimeout(ui.saveTimer);
+      ui.saveTimer = setTimeout(flushSave, 0);
+    } else {
       markSaving('');
-      if (renderAfter) render();
-    } catch (error) {
-      markSaving('error');
-      showToast('Could not save changes');
+      if (ui.renderAfterSave) { ui.renderAfterSave = false; render(); }
     }
-  }, 350);
+  }
 }
 
 function showToast(message, actionLabel, action) {

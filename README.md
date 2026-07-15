@@ -94,9 +94,9 @@ Notification permission is requested only from the Settings button. Reminders us
 
 ## Data model
 
-Objects stores each serialized user workspace across ordered rows in the `workspaceChunks` table. The composite `by_owner_part` index makes reads bounded, ordered, and private while keeping every value below Lakebed’s 64 KiB hosted limit. Writes run in Lakebed transactions and are serialized per deploy.
+Objects stores areas, projects, headings, calendar events, tasks, and checklist items as separate owner-scoped rows. Client edits are sent as field-level patches, Lakebed mutations apply them transactionally, and live query results are merged with any unsaved local draft instead of replacing the active editor. Permanent deletions create tombstones so a stale client cannot recreate an item.
 
-The workspace document is capped at 750 KB—below Lakebed’s 1 MiB hosted state limit—and can be exported from Settings at any time.
+Deployments created before the normalized schema are migrated automatically from the legacy `workspaceChunks` document on first load. The legacy rows are retained as a migration backup but are no longer used after the per-user `workspaceMeta` row exists. Data can still be exported as one portable JSON backup from Settings at any time.
 
 ## Notes
 
