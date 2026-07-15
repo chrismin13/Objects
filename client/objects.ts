@@ -1076,6 +1076,21 @@ function menuButton(action, label, danger = false) {
   return `<button type="button" role="menuitem" data-context-action="${action}" class="${danger ? 'danger' : ''}">${esc(label)}</button>`;
 }
 
+function bulkContextMenuItems(tasks) {
+  const allTrashed = tasks.every(isTrashed);
+  const actionable = tasks.some((task) => task.status === 'open' && !task.repeat && !isTrashed(task));
+  if (allTrashed) return menuButton('restore', 'Restore selected');
+  return (actionable
+    ? menuButton('today', 'Move selected to Today')
+      + menuButton('someday', 'Move selected to Someday')
+      + menuButton('move', 'Move selected…')
+      + menuButton('tags', 'Edit tags…')
+      + menuButton('complete', 'Complete selected')
+      + menuButton('cancel', 'Cancel selected')
+    : '')
+    + menuButton('trash', 'Move selected to Trash', true);
+}
+
 function openContextMenu(target, x, y) {
   const menu = $('#context-menu');
   let kind = '';
@@ -1086,10 +1101,14 @@ function openContextMenu(target, x, y) {
   const list = target.closest('[data-list-kind]');
   const projectCard = target.closest('[data-project-card]');
   if (taskRow) {
-    kind = 'task'; id = taskRow.dataset.taskId;
+    id = taskRow.dataset.taskId;
+    if (ui.selectedTaskIds.size > 1 && ui.selectedTaskIds.has(id)) {
+      kind = 'bulk-task';
+      items = bulkContextMenuItems(selectedTasks());
+    } else kind = 'task';
     const task = ui.state.tasks.find((item) => item.id === id);
     if (!task) return;
-    items = (task.status === 'open' ? menuButton('today', 'Move to Today') + menuButton('someday', 'Move to Someday') + menuButton('move', 'Move…') + menuButton('complete', 'Complete') : menuButton('restore-task', 'Restore')) + menuButton('duplicate-task', 'Duplicate') + menuButton('trash-task', 'Move to Trash', true);
+    if (kind === 'task') items = (task.status === 'open' ? menuButton('today', 'Move to Today') + menuButton('someday', 'Move to Someday') + menuButton('move', 'Move…') : menuButton('restore-task', 'Restore')) + menuButton('duplicate-task', 'Duplicate') + menuButton('trash-task', 'Move to Trash', true);
   } else if (headingRow) {
     kind = 'heading'; id = headingRow.dataset.headingId;
     items = menuButton('edit-heading', 'Edit heading') + menuButton('new-heading-task', 'New to-do here') + menuButton('delete-heading', 'Delete heading', true);
@@ -1121,12 +1140,15 @@ function handleContextMenuClick(event) {
   const { kind, id } = menu.dataset;
   const action = button.dataset.contextAction;
   closeContextMenu();
+  if (kind === 'bulk-task') {
+    handleBulkAction(action);
+    return;
+  }
   if (kind === 'task') {
     const task = ui.state.tasks.find((item) => item.id === id);
     if (!task) return;
     if (action === 'today' || action === 'someday') { moveReminderToDate(task, action === 'today' ? localDay() : null); task.bucket = action; task.scheduledFor = action === 'today' ? localDay() : null; task.evening = false; scheduleSave(); render(); }
     if (action === 'move') openMoveTaskModal(task);
-    if (action === 'complete') toggleTask(id);
     if (action === 'restore-task') { task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.trashedAt = null; scheduleSave(); render(); }
     if (action === 'duplicate-task') { const copy = { ...task, id: uid('task'), title: `${task.title} copy`, status: 'open', completedAt: null, loggedAt: null, trashedAt: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); scheduleSave(); render(); }
     if (action === 'trash-task') { task.previousStatus = task.status; task.status = 'trashed'; task.trashedAt = new Date().toISOString(); task.loggedAt = null; scheduleSave(); render(); }
