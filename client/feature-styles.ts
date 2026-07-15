@@ -1,6 +1,5 @@
 export const featureStyles = `
-.quick-add-row { grid-template-columns: 26px minmax(0, 1fr) auto; }
-.draft-status { color: var(--faint); font-size: 10px; white-space: nowrap; }
+.quick-add-row { grid-template-columns: 26px minmax(0, 1fr); }
 .meta-item.past-date { color: var(--muted); }
 .checklist-item { grid-template-columns: 34px 18px minmax(0, 1fr) 24px; }
 .checklist-reorder { display: grid; grid-template-columns: 1fr 1fr; opacity: .35; }
@@ -195,7 +194,6 @@ export const featureStyles = `
   .checklist-item { grid-template-columns: 44px 24px minmax(0, 1fr) 44px; }
   .checklist-reorder { opacity: 1; }
   .checklist-reorder button { width: 22px; height: 44px; font-size: 15px; }
-  .draft-status { display: none; }
   .task-row { grid-template-columns: 32px minmax(0, 1fr) 44px 16px; }
   .task-select { width: 44px; height: 44px; margin: -8px 0; opacity: 1; }
   .selection-toolbar {

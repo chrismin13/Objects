@@ -201,7 +201,7 @@ const ui = {
   noteFindIndex: 0,
   draggingMagicAdd: false,
   suppressClickUntil: 0,
-  quickDraft: null,
+  pendingEntry: null,
 };
 
 let app;
@@ -219,22 +219,69 @@ let sidebarGesture = null;
 let taskGesture = null;
 let contextPress = null;
 
-function draftStorageKey() {
-  return `objects-quick-draft:${ui.user?.userId || ui.user?.displayName || 'guest'}`;
+function storageIdentity() {
+  return ui.user?.userId || ui.user?.displayName || 'guest';
 }
 
-function readLocalQuickDraft() {
+function pendingEntryStorageKey() {
+  return `objects-pending-entry:${storageIdentity()}`;
+}
+
+function legacyDraftStorageKey() {
+  return `objects-quick-draft:${storageIdentity()}`;
+}
+
+function readStoredValue(key) {
   try {
-    const value = JSON.parse(localStorage.getItem(draftStorageKey()) || 'null');
-    return value && typeof value.value === 'string' && value.value.trim() ? value : null;
+    return JSON.parse(localStorage.getItem(key) || 'null');
   } catch (_) { return null; }
 }
 
-function writeLocalQuickDraft(draft) {
+function writePendingEntry(entry) {
   try {
-    if (draft?.value?.trim()) localStorage.setItem(draftStorageKey(), JSON.stringify(draft));
-    else localStorage.removeItem(draftStorageKey());
+    if (entry?.task?.id) localStorage.setItem(pendingEntryStorageKey(), JSON.stringify(entry));
+    else localStorage.removeItem(pendingEntryStorageKey());
   } catch (_) {}
+}
+
+function rememberPendingTask(task) {
+  const revision = (ui.pendingEntry?.revision || 0) + 1;
+  ui.pendingEntry = { task: cloneData(task), revision, updatedAt: new Date().toISOString() };
+  writePendingEntry(ui.pendingEntry);
+}
+
+function rememberPendingDeletion(taskId) {
+  const revision = (ui.pendingEntry?.revision || 0) + 1;
+  ui.pendingEntry = { task: { id: taskId, title: '', __deleted: true }, revision, updatedAt: new Date().toISOString() };
+  writePendingEntry(ui.pendingEntry);
+}
+
+function recoverPendingEntry() {
+  const entry = readStoredValue(pendingEntryStorageKey());
+  if (!entry?.task?.id || typeof entry.task.title !== 'string') return false;
+  if (entry.task.__deleted) {
+    ui.state.tasks = ui.state.tasks.filter((task) => task.id !== entry.task.id);
+    ui.pendingEntry = entry;
+    return true;
+  }
+  const index = ui.state.tasks.findIndex((task) => task.id === entry.task.id);
+  if (index >= 0) ui.state.tasks[index] = { ...ui.state.tasks[index], ...entry.task };
+  else ui.state.tasks.push(entry.task);
+  ui.pendingEntry = entry;
+  return true;
+}
+
+function migrateLegacyDraft(skipCreate = false) {
+  const localDraft = readStoredValue(legacyDraftStorageKey());
+  const remoteDraft = ui.state.settings.quickDraft;
+  const draft = localDraft && (!remoteDraft?.updatedAt || localDraft.updatedAt > remoteDraft.updatedAt) ? localDraft : remoteDraft;
+  ui.state.settings.quickDraft = null;
+  try { localStorage.removeItem(legacyDraftStorageKey()); } catch (_) {}
+  if (!draft?.value?.trim() || skipCreate) return Boolean(draft);
+  ui.view = { type: draft.viewType || 'inbox', id: draft.viewId || null };
+  const task = createTaskFromParsed(parseNaturalTask(draft.value), { sectionKey: draft.sectionKey, view: ui.view, select: false, render: false });
+  rememberPendingTask(task);
+  return true;
 }
 
 export function mountObjects(serializedState, options) {
@@ -242,22 +289,16 @@ export function mountObjects(serializedState, options) {
   persistChanges = options.saveChanges; initializePersistentState = options.initializeState; performSignOut = options.signOut; ui.user = options.user;
   try {
     ui.state = JSON.parse(serializedState); normalizeState();
-    const localDraft = readLocalQuickDraft();
-    const remoteDraft = ui.state.settings.quickDraft;
-    ui.quickDraft = localDraft && (!remoteDraft?.updatedAt || localDraft.updatedAt > remoteDraft.updatedAt) ? localDraft : remoteDraft || null;
-    if (ui.quickDraft?.value?.trim()) {
-      ui.state.settings.quickDraft = ui.quickDraft;
-      ui.view = { type: ui.quickDraft.viewType || 'inbox', id: ui.quickDraft.viewId || null };
-      writeLocalQuickDraft(ui.quickDraft);
-    }
     ui.syncedState = cloneData(ui.state);
+    const recoveredPending = recoverPendingEntry();
+    const migratedDraft = migrateLegacyDraft(recoveredPending);
     const logged = applyLogbookPolicy();
     materializeRecurringTasks(); applyTheme(); render(); handleCaptureUrl(); startReminderChecks(); startLogbookChecks();
-    if (logged) scheduleSave();
+    if (logged || recoveredPending || migratedDraft) scheduleSave();
     if (!staticEventsBound) { bindStaticEvents(); staticEventsBound = true; render(); }
     app.setAttribute('aria-busy', 'false');
     void initializePersistentState(JSON.stringify(ui.syncedState)).then(syncObjectsState).catch(() => {
-      markSaving('error'); showToast('Could not prepare sync');
+      showToast('Could not prepare sync');
     });
   } catch (error) {
     content.innerHTML = `<div class="empty-state">${icon('cloud')}<h2>Objects could not start</h2><p>${esc(error.message)}. Refresh this page and try again.</p></div>`;
@@ -954,7 +995,15 @@ function bindStaticEvents() {
   sidebar.addEventListener('dragend', () => { ui.draggedList = null; $$('.nav-item.drop-target', sidebar).forEach((item) => item.classList.remove('drop-target')); });
 
   content.addEventListener('click', handleContentClick);
-  content.addEventListener('input', (event) => { if (event.target.matches('.quick-add-input')) updateQuickDraft(event.target); });
+  content.addEventListener('input', (event) => { if (event.target.matches('.quick-add-input')) updateInlineTask(event.target); });
+  content.addEventListener('focusout', (event) => {
+    const input = event.target.closest('.quick-add-input');
+    if (!input) return;
+    setTimeout(() => {
+      if (input.dataset.inlineFinalized || document.activeElement === input) return;
+      finalizeInlineTask(input, { renderAfter: !document.activeElement?.matches('.quick-add-input') });
+    }, 0);
+  });
   content.addEventListener('keydown', handleContentKeydown);
   content.addEventListener('dragstart', handleDragStart);
   content.addEventListener('dragover', handleDragOver);
@@ -1234,7 +1283,8 @@ function syncSidebarAccessibility() {
 }
 
 function setView(type, id = null) {
-  commitQuickDraft();
+  const inlineInput = $('.quick-add-input[data-inline-task-id]', content);
+  if (inlineInput) finalizeInlineTask(inlineInput, { renderAfter: false });
   ui.view = { type, id };
   ui.selectedTaskId = null;
   clearTaskSelection(false);
@@ -1739,38 +1789,52 @@ function openBulkTagsModal(tasks) {
 }
 
 function canQuickAdd() { return !['logbook', 'trash', 'upcoming', 'repeating', 'allProjects', 'loggedProjects'].includes(ui.view.type) && !(ui.view.type === 'project' && projectById(ui.view.id)?.status !== 'open'); }
-function draftMatchesView(draft, sectionKey) {
-  return draft && draft.viewType === ui.view.type && (draft.viewId || null) === (ui.view.id || null) && draft.sectionKey === sectionKey;
-}
 function renderQuickAdd(key, label = 'this list') {
-  const draft = draftMatchesView(ui.quickDraft, key) ? ui.quickDraft : null;
-  return `<button class="section-add" type="button" data-section-add="${esc(key)}" aria-label="New to-do in ${esc(label)}" ${draft ? 'hidden' : ''}>${icon('plus')}<span>New to-do</span></button><div class="quick-add-row" ${draft ? '' : 'hidden'} data-quick-add="${esc(key)}"><span class="quick-add-dot"></span><input class="quick-add-input" type="text" value="${esc(draft?.value || '')}" placeholder="Type a to-do…" aria-label="New to-do title in ${esc(label)}"><span class="draft-status" aria-live="polite">${draft ? 'Draft saved' : ''}</span></div>`;
+  return `<button class="section-add" type="button" data-section-add="${esc(key)}" aria-label="New to-do in ${esc(label)}">${icon('plus')}<span>New to-do</span></button><div class="quick-add-row" hidden data-quick-add="${esc(key)}"><span class="quick-add-dot"></span><input class="quick-add-input" type="text" placeholder="Type a to-do…" aria-label="New to-do title in ${esc(label)}"></div>`;
 }
 
-function updateQuickDraft(input) {
-  const value = input.value;
+function updateInlineTask(input) {
+  let task = ui.state.tasks.find((item) => item.id === input.dataset.inlineTaskId);
+  if (!task && !input.value.trim()) return;
   const sectionKey = input.closest('[data-quick-add]')?.dataset.quickAdd || 'empty';
-  ui.quickDraft = value.trim() ? { value, sectionKey, viewType: ui.view.type, viewId: ui.view.id || null, updatedAt: new Date().toISOString() } : null;
-  ui.state.settings.quickDraft = ui.quickDraft;
-  writeLocalQuickDraft(ui.quickDraft);
-  const status = $('.draft-status', input.closest('.quick-add-row'));
-  if (status) status.textContent = value.trim() ? 'Saving draft…' : '';
+  if (!task) {
+    task = createTaskFromParsed({ title: input.value, bucket: null, scheduledFor: null, evening: false, reminderAt: null, deadline: null, tags: [] }, { sectionKey, view: { ...ui.view }, select: false, render: false });
+    input.dataset.inlineTaskId = task.id;
+  } else task.title = input.value;
+  rememberPendingTask(task);
   scheduleSave(false);
-  if (status && value.trim()) setTimeout(() => { if (status.isConnected) status.textContent = 'Draft saved'; }, 500);
 }
 
-function clearQuickDraft() {
-  ui.quickDraft = null;
-  ui.state.settings.quickDraft = null;
-  writeLocalQuickDraft(null);
+function applyParsedTaskTitle(task, value) {
+  const parsed = parseNaturalTask(value);
+  task.title = parsed.title;
+  if (parsed.tags?.length) task.tags = registerTags([...(task.tags || []), ...parsed.tags]);
+  if (parsed.bucket) task.bucket = parsed.bucket;
+  if (parsed.scheduledFor) task.scheduledFor = parsed.scheduledFor;
+  if (parsed.evening) task.evening = true;
+  if (parsed.reminderAt) task.reminderAt = parsed.reminderAt;
+  if (parsed.deadline) task.deadline = parsed.deadline;
 }
 
-function commitQuickDraft() {
-  const draft = ui.quickDraft;
-  if (!draft?.value?.trim()) return null;
-  clearQuickDraft();
-  const parsed = parseNaturalTask(draft.value);
-  return createTaskFromParsed(parsed, { sectionKey: draft.sectionKey, view: { type: draft.viewType, id: draft.viewId }, select: false, render: false });
+function finalizeInlineTask(input, { renderAfter = true, cancel = false } = {}) {
+  if (!input || input.dataset.inlineFinalized) return null;
+  input.dataset.inlineFinalized = 'true';
+  const taskId = input.dataset.inlineTaskId;
+  const task = ui.state.tasks.find((item) => item.id === taskId);
+  if (task && (cancel || !input.value.trim())) {
+    ui.state.tasks = ui.state.tasks.filter((item) => item.id !== task.id);
+    if (ui.syncedState?.tasks?.some((item) => item.id === task.id)) rememberPendingDeletion(task.id);
+    else { ui.pendingEntry = null; writePendingEntry(null); }
+  } else if (task) {
+    applyParsedTaskTitle(task, input.value);
+    rememberPendingTask(task);
+  }
+  scheduleSave(false);
+  if (renderAfter) {
+    renderSidebar(); renderContent();
+    if (task && !cancel && input.value.trim()) setTimeout(() => $(`[data-task-id="${task.id}"] .task-main`, content)?.focus(), 20);
+  }
+  return task;
 }
 
 function repeatLabel(repeat) {
@@ -1893,16 +1957,11 @@ function handleContentKeydown(event) {
   }
   if (!event.target.matches('.quick-add-input')) return;
   if (event.key === 'Enter' && event.target.value.trim()) {
-    clearQuickDraft();
-    createTask(event.target.value.trim(), event.target.closest('[data-quick-add]')?.dataset.quickAdd);
+    event.preventDefault();
+    finalizeInlineTask(event.target);
   } else if (event.key === 'Escape') {
-    const row = event.target.closest('.quick-add-row');
-    row.hidden = true;
-    const button = row.closest('.section')?.querySelector('.section-add');
-    if (button) button.hidden = false;
-    event.target.value = '';
-    clearQuickDraft();
-    scheduleSave(false);
+    event.preventDefault();
+    finalizeInlineTask(event.target, { cancel: true });
   }
 }
 
@@ -2063,17 +2122,20 @@ function beginQuickAdd(fromMagicButton = false) {
 
 function openQuickAdd(row) {
   if (!row) return;
+  const sectionKey = row.dataset.quickAdd;
+  const existing = $('.quick-add-row:not([hidden]) .quick-add-input', content);
+  if (existing && existing !== $('.quick-add-input', row)) {
+    finalizeInlineTask(existing, { renderAfter: false });
+    renderContent();
+    row = $$('[data-quick-add]', content).find((candidate) => candidate.dataset.quickAdd === sectionKey);
+    if (!row) return;
+  }
   row.hidden = false;
   const button = row.closest('.section')?.querySelector('.section-add');
   if (button) button.hidden = true;
   const input = $('.quick-add-input', row);
   input.focus(); input.select();
   row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-}
-
-function createTask(title, sectionKey = null) {
-  const parsed = parseNaturalTask(title);
-  createTaskFromParsed(parsed, { sectionKey });
 }
 
 function createTaskFromParsed(parsed, options = {}) {
@@ -2237,7 +2299,7 @@ function renderInspector(force = false) {
   const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => !h.archived && (task.projectId ? h.projectId === task.projectId : h.areaId === task.areaId && !h.projectId)).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
   const repeat = task.repeat;
   inspector.innerHTML = `<div class="inspector-scroll" data-task-id="${esc(task.id)}">
-    <div class="inspector-top"><span class="inspector-status"><i class="sync-state" id="sync-state"></i>${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><button class="icon-button" data-inspector-action="close" aria-label="Close details">${icon('x')}</button></div>
+    <div class="inspector-top"><span class="inspector-status">${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><button class="icon-button" data-inspector-action="close" aria-label="Close details">${icon('x')}</button></div>
     <textarea id="inspector-title" class="inspector-title" data-field="title" rows="2" placeholder="To-do title">${esc(task.title)}</textarea>
     ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)">${esc(task.notes)}</textarea>`}
     <div class="note-tools"><button class="markdown-toggle" data-inspector-action="markdown">${ui.markdownPreview ? 'Edit notes' : 'Preview Markdown'}</button><button class="markdown-toggle" data-inspector-action="find-text">Find in notes</button></div>
@@ -2384,7 +2446,6 @@ function handleInspectorInput(event) {
     const item = task.checklist.find((check) => check.id === checkRow.dataset.checkId);
     if (item) item.title = event.target.value;
   }
-  markSaving();
   scheduleSave(false);
   if (field === 'title') {
     const rowTitle = $(`[data-task-id="${task.id}"] .task-title`, content);
@@ -3241,13 +3302,7 @@ function handleGlobalKeydown(event) {
   }
 }
 
-function markSaving(state = 'saving') {
-  const dot = $('#sync-state');
-  if (dot) dot.className = `sync-state ${state}`;
-}
-
 function scheduleSave(renderAfter = false) {
-  markSaving();
   ui.renderAfterSave ||= renderAfter;
   clearTimeout(ui.saveTimer);
   ui.saveTimer = setTimeout(flushSave, 350);
@@ -3258,19 +3313,26 @@ async function flushSave() {
   if (ui.saveInFlight) { ui.saveQueued = true; return; }
   const changes = buildChangeSet();
   if (!changes) {
-    markSaving('');
     if (ui.renderAfterSave) { ui.renderAfterSave = false; render(); }
     return;
   }
   ui.saveInFlight = true;
   ui.saveQueued = false;
+  const pendingSnapshot = ui.pendingEntry ? cloneData(ui.pendingEntry) : null;
   ui.ownMutationIds.add(changes.mutationId);
   try {
     const serializedAck = await persistChanges(JSON.stringify(changes));
     acknowledgeChanges(changes, serializedAck);
+    if (pendingSnapshot && ui.pendingEntry?.revision === pendingSnapshot.revision) {
+      const taskChanged = (changes.entities?.tasks || []).some((change) => change.id === pendingSnapshot.task.id);
+      const taskDeleted = (changes.deletes?.tasks || []).includes(pendingSnapshot.task.id);
+      if (taskChanged || taskDeleted) {
+        ui.pendingEntry = null;
+        writePendingEntry(null);
+      }
+    }
   } catch (error) {
     ui.ownMutationIds.delete(changes.mutationId);
-    markSaving('error');
     showToast('Could not save changes');
   } finally {
     ui.saveInFlight = false;
@@ -3278,7 +3340,6 @@ async function flushSave() {
       clearTimeout(ui.saveTimer);
       ui.saveTimer = setTimeout(flushSave, 0);
     } else {
-      markSaving('');
       if (ui.renderAfterSave) { ui.renderAfterSave = false; render(); }
     }
   }
