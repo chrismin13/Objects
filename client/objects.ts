@@ -1040,16 +1040,16 @@ function openContextMenu(target, x, y) {
     kind = 'task'; id = taskRow.dataset.taskId;
     const task = ui.state.tasks.find((item) => item.id === id);
     if (!task) return;
-    items = menuButton('open', 'Open details') + (task.status === 'open' ? menuButton('today', 'Move to Today') + menuButton('someday', 'Move to Someday') + menuButton('move', 'Move…') + menuButton('complete', 'Complete') : menuButton('restore-task', 'Restore')) + menuButton('duplicate-task', 'Duplicate') + menuButton('trash-task', 'Move to Trash', true);
+    items = (task.status === 'open' ? menuButton('today', 'Move to Today') + menuButton('someday', 'Move to Someday') + menuButton('move', 'Move…') + menuButton('complete', 'Complete') : menuButton('restore-task', 'Restore')) + menuButton('duplicate-task', 'Duplicate') + menuButton('trash-task', 'Move to Trash', true);
   } else if (headingRow) {
     kind = 'heading'; id = headingRow.dataset.headingId;
     items = menuButton('edit-heading', 'Edit heading') + menuButton('new-heading-task', 'New to-do here') + menuButton('delete-heading', 'Delete heading', true);
   } else if (projectCard || list?.dataset.listKind === 'project') {
     kind = 'project'; id = projectCard?.dataset.projectCard || list.dataset.id;
-    items = menuButton('open-project', 'Open project') + menuButton('new-project-task', 'New to-do') + menuButton('edit-project', 'Project options…');
+    items = menuButton('new-project-task', 'New to-do') + menuButton('edit-project', 'Project options…');
   } else if (list?.dataset.listKind === 'area') {
     kind = 'area'; id = list.dataset.id;
-    items = menuButton('open-area', 'Open area') + menuButton('new-area-task', 'New standalone to-do') + menuButton('new-area-project', 'New project') + menuButton('new-area-heading', 'New heading') + menuButton('edit-area', 'Area options…');
+    items = menuButton('new-area-task', 'New standalone to-do') + menuButton('new-area-project', 'New project') + menuButton('new-area-heading', 'New heading') + menuButton('edit-area', 'Area options…');
   }
   if (!items) return;
   menu.dataset.kind = kind; menu.dataset.id = id; menu.innerHTML = items; menu.hidden = false;
@@ -1075,7 +1075,6 @@ function handleContextMenuClick(event) {
   if (kind === 'task') {
     const task = ui.state.tasks.find((item) => item.id === id);
     if (!task) return;
-    if (action === 'open') selectTask(id);
     if (action === 'today' || action === 'someday') { moveReminderToDate(task, action === 'today' ? localDay() : null); task.bucket = action; task.scheduledFor = action === 'today' ? localDay() : null; task.evening = false; scheduleSave(); render(); }
     if (action === 'move') openMoveTaskModal(task);
     if (action === 'complete') toggleTask(id);
@@ -1092,12 +1091,10 @@ function handleContextMenuClick(event) {
     if (action === 'delete-heading') deleteHeading(id);
   }
   if (kind === 'project') {
-    if (action === 'open-project') setView('project', id);
     if (action === 'edit-project') openProjectModal(id);
     if (action === 'new-project-task') { setView('project', id); setTimeout(() => beginQuickAdd(), 0); }
   }
   if (kind === 'area') {
-    if (action === 'open-area') setView('area', id);
     if (action === 'edit-area') openAreaModal(id);
     if (action === 'new-area-project') openNewListModal({ type: 'project', areaId: id });
     if (action === 'new-area-heading') { setView('area', id); openHeadingModal(); }
