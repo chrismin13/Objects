@@ -1,4 +1,48 @@
 export const featureStyles = `
+.quick-add-row { grid-template-columns: 26px minmax(0, 1fr) auto; }
+.draft-status { color: var(--faint); font-size: 10px; white-space: nowrap; }
+.meta-item.past-date { color: var(--muted); }
+.checklist-item { grid-template-columns: 34px 18px minmax(0, 1fr) 24px; }
+.checklist-reorder { display: grid; grid-template-columns: 1fr 1fr; opacity: .35; }
+.checklist-item:hover .checklist-reorder,
+.checklist-item:focus-within .checklist-reorder { opacity: 1; }
+.checklist-reorder button {
+  width: 17px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.checklist-reorder button:disabled { opacity: .2; cursor: default; }
+.context-menu {
+  position: fixed;
+  z-index: 260;
+  width: min(220px, calc(100vw - 16px));
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+}
+.context-menu[hidden] { display: none; }
+.context-menu button {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.context-menu button:hover,
+.context-menu button:focus-visible { outline: 0; background: var(--surface-subtle); }
+.context-menu button.danger { color: var(--red); }
 .task-row { grid-template-columns: 26px minmax(0, 1fr) 28px 16px; }
 .task-row.bulk-selected { background: var(--blue-soft); }
 .task-select {
@@ -148,6 +192,10 @@ export const featureStyles = `
 }
 
 @media (max-width: 820px) {
+  .checklist-item { grid-template-columns: 44px 24px minmax(0, 1fr) 44px; }
+  .checklist-reorder { opacity: 1; }
+  .checklist-reorder button { width: 22px; height: 44px; font-size: 15px; }
+  .draft-status { display: none; }
   .task-row { grid-template-columns: 32px minmax(0, 1fr) 44px 16px; }
   .task-select { width: 44px; height: 44px; margin: -8px 0; opacity: 1; }
   .selection-toolbar {

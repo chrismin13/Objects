@@ -201,6 +201,7 @@ const ui = {
   noteFindIndex: 0,
   draggingMagicAdd: false,
   suppressClickUntil: 0,
+  quickDraft: null,
 };
 
 let app;
@@ -216,12 +217,39 @@ let logbookTimer = null;
 let modalReturnFocus = null;
 let sidebarGesture = null;
 let taskGesture = null;
+let contextPress = null;
+
+function draftStorageKey() {
+  return `objects-quick-draft:${ui.user?.userId || ui.user?.displayName || 'guest'}`;
+}
+
+function readLocalQuickDraft() {
+  try {
+    const value = JSON.parse(localStorage.getItem(draftStorageKey()) || 'null');
+    return value && typeof value.value === 'string' && value.value.trim() ? value : null;
+  } catch (_) { return null; }
+}
+
+function writeLocalQuickDraft(draft) {
+  try {
+    if (draft?.value?.trim()) localStorage.setItem(draftStorageKey(), JSON.stringify(draft));
+    else localStorage.removeItem(draftStorageKey());
+  } catch (_) {}
+}
 
 export function mountObjects(serializedState, options) {
   app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
   persistChanges = options.saveChanges; initializePersistentState = options.initializeState; performSignOut = options.signOut; ui.user = options.user;
   try {
     ui.state = JSON.parse(serializedState); normalizeState();
+    const localDraft = readLocalQuickDraft();
+    const remoteDraft = ui.state.settings.quickDraft;
+    ui.quickDraft = localDraft && (!remoteDraft?.updatedAt || localDraft.updatedAt > remoteDraft.updatedAt) ? localDraft : remoteDraft || null;
+    if (ui.quickDraft?.value?.trim()) {
+      ui.state.settings.quickDraft = ui.quickDraft;
+      ui.view = { type: ui.quickDraft.viewType || 'inbox', id: ui.quickDraft.viewId || null };
+      writeLocalQuickDraft(ui.quickDraft);
+    }
     ui.syncedState = cloneData(ui.state);
     const logged = applyLogbookPolicy();
     materializeRecurringTasks(); applyTheme(); render(); handleCaptureUrl(); startReminderChecks(); startLogbookChecks();
@@ -269,6 +297,7 @@ function normalizeState() {
   ui.state.settings.notifications ??= false;
   ui.state.settings.weekStartsOn ??= 1;
   ui.state.settings.showCalendar ??= true;
+  if (ui.state.settings.quickDraft && typeof ui.state.settings.quickDraft.value !== 'string') ui.state.settings.quickDraft = null;
   if (!['immediately', 'daily', 'manually'].includes(ui.state.settings.logCompletedItems)) ui.state.settings.logCompletedItems = 'daily';
   ui.state.areas ||= [];
   ui.state.projects ||= [];
@@ -301,6 +330,12 @@ function normalizeState() {
     if (['completed', 'canceled'].includes(project.status) && project.loggedAt === undefined) project.loggedAt = project.completedAt || new Date().toISOString();
     if (!['completed', 'canceled'].includes(project.status)) project.loggedAt = null;
     project.order ??= index;
+  });
+  ui.state.headings.forEach((heading, index) => {
+    heading.projectId ||= null;
+    heading.areaId ||= null;
+    heading.archived ??= false;
+    heading.order ??= index;
   });
   ui.state.areas.forEach((area) => { area.tags ||= []; });
   const discoveredTags = [...(ui.state.settings.tags || []), ...ui.state.areas.flatMap((area) => area.tags), ...ui.state.projects.flatMap((project) => project.tags), ...ui.state.tasks.flatMap((task) => task.tags)];
@@ -784,7 +819,7 @@ function handleCaptureUrl() {
   else if (params.get('query')) {
     const result = searchItems(params.get('query')).find((item) => ['view', 'heading'].includes(item.kind));
     if (result?.kind === 'view') setView(result.type, result.id || null);
-    else if (result?.kind === 'heading') setView('project', result.projectId);
+    else if (result?.kind === 'heading') setView(result.projectId ? 'project' : 'area', result.projectId || result.areaId);
   }
   const requestedFilters = cleanTagList((params.get('filter') || '').split(','));
   if (requestedFilters.length && ui.view.type !== 'tag') {
@@ -801,8 +836,8 @@ function handleCaptureUrl() {
     const task = createTaskFromParsed(parsed, { notes, projectId: project?.id || null, useCurrentView: false });
     if (area && !project) { task.areaId = area.id; task.bucket = 'anytime'; }
     const headingName = params.get('heading');
-    const heading = headingName && ui.state.headings.find((item) => !item.archived && (item.id === headingName || item.title.toLocaleLowerCase() === headingName.toLocaleLowerCase()) && (!project || item.projectId === project.id));
-    if (heading) { const parent = projectById(heading.projectId); task.headingId = heading.id; task.projectId = heading.projectId; task.areaId = parent?.areaId || null; task.bucket = task.bucket === 'inbox' ? 'anytime' : task.bucket; }
+    const heading = headingName && ui.state.headings.find((item) => !item.archived && (item.id === headingName || item.title.toLocaleLowerCase() === headingName.toLocaleLowerCase()) && (!project || item.projectId === project.id) && (!area || item.areaId === area.id || item.projectId === project?.id));
+    if (heading) { const parent = projectById(heading.projectId); task.headingId = heading.id; task.projectId = heading.projectId || null; task.areaId = parent?.areaId || heading.areaId || null; task.bucket = task.bucket === 'inbox' ? 'anytime' : task.bucket; }
     const when = params.get('when');
     if (when) {
       if (when.toLowerCase() === 'someday') { task.bucket = 'someday'; task.scheduledFor = null; }
@@ -919,6 +954,7 @@ function bindStaticEvents() {
   sidebar.addEventListener('dragend', () => { ui.draggedList = null; $$('.nav-item.drop-target', sidebar).forEach((item) => item.classList.remove('drop-target')); });
 
   content.addEventListener('click', handleContentClick);
+  content.addEventListener('input', (event) => { if (event.target.matches('.quick-add-input')) updateQuickDraft(event.target); });
   content.addEventListener('keydown', handleContentKeydown);
   content.addEventListener('dragstart', handleDragStart);
   content.addEventListener('dragover', handleDragOver);
@@ -936,6 +972,12 @@ function bindStaticEvents() {
   inspector.addEventListener('dragover', handleChecklistDragOver);
   inspector.addEventListener('drop', handleChecklistDrop);
   document.addEventListener('keydown', handleGlobalKeydown);
+  document.addEventListener('contextmenu', handleContextMenu);
+  document.addEventListener('pointerdown', handleContextPressStart, { passive: true });
+  document.addEventListener('pointermove', handleContextPressMove, { passive: true });
+  document.addEventListener('pointerup', handleContextPressEnd, { passive: true });
+  document.addEventListener('pointercancel', handleContextPressEnd, { passive: true });
+  document.addEventListener('click', handleContextMenuClick);
   window.addEventListener('objects:pwa-status', (event) => {
     if (event.detail?.updateAvailable && !ui.pwaUpdateNotified) {
       ui.pwaUpdateNotified = true;
@@ -945,6 +987,122 @@ function bindStaticEvents() {
   window.addEventListener('online', () => showToast('Back online'));
   window.addEventListener('offline', () => showToast('You are offline; changes will sync after reconnecting'));
   syncSidebarAccessibility();
+}
+
+function contextTarget(element) {
+  return element?.closest?.('[data-task-id], [data-project-card], [data-list-kind], [data-heading-id]') || null;
+}
+
+function handleContextMenu(event) {
+  const target = contextTarget(event.target);
+  if (!target || event.target.closest('input, textarea, select')) return;
+  event.preventDefault();
+  openContextMenu(target, event.clientX, event.clientY);
+}
+
+function handleContextPressStart(event) {
+  if (event.pointerType === 'mouse' || !event.isPrimary || event.target.closest('button, input, textarea, select, a')) return;
+  const target = contextTarget(event.target);
+  if (!target) return;
+  contextPress = { pointerId: event.pointerId, target, x: event.clientX, y: event.clientY, timer: setTimeout(() => {
+    ui.suppressClickUntil = Date.now() + 500;
+    if (navigator.vibrate) navigator.vibrate(12);
+    openContextMenu(target, event.clientX, event.clientY);
+    contextPress = null;
+  }, 560) };
+}
+
+function handleContextPressMove(event) {
+  if (!contextPress || event.pointerId !== contextPress.pointerId) return;
+  if (Math.hypot(event.clientX - contextPress.x, event.clientY - contextPress.y) > 9) handleContextPressEnd(event);
+}
+
+function handleContextPressEnd(event) {
+  if (!contextPress || event.pointerId !== contextPress.pointerId) return;
+  clearTimeout(contextPress.timer);
+  contextPress = null;
+}
+
+function menuButton(action, label, danger = false) {
+  return `<button type="button" role="menuitem" data-context-action="${action}" class="${danger ? 'danger' : ''}">${esc(label)}</button>`;
+}
+
+function openContextMenu(target, x, y) {
+  const menu = $('#context-menu');
+  let kind = '';
+  let id = '';
+  let items = '';
+  const taskRow = target.closest('[data-task-id]');
+  const headingRow = target.closest('[data-heading-id]');
+  const list = target.closest('[data-list-kind]');
+  const projectCard = target.closest('[data-project-card]');
+  if (taskRow) {
+    kind = 'task'; id = taskRow.dataset.taskId;
+    const task = ui.state.tasks.find((item) => item.id === id);
+    if (!task) return;
+    items = menuButton('open', 'Open details') + (task.status === 'open' ? menuButton('today', 'Move to Today') + menuButton('someday', 'Move to Someday') + menuButton('move', 'Move…') + menuButton('complete', 'Complete') : menuButton('restore-task', 'Restore')) + menuButton('duplicate-task', 'Duplicate') + menuButton('trash-task', 'Move to Trash', true);
+  } else if (headingRow) {
+    kind = 'heading'; id = headingRow.dataset.headingId;
+    items = menuButton('edit-heading', 'Edit heading') + menuButton('new-heading-task', 'New to-do here') + menuButton('delete-heading', 'Delete heading', true);
+  } else if (projectCard || list?.dataset.listKind === 'project') {
+    kind = 'project'; id = projectCard?.dataset.projectCard || list.dataset.id;
+    items = menuButton('open-project', 'Open project') + menuButton('new-project-task', 'New to-do') + menuButton('edit-project', 'Project options…');
+  } else if (list?.dataset.listKind === 'area') {
+    kind = 'area'; id = list.dataset.id;
+    items = menuButton('open-area', 'Open area') + menuButton('new-area-task', 'New standalone to-do') + menuButton('new-area-project', 'New project') + menuButton('new-area-heading', 'New heading') + menuButton('edit-area', 'Area options…');
+  }
+  if (!items) return;
+  menu.dataset.kind = kind; menu.dataset.id = id; menu.innerHTML = items; menu.hidden = false;
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+  menu.querySelector('button')?.focus();
+}
+
+function closeContextMenu() {
+  const menu = $('#context-menu');
+  if (!menu) return;
+  menu.hidden = true; menu.innerHTML = '';
+}
+
+function handleContextMenuClick(event) {
+  const button = event.target.closest('[data-context-action]');
+  const menu = $('#context-menu');
+  if (!button) { if (!event.target.closest('#context-menu')) closeContextMenu(); return; }
+  const { kind, id } = menu.dataset;
+  const action = button.dataset.contextAction;
+  closeContextMenu();
+  if (kind === 'task') {
+    const task = ui.state.tasks.find((item) => item.id === id);
+    if (!task) return;
+    if (action === 'open') selectTask(id);
+    if (action === 'today' || action === 'someday') { moveReminderToDate(task, action === 'today' ? localDay() : null); task.bucket = action; task.scheduledFor = action === 'today' ? localDay() : null; task.evening = false; scheduleSave(); render(); }
+    if (action === 'move') openMoveTaskModal(task);
+    if (action === 'complete') toggleTask(id);
+    if (action === 'restore-task') { task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.trashedAt = null; scheduleSave(); render(); }
+    if (action === 'duplicate-task') { const copy = { ...task, id: uid('task'), title: `${task.title} copy`, status: 'open', completedAt: null, loggedAt: null, trashedAt: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); scheduleSave(); render(); }
+    if (action === 'trash-task') { task.previousStatus = task.status; task.status = 'trashed'; task.trashedAt = new Date().toISOString(); task.loggedAt = null; scheduleSave(); render(); }
+  }
+  if (kind === 'heading') {
+    if (action === 'edit-heading') openHeadingModal(id);
+    if (action === 'new-heading-task') {
+      const heading = ui.state.headings.find((item) => item.id === id);
+      if (heading) { setView(heading.projectId ? 'project' : 'area', heading.projectId || heading.areaId); setTimeout(() => openQuickAdd($(`[data-quick-add="${id}"]`, content)), 0); }
+    }
+    if (action === 'delete-heading') deleteHeading(id);
+  }
+  if (kind === 'project') {
+    if (action === 'open-project') setView('project', id);
+    if (action === 'edit-project') openProjectModal(id);
+    if (action === 'new-project-task') { setView('project', id); setTimeout(() => beginQuickAdd(), 0); }
+  }
+  if (kind === 'area') {
+    if (action === 'open-area') setView('area', id);
+    if (action === 'edit-area') openAreaModal(id);
+    if (action === 'new-area-project') openNewListModal({ type: 'project', areaId: id });
+    if (action === 'new-area-heading') { setView('area', id); openHeadingModal(); }
+    if (action === 'new-area-task') { setView('area', id); setTimeout(() => beginQuickAdd(), 0); }
+  }
 }
 
 function applyTheme() {
@@ -1079,6 +1237,7 @@ function syncSidebarAccessibility() {
 }
 
 function setView(type, id = null) {
+  commitQuickDraft();
   ui.view = { type, id };
   ui.selectedTaskId = null;
   clearTaskSelection(false);
@@ -1088,6 +1247,14 @@ function setView(type, id = null) {
   closeSidebar();
   render();
   content.scrollTop = 0;
+}
+
+function headingBelongsTo(heading, type, id) {
+  return type === 'project' ? heading.projectId === id : type === 'area' ? heading.areaId === id && !heading.projectId : false;
+}
+
+function headingsFor(type, id, includeArchived = false) {
+  return ui.state.headings.filter((heading) => headingBelongsTo(heading, type, id) && (includeArchived || !heading.archived));
 }
 
 function projectAllowsTask(task) {
@@ -1237,7 +1404,7 @@ function renderContent() {
     if (ui.view.type === 'repeating') return (a.repeat?.nextDate || '').localeCompare(b.repeat?.nextDate || '');
     return a.order - b.order;
   });
-  const headerActions = `${ui.view.type === 'today' ? `<button class="icon-button" data-action="toggle-group" aria-label="Group Today by list">${icon('layers')}</button>` : ''}${ui.view.type === 'trash' && (view.tasks.length || view.projects.length) ? `<button class="button" data-action="empty-trash">Empty Trash</button>` : ''}${ui.view.type === 'project' ? `${view.project?.status === 'open' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button>` : ''}<button class="icon-button" data-action="project-menu" aria-label="Project options">${icon('more')}</button>` : ''}${ui.view.type === 'area' ? `<button class="icon-button" data-action="area-menu" aria-label="Area options">${icon('more')}</button>` : ''}`;
+  const headerActions = `${ui.view.type === 'today' ? `<button class="icon-button" data-action="toggle-group" aria-label="Group Today by list">${icon('layers')}</button>` : ''}${ui.view.type === 'trash' && (view.tasks.length || view.projects.length) ? `<button class="button" data-action="empty-trash">Empty Trash</button>` : ''}${ui.view.type === 'project' ? `${view.project?.status === 'open' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button>` : ''}<button class="icon-button" data-action="project-menu" aria-label="Project options">${icon('more')}</button>` : ''}${ui.view.type === 'area' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button><button class="icon-button" data-action="area-menu" aria-label="Area options">${icon('more')}</button>` : ''}`;
   const deadline = view.deadline ? ` · Deadline ${formatDate(view.deadline, { month: 'short', day: 'numeric' })}` : '';
   const progress = view.project ? projectProgress(view.project.id) : null;
   const sections = buildSections(sorted);
@@ -1282,11 +1449,15 @@ function renderProjectCards(projects) {
 }
 
 function buildSections(tasks) {
-  if (ui.view.type === 'project') {
-    const archivedHeadings = ui.state.headings.filter((item) => item.projectId === ui.view.id && item.archived).sort((a, b) => a.order - b.order);
+  if (['project', 'area'].includes(ui.view.type)) {
+    const viewHeadings = headingsFor(ui.view.type, ui.view.id, true);
+    const archivedHeadings = viewHeadings.filter((item) => item.archived).sort((a, b) => a.order - b.order);
     const archivedIds = new Set(archivedHeadings.map((heading) => heading.id));
-    const groups = groupBy(tasks.filter((task) => !archivedIds.has(task.headingId)), (task) => ui.state.headings.some((heading) => heading.id === task.headingId && !heading.archived) ? task.headingId : 'no-heading');
-    for (const heading of ui.state.headings.filter((item) => item.projectId === ui.view.id && !item.archived)) {
+    const activeHeadings = viewHeadings.filter((item) => !item.archived);
+    const activeIds = new Set(activeHeadings.map((heading) => heading.id));
+    const groups = groupBy(tasks.filter((task) => !archivedIds.has(task.headingId)), (task) => activeIds.has(task.headingId) ? task.headingId : 'no-heading');
+    if (!groups.size) groups.set('no-heading', []);
+    for (const heading of activeHeadings) {
       if (!groups.has(heading.id)) groups.set(heading.id, []);
     }
     const activeSections = [...groups.entries()].sort(([a], [b]) => {
@@ -1300,7 +1471,7 @@ function buildSections(tasks) {
         const rank = (task) => task.bucket === 'someday' ? 2 : task.scheduledFor && task.scheduledFor > today ? 1 : 0;
         return rank(a) - rank(b) || a.order - b.order;
       });
-      return { key, title: heading?.title || (ui.state.headings.some((h) => h.projectId === ui.view.id && !h.archived) ? 'To-dos' : ''), tasks: items, heading };
+      return { key, title: heading?.title || (activeHeadings.length ? 'To-dos' : ''), tasks: items, heading };
     });
     const loggedSections = archivedHeadings.map((heading) => ({
       key: `archived-${heading.id}`,
@@ -1346,10 +1517,6 @@ function buildSections(tasks) {
     }
     return result;
   }
-  if (ui.view.type === 'area') {
-    const groups = groupBy(tasks, (task) => task.projectId || 'Standalone');
-    return [...groups.entries()].map(([key, items]) => ({ key, title: projectById(key)?.title || 'To-dos', tasks: items }));
-  }
   if (['anytime', 'someday'].includes(ui.view.type)) {
     const groups = groupBy(tasks, (task) => task.projectId || task.areaId || 'Standalone');
     const rank = (key) => {
@@ -1390,8 +1557,8 @@ function renderTask(task) {
   else if (area && !['area', 'project'].includes(ui.view.type)) meta.push(`<span class="meta-item">${esc(area.title)}</span>`);
   if (task.deadline) meta.push(`<span class="meta-item deadline">${icon('flag')} ${deadlineLabel(task.deadline)}</span>`);
   if (task.reminderAt) meta.push(`<span class="meta-item reminder">${icon('bell')} ${formatReminderTime(task.reminderAt)}</span>`);
-  if (task.bucket === 'someday' && ui.view.type === 'project') meta.push(`<span class="meta-item">${icon('archive')} Someday</span>`);
-  else if (task.scheduledFor && task.scheduledFor > localDay() && !['upcoming', 'tomorrow'].includes(ui.view.type)) meta.push(`<span class="meta-item">${icon('calendar')} ${formatDate(task.scheduledFor, { month: 'short', day: 'numeric' })}</span>`);
+  if (task.bucket === 'someday' && ['project', 'area'].includes(ui.view.type)) meta.push(`<span class="meta-item">${icon('archive')} Someday</span>`);
+  else if (task.scheduledFor && !['today', 'upcoming', 'tomorrow'].includes(ui.view.type)) meta.push(`<span class="meta-item ${task.scheduledFor < localDay() ? 'past-date' : ''}">${icon('calendar')} ${esc(scheduleDateLabel(task.scheduledFor))}</span>`);
   if (task.repeat) meta.push(`<span class="meta-item">${icon('repeat')} ${repeatLabel(task.repeat)}</span>`);
   if (task.agendaDeadlineOnly) meta.push(`<span class="meta-item deadline">Deadline date</span>`);
   if (task.agendaPreview) meta.push(`<span class="meta-item">Upcoming copy</span>`);
@@ -1575,7 +1742,39 @@ function openBulkTagsModal(tasks) {
 }
 
 function canQuickAdd() { return !['logbook', 'trash', 'upcoming', 'repeating', 'allProjects', 'loggedProjects'].includes(ui.view.type) && !(ui.view.type === 'project' && projectById(ui.view.id)?.status !== 'open'); }
-function renderQuickAdd(key, label = 'this list') { return `<button class="section-add" type="button" data-section-add="${esc(key)}" aria-label="New to-do in ${esc(label)}">${icon('plus')}<span>New to-do</span></button><div class="quick-add-row" hidden data-quick-add="${esc(key)}"><span class="quick-add-dot"></span><input class="quick-add-input" type="text" placeholder="Type a to-do…" aria-label="New to-do title in ${esc(label)}"></div>`; }
+function draftMatchesView(draft, sectionKey) {
+  return draft && draft.viewType === ui.view.type && (draft.viewId || null) === (ui.view.id || null) && draft.sectionKey === sectionKey;
+}
+function renderQuickAdd(key, label = 'this list') {
+  const draft = draftMatchesView(ui.quickDraft, key) ? ui.quickDraft : null;
+  return `<button class="section-add" type="button" data-section-add="${esc(key)}" aria-label="New to-do in ${esc(label)}" ${draft ? 'hidden' : ''}>${icon('plus')}<span>New to-do</span></button><div class="quick-add-row" ${draft ? '' : 'hidden'} data-quick-add="${esc(key)}"><span class="quick-add-dot"></span><input class="quick-add-input" type="text" value="${esc(draft?.value || '')}" placeholder="Type a to-do…" aria-label="New to-do title in ${esc(label)}"><span class="draft-status" aria-live="polite">${draft ? 'Draft saved' : ''}</span></div>`;
+}
+
+function updateQuickDraft(input) {
+  const value = input.value;
+  const sectionKey = input.closest('[data-quick-add]')?.dataset.quickAdd || 'empty';
+  ui.quickDraft = value.trim() ? { value, sectionKey, viewType: ui.view.type, viewId: ui.view.id || null, updatedAt: new Date().toISOString() } : null;
+  ui.state.settings.quickDraft = ui.quickDraft;
+  writeLocalQuickDraft(ui.quickDraft);
+  const status = $('.draft-status', input.closest('.quick-add-row'));
+  if (status) status.textContent = value.trim() ? 'Saving draft…' : '';
+  scheduleSave(false);
+  if (status && value.trim()) setTimeout(() => { if (status.isConnected) status.textContent = 'Draft saved'; }, 500);
+}
+
+function clearQuickDraft() {
+  ui.quickDraft = null;
+  ui.state.settings.quickDraft = null;
+  writeLocalQuickDraft(null);
+}
+
+function commitQuickDraft() {
+  const draft = ui.quickDraft;
+  if (!draft?.value?.trim()) return null;
+  clearQuickDraft();
+  const parsed = parseNaturalTask(draft.value);
+  return createTaskFromParsed(parsed, { sectionKey: draft.sectionKey, view: { type: draft.viewType, id: draft.viewId }, select: false, render: false });
+}
 
 function repeatLabel(repeat) {
   if (!repeat) return '';
@@ -1610,6 +1809,14 @@ function relativeDateLabel(day) {
   if (day === addDays(today, 1)) return 'Tomorrow';
   if (day === addDays(today, 2)) return formatDate(day, { weekday: 'long' });
   return formatDate(day, { weekday: 'long' });
+}
+function scheduleDateLabel(day) {
+  const today = localDay();
+  if (day === today) return 'Today';
+  if (day === addDays(today, -1)) return 'Yesterday';
+  if (day < today) return formatDate(day, { month: 'short', day: 'numeric', year: new Date(`${day}T12:00:00`).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+  if (day === addDays(today, 1)) return 'Tomorrow';
+  return formatDate(day, { month: 'short', day: 'numeric' });
 }
 function deadlineLabel(day) {
   const today = localDay();
@@ -1689,6 +1896,7 @@ function handleContentKeydown(event) {
   }
   if (!event.target.matches('.quick-add-input')) return;
   if (event.key === 'Enter' && event.target.value.trim()) {
+    clearQuickDraft();
     createTask(event.target.value.trim(), event.target.closest('[data-quick-add]')?.dataset.quickAdd);
   } else if (event.key === 'Escape') {
     const row = event.target.closest('.quick-add-row');
@@ -1696,6 +1904,8 @@ function handleContentKeydown(event) {
     const button = row.closest('.section')?.querySelector('.section-add');
     if (button) button.hidden = false;
     event.target.value = '';
+    clearQuickDraft();
+    scheduleSave(false);
   }
 }
 
@@ -1740,13 +1950,13 @@ function handleDrop(event) {
   const sources = draggedTasks();
   const source = sources[0];
   const target = ui.state.tasks.find((task) => task.id === targetRow?.dataset.taskId);
-  if (ui.draggedHeadingId && targetSection && ui.view.type === 'project') {
+  if (ui.draggedHeadingId && targetSection && ['project', 'area'].includes(ui.view.type)) {
     event.preventDefault();
     const heading = ui.state.headings.find((item) => item.id === ui.draggedHeadingId);
     const targetHeading = ui.state.headings.find((item) => item.id === targetSection.dataset.section);
     if (heading && targetHeading && heading.id !== targetHeading.id) {
       heading.order = targetHeading.order + (event.clientY > targetSection.getBoundingClientRect().top + targetSection.getBoundingClientRect().height / 2 ? .5 : -.5);
-      ui.state.headings.filter((item) => item.projectId === heading.projectId && !item.archived).sort((a, b) => a.order - b.order).forEach((item, index) => { item.order = index; });
+      headingsFor(ui.view.type, ui.view.id).sort((a, b) => a.order - b.order).forEach((item, index) => { item.order = index; });
       scheduleSave(); renderContent();
     }
     ui.draggedHeadingId = null; return;
@@ -1769,11 +1979,11 @@ function handleDrop(event) {
     const after = event.clientY > rect.top + rect.height / 2;
     sources.forEach((item, index) => {
       item.order = target.order + (after ? 0.5 : -0.5) + index / 1000;
-      if (ui.view.type === 'project') item.headingId = target.headingId || null;
+      if (['project', 'area'].includes(ui.view.type)) item.headingId = target.headingId || null;
     });
   } else {
     const sectionKey = targetSection.dataset.section;
-    if (ui.view.type === 'project') sources.forEach((item) => { item.headingId = sectionKey === 'no-heading' ? null : sectionKey; });
+    if (['project', 'area'].includes(ui.view.type)) sources.forEach((item) => { item.headingId = sectionKey === 'no-heading' ? null : sectionKey; });
     const sectionTasks = ui.state.tasks.filter((task) => task.headingId === source.headingId && !sources.some((item) => item.id === task.id));
     const startOrder = Math.max(0, ...sectionTasks.map((task) => task.order)) + 1;
     sources.forEach((item, index) => { item.order = startOrder + index; });
@@ -1871,21 +2081,32 @@ function createTask(title, sectionKey = null) {
 
 function createTaskFromParsed(parsed, options = {}) {
   const today = localDay();
+  const targetView = options.view || ui.view;
   const task = {
     id: uid('task'), title: parsed.title, notes: options.notes || '', status: 'open', bucket: 'inbox', scheduledFor: null, evening: false, reminderAt: null, deadline: null,
     projectId: options.projectId || null, headingId: null, areaId: null, tags: registerTags(parsed.tags || []), checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now(),
   };
   if (options.useCurrentView !== false) {
-    if (ui.view.type === 'today') { task.bucket = 'today'; task.scheduledFor = today; }
-    else if (ui.view.type === 'anytime') task.bucket = 'anytime';
-    else if (ui.view.type === 'someday') task.bucket = 'someday';
-    else if (ui.view.type === 'tomorrow') { task.bucket = 'upcoming'; task.scheduledFor = addDays(today, 1); }
-    else if (ui.view.type === 'deadlines') { task.bucket = 'anytime'; task.deadline = today; }
-    else if (ui.view.type === 'tag') { task.bucket = 'anytime'; task.tags = [...new Set([...task.tags, ui.view.id])]; }
-    else if (ui.view.type === 'project') {
-      const project = projectById(ui.view.id);
-      task.bucket = 'anytime'; task.projectId = project.id; task.areaId = project.areaId; task.headingId = options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
-    } else if (ui.view.type === 'area') { task.bucket = 'anytime'; task.areaId = ui.view.id; }
+    if (targetView.type === 'today') {
+      task.bucket = 'today'; task.scheduledFor = today;
+      const parentKey = String(options.sectionKey || '').replace(/^evening-/, '');
+      const project = projectById(parentKey);
+      const area = areaById(parentKey);
+      if (project) { task.projectId = project.id; task.areaId = project.areaId || null; }
+      else if (area) task.areaId = area.id;
+      task.evening = String(options.sectionKey || '').startsWith('evening-');
+    }
+    else if (targetView.type === 'anytime') task.bucket = 'anytime';
+    else if (targetView.type === 'someday') task.bucket = 'someday';
+    else if (targetView.type === 'tomorrow') { task.bucket = 'upcoming'; task.scheduledFor = addDays(today, 1); }
+    else if (targetView.type === 'deadlines') { task.bucket = 'anytime'; task.deadline = today; }
+    else if (targetView.type === 'tag') { task.bucket = 'anytime'; task.tags = [...new Set([...task.tags, targetView.id])]; }
+    else if (targetView.type === 'project') {
+      const project = projectById(targetView.id);
+      task.bucket = 'anytime'; task.projectId = project?.id || null; task.areaId = project?.areaId || null; task.headingId = project && options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
+    } else if (targetView.type === 'area') {
+      task.bucket = 'anytime'; task.areaId = targetView.id; task.headingId = options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
+    }
   }
   if (task.projectId && task.bucket === 'inbox' && options.useCurrentView === false) task.bucket = 'anytime';
   if (task.projectId && !task.areaId) task.areaId = projectById(task.projectId)?.areaId || null;
@@ -1895,12 +2116,14 @@ function createTaskFromParsed(parsed, options = {}) {
   if (parsed.reminderAt) task.reminderAt = parsed.reminderAt;
   if (parsed.deadline) task.deadline = parsed.deadline;
   ui.state.tasks.push(task);
-  ui.selectedTaskId = task.id;
-  ui.markdownPreview = false;
-  app.classList.add('inspector-open');
+  if (options.select !== false) {
+    ui.selectedTaskId = task.id;
+    ui.markdownPreview = false;
+    app.classList.add('inspector-open');
+  }
   scheduleSave();
-  render();
-  setTimeout(() => $('#inspector-title')?.focus(), 30);
+  if (options.render !== false) render();
+  if (options.select !== false) setTimeout(() => $('#inspector-title')?.focus(), 30);
   return task;
 }
 
@@ -2014,7 +2237,7 @@ function renderInspector(force = false) {
   const previousScrollTop = previousPane?.dataset.taskId === task.id ? previousPane.scrollTop : 0;
   const schedule = task.bucket === 'today' ? (task.evening ? 'evening' : 'today') : task.bucket;
   const projectOptions = [`<option value="">No project</option>`, ...ui.state.projects.filter((p) => p.status === 'open').map((p) => `<option value="${p.id}" ${task.projectId === p.id ? 'selected' : ''}>${esc(p.title)}</option>`)].join('');
-  const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => h.projectId === task.projectId && !h.archived).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
+  const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => !h.archived && (task.projectId ? h.projectId === task.projectId : h.areaId === task.areaId && !h.projectId)).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
   const repeat = task.repeat;
   inspector.innerHTML = `<div class="inspector-scroll" data-task-id="${esc(task.id)}">
     <div class="inspector-top"><span class="inspector-status"><i class="sync-state" id="sync-state"></i>${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><button class="icon-button" data-inspector-action="close" aria-label="Close details">${icon('x')}</button></div>
@@ -2026,11 +2249,11 @@ function renderInspector(force = false) {
       ${[['inbox','Inbox'],['today','Today'],['evening','This evening'],['anytime','Anytime'],['someday','Someday']].map(([value, label]) => `<button class="chip ${schedule === value ? 'active' : ''}" data-schedule="${value}">${label}</button>`).join('')}
     </div><div class="detail-row" style="margin-top:9px"><input class="detail-input" type="date" data-field="scheduledFor" value="${task.scheduledFor || ''}" aria-label="Start date"><button class="checklist-add inline-add" type="button" data-inspector-action="clear-date">Clear</button></div></div>` : ''}
     <div class="detail-group"><label class="detail-label" for="task-project">Project</label><select id="task-project" class="detail-select" data-field="projectId">${projectOptions}</select></div>
-    ${task.projectId ? `<div class="detail-group"><label class="detail-label" for="task-heading">Heading</label><select id="task-heading" class="detail-select" data-field="headingId">${headingOptions}</select></div>` : ''}
+    ${task.projectId || task.areaId ? `<div class="detail-group"><label class="detail-label" for="task-heading">Heading</label><select id="task-heading" class="detail-select" data-field="headingId">${headingOptions}</select></div>` : ''}
     <div class="detail-group"><label class="detail-label" for="task-reminder">Reminder</label><input id="task-reminder" class="detail-input" type="datetime-local" data-field="reminderAt" value="${task.reminderAt || ''}"></div>
     <div class="detail-group"><label class="detail-label" for="task-deadline">Deadline</label><input id="task-deadline" class="detail-input" type="date" data-field="deadline" value="${task.deadline || ''}"></div>
     <div class="detail-group"><span class="detail-label">Tags</span>${renderTagPicker(task.tags, 'task')}</div>
-    <div class="detail-group"><span class="detail-label">Checklist</span><div class="checklist">${task.checklist.map((item) => `<div class="checklist-item" data-check-id="${item.id}" draggable="true"><input type="checkbox" data-check-field="done" ${item.done ? 'checked' : ''} ${repeat ? 'disabled' : ''} aria-label="${repeat ? 'Checklist items can be completed on generated copies only' : 'Complete checklist item'}"><input type="text" data-check-field="title" value="${esc(item.title)}" aria-label="Checklist item"><button class="checklist-remove" data-inspector-action="remove-check" aria-label="Remove checklist item">×</button></div>`).join('')}</div>${repeat ? '<p class="detail-help">Complete checklist items on each generated copy. This template controls future copies.</p>' : ''}<button class="checklist-add" data-inspector-action="add-check">+ Add item</button></div>
+    <div class="detail-group"><span class="detail-label">Checklist</span><div class="checklist">${task.checklist.map((item, index) => `<div class="checklist-item" data-check-id="${item.id}" draggable="true"><span class="checklist-reorder"><button type="button" data-inspector-action="move-check-up" aria-label="Move checklist item up" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" data-inspector-action="move-check-down" aria-label="Move checklist item down" ${index === task.checklist.length - 1 ? 'disabled' : ''}>↓</button></span><input type="checkbox" data-check-field="done" ${item.done ? 'checked' : ''} ${repeat ? 'disabled' : ''} aria-label="${repeat ? 'Checklist items can be completed on generated copies only' : 'Complete checklist item'}"><input type="text" data-check-field="title" value="${esc(item.title)}" aria-label="Checklist item"><button class="checklist-remove" data-inspector-action="remove-check" aria-label="Remove checklist item">×</button></div>`).join('')}</div>${repeat ? '<p class="detail-help">Complete checklist items on each generated copy. This template controls future copies.</p>' : ''}<button class="checklist-add" data-inspector-action="add-check">+ Add item</button></div>
     <div class="detail-group"><span class="detail-label">Repeat</span>${repeat ? `<div class="repeat-grid"><select class="detail-select" data-repeat-field="mode"><option value="fixed" ${repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-repeat-field="frequency"><option value="daily" ${repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" max="365" data-repeat-field="interval" value="${repeat.interval || 1}" aria-label="Repeat interval"><input class="detail-input" type="date" data-repeat-field="nextDate" value="${repeat.nextDate || localDay()}" aria-label="Next occurrence"></div>${repeat.frequency === 'weekly' ? `<div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(repeat.weekdays || []).includes(day) ? 'active' : ''}" data-weekday="${day}" aria-label="Repeat on ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}">${label}</button>`).join('')}</div>` : ''}<div class="settings-row"><label for="repeat-paused">Pause schedule</label><input id="repeat-paused" type="checkbox" data-repeat-field="paused" ${repeat.paused ? 'checked' : ''}></div><button class="checklist-add" data-inspector-action="stop-repeat">Stop repeating</button>` : `<button class="checklist-add" data-inspector-action="start-repeat">Make repeating…</button>`}</div>
     <div class="inspector-actions">${!isTrashed(task) ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === 'open' && !task.repeat ? '<button class="button" data-inspector-action="cancel">Cancel to-do</button>' : ''}` : ''}${isTrashed(task) ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}</div>
   </div>`;
@@ -2298,6 +2521,16 @@ function handleInspectorClick(event) {
   if (action === 'start-repeat') { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(true); }
   if (action === 'stop-repeat') { task.repeat = null; scheduleSave(); render(true); }
   if (action === 'add-check') { task.checklist.push({ id: uid('check'), title: '', done: false }); scheduleSave(); renderInspector(true); $$('.checklist-item input[type="text"]', inspector).at(-1)?.focus(); }
+  if (action === 'move-check-up' || action === 'move-check-down') {
+    const id = event.target.closest('[data-check-id]')?.dataset.checkId;
+    const from = task.checklist.findIndex((item) => item.id === id);
+    const to = from + (action === 'move-check-up' ? -1 : 1);
+    if (from >= 0 && to >= 0 && to < task.checklist.length) {
+      const [moved] = task.checklist.splice(from, 1); task.checklist.splice(to, 0, moved);
+      scheduleSave(); renderInspector(true); renderContent();
+      setTimeout(() => $(`[data-check-id="${id}"] [data-inspector-action="${action}"]`, inspector)?.focus(), 20);
+    }
+  }
   if (action === 'remove-check') { const id = event.target.closest('[data-check-id]')?.dataset.checkId; task.checklist = task.checklist.filter((item) => item.id !== id); scheduleSave(); renderInspector(true); renderContent(); }
   if (action === 'clear-date') { moveReminderToDate(task, null); task.bucket = 'anytime'; task.scheduledFor = null; task.evening = false; scheduleSave(); render(true); }
   const weekday = event.target.closest('[data-weekday]');
@@ -2354,7 +2587,10 @@ function openMoveTaskModal(taskOrTasks) {
   const destinations = [
     `<option value="inbox">Inbox</option>`,
     `<option value="anytime">No area or project (Anytime)</option>`,
-    ...ui.state.areas.map((area) => `<option value="area:${area.id}" ${single && task.areaId === area.id && !task.projectId ? 'selected' : ''}>${esc(area.title)} (Area)</option>`),
+    ...ui.state.areas.flatMap((area) => [
+      `<option value="area:${area.id}" ${single && task.areaId === area.id && !task.projectId && !task.headingId ? 'selected' : ''}>${esc(area.title)} (Area)</option>`,
+      ...ui.state.headings.filter((heading) => heading.areaId === area.id && !heading.projectId && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(area.title)} › ${esc(heading.title)}</option>`)
+    ]),
     ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).flatMap((project) => [
       `<option value="project:${project.id}" ${single && task.projectId === project.id && !task.headingId ? 'selected' : ''}>${esc(project.title)} (Project)</option>`,
       ...ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(project.title)} › ${esc(heading.title)}</option>`)
@@ -2388,7 +2624,7 @@ function openMoveTaskModal(taskOrTasks) {
       else if (value === 'anytime') { if (item.bucket === 'inbox') item.bucket = 'anytime'; }
       else if (value.startsWith('area:')) { item.areaId = value.slice(5); if (item.bucket === 'inbox') item.bucket = 'anytime'; }
       else if (value.startsWith('project:')) { const project = projectById(value.slice(8)); item.projectId = project.id; item.areaId = project.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
-      else if (value.startsWith('heading:')) { const heading = ui.state.headings.find((candidate) => candidate.id === value.slice(8)); const project = projectById(heading.projectId); item.headingId = heading.id; item.projectId = project.id; item.areaId = project.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+      else if (value.startsWith('heading:')) { const heading = ui.state.headings.find((candidate) => candidate.id === value.slice(8)); const project = projectById(heading.projectId); item.headingId = heading.id; item.projectId = project?.id || null; item.areaId = project?.areaId || heading.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
     });
     scheduleSave(); closeModal(); clearTaskSelection(); showToast(newTitle ? `Moved to new project “${newTitle}”` : `${tasks.length === 1 ? 'To-do' : `${tasks.length} to-dos`} moved`);
   });
@@ -2417,7 +2653,7 @@ function searchItems(query) {
   ].map(([type,title,iconName]) => ({ kind:'view', type, title, meta:'Special list', icon:iconName }));
   const areas = ui.state.areas.map((area) => ({ kind:'view', type:'area', id:area.id, title:area.title, meta:'Area', icon:'circle' }));
   const projects = ui.state.projects.filter((p) => p.status === 'open' || isCompletedButVisible(p)).map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:areaById(p.areaId)?.title || 'Project', icon:'list' }));
-  const headings = ui.state.headings.filter((h) => !h.archived).map((heading) => ({ kind:'heading', id:heading.id, projectId:heading.projectId, title:heading.title, meta:projectById(heading.projectId)?.title || 'Heading', icon:'heading' }));
+  const headings = ui.state.headings.filter((h) => !h.archived).map((heading) => ({ kind:'heading', id:heading.id, projectId:heading.projectId, areaId:heading.areaId, title:heading.title, meta:projectById(heading.projectId)?.title || areaById(heading.areaId)?.title || 'Heading', icon:'heading' }));
   const tags = [...new Set([...ui.state.tasks.flatMap((task) => effectiveTags(task)), ...ui.state.projects.flatMap((project) => effectiveProjectTags(project)), ...ui.state.areas.flatMap((area) => area.tags || [])])].map((tag) => ({ kind:'view', type:'tag', id:tag, title:tag, meta:'Tag', icon:'tag' }));
   const taskSource = ui.searchEverything ? ui.state.tasks : ui.state.tasks.filter((task) => task.status === 'open' || isCompletedButVisible(task));
   const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:task.repeat ? 'Repeating template' : isLogged(task) ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do', icon:task.repeat ? 'repeat' : 'circle', searchText: ui.searchEverything ? `${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` : `${task.title} ${effectiveTags(task).join(' ')}` }));
@@ -2461,7 +2697,7 @@ function chooseSearchResult(item) {
   closeModal();
   if (item.kind === 'settings') openSettings();
   else if (item.kind === 'view') setView(item.type, item.id || null);
-  else if (item.kind === 'heading') setView('project', item.projectId);
+  else if (item.kind === 'heading') setView(item.projectId ? 'project' : 'area', item.projectId || item.areaId);
   else {
     const task = ui.state.tasks.find((t) => t.id === item.id);
     if (!task) return;
@@ -2502,9 +2738,12 @@ function openNewListModal(defaults = {}) {
 
 function openHeadingModal(headingId = null) {
   const heading = ui.state.headings.find((item) => item.id === headingId);
-  const projectId = heading?.projectId || ui.view.id;
-  const projectOptions = ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).map((project) => `<option value="${project.id}" ${projectId === project.id ? 'selected' : ''}>${esc(project.title)}</option>`).join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="heading-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>${heading ? 'Edit heading' : 'New heading'}</h2><p>Headings divide a project into clear stages or categories.</p><div class="form-field"><label for="heading-title">Name</label><input id="heading-title" required value="${esc(heading?.title || '')}" placeholder="e.g. Preparation"></div>${heading ? `<div class="form-field"><label for="heading-project">Project</label><select id="heading-project">${projectOptions}</select></div><div class="settings-section button-row"><button class="button" type="button" data-heading-action="duplicate">Duplicate with to-dos</button><button class="button" type="button" data-heading-action="convert">Convert to project</button><button class="button" type="button" data-heading-action="archive">Archive</button></div>` : ''}<div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">${heading ? 'Save' : 'Create'}</button></div></form></div>`;
+  const defaultParent = heading?.projectId ? `project:${heading.projectId}` : heading?.areaId ? `area:${heading.areaId}` : `${ui.view.type}:${ui.view.id}`;
+  const parentOptions = [
+    ...ui.state.areas.map((area) => `<option value="area:${area.id}" ${defaultParent === `area:${area.id}` ? 'selected' : ''}>${esc(area.title)} (Area)</option>`),
+    ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).map((project) => `<option value="project:${project.id}" ${defaultParent === `project:${project.id}` ? 'selected' : ''}>${esc(project.title)} (Project)</option>`)
+  ].join('');
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="heading-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>${heading ? 'Edit heading' : 'New heading'}</h2><p>Headings divide an area or project into clear stages or categories.</p><div class="form-field"><label for="heading-title">Name</label><input id="heading-title" required value="${esc(heading?.title || '')}" placeholder="e.g. Preparation"></div><div class="form-field"><label for="heading-parent">Location</label><select id="heading-parent">${parentOptions}</select></div>${heading ? `<div class="settings-section button-row"><button class="button" type="button" data-heading-action="duplicate">Duplicate with to-dos</button><button class="button" type="button" data-heading-action="convert">Convert to project</button><button class="button" type="button" data-heading-action="archive">Archive</button><button class="danger-button" type="button" data-heading-action="delete">${icon('trash')} Delete heading</button></div>` : ''}<div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">${heading ? 'Save' : 'Create'}</button></div></form></div>`;
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -2512,20 +2751,26 @@ function openHeadingModal(headingId = null) {
     event.preventDefault();
     const title = $('#heading-title').value.trim();
     if (!title) return;
+    const [parentType, parentId] = $('#heading-parent').value.split(':');
     if (heading) {
       heading.title = title;
-      const destinationId = $('#heading-project').value;
-      if (destinationId !== heading.projectId) {
-        heading.projectId = destinationId;
-        const destination = projectById(destinationId);
-        ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => { task.projectId = destinationId; task.areaId = destination?.areaId || null; });
+      if (parentId !== (heading.projectId || heading.areaId)) {
+        heading.projectId = parentType === 'project' ? parentId : null;
+        heading.areaId = parentType === 'area' ? parentId : null;
+        const destination = parentType === 'project' ? projectById(parentId) : null;
+        ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => {
+          task.projectId = destination?.id || null;
+          task.areaId = destination?.areaId || (parentType === 'area' ? parentId : null);
+        });
       }
     }
-    else ui.state.headings.push({ id: uid('heading'), projectId, title, archived: false, order: ui.state.headings.filter((item) => item.projectId === projectId).length });
+    else ui.state.headings.push({ id: uid('heading'), projectId: parentType === 'project' ? parentId : null, areaId: parentType === 'area' ? parentId : null, title, archived: false, order: headingsFor(parentType, parentId, true).length });
     scheduleSave(); closeModal(); render();
   });
   $$('[data-heading-action]').forEach((button) => button.addEventListener('click', () => {
-    if (button.dataset.headingAction === 'archive') {
+    if (button.dataset.headingAction === 'delete') {
+      closeModal(); deleteHeading(heading.id); return;
+    } else if (button.dataset.headingAction === 'archive') {
       const unfinished = ui.state.tasks.filter((task) => task.headingId === heading.id && task.status === 'open' && !task.repeat);
       if (unfinished.length) {
         showToast(`Complete or move ${unfinished.length} unfinished to-do${unfinished.length === 1 ? '' : 's'} first`);
@@ -2535,7 +2780,7 @@ function openHeadingModal(headingId = null) {
       showToast('Heading archived');
     } else if (button.dataset.headingAction === 'convert') {
       const sourceProject = projectById(heading.projectId);
-      const project = { id: uid('project'), areaId: sourceProject?.areaId || null, title: heading.title, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
+      const project = { id: uid('project'), areaId: sourceProject?.areaId || heading.areaId || null, title: heading.title, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
       ui.state.projects.push(project);
       ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => { task.projectId = project.id; task.headingId = null; task.areaId = project.areaId; });
       ui.state.headings = ui.state.headings.filter((item) => item.id !== heading.id);
@@ -2549,6 +2794,17 @@ function openHeadingModal(headingId = null) {
     scheduleSave(); closeModal(); render();
   }));
   setTimeout(() => $('#heading-title')?.focus(), 20);
+}
+
+function deleteHeading(headingId) {
+  const heading = ui.state.headings.find((item) => item.id === headingId);
+  if (!heading) return;
+  const taskCount = ui.state.tasks.filter((task) => task.headingId === heading.id).length;
+  confirmAction(`Delete “${heading.title}”?`, `${taskCount ? `${taskCount} to-do${taskCount === 1 ? '' : 's'} will remain in the parent list without a heading. ` : ''}The heading itself will be permanently deleted.`, 'Delete heading', () => {
+    ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => { task.headingId = null; });
+    ui.state.headings = ui.state.headings.filter((item) => item.id !== heading.id);
+    scheduleSave(); render(); showToast('Heading deleted');
+  });
 }
 
 function openProjectModal(projectId) {
@@ -2690,7 +2946,8 @@ function duplicateProject(project) {
 function openAreaModal(areaId) {
   const area = areaById(areaId);
   if (!area) return;
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="area-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Area options</h2><p>Areas represent ongoing responsibilities that do not finish.</p><div class="form-field"><label for="area-title">Name</label><input id="area-title" required value="${esc(area.title)}"></div><div class="form-field"><label for="area-color">Color</label><input id="area-color" type="color" value="${esc(area.color || '#5b7cfa')}"></div><div class="form-field"><label for="area-tags">Tags inherited by its to-dos</label><input id="area-tags" value="${esc((area.tags || []).join(', '))}"></div><div class="settings-section button-row"><button class="danger-button" type="button" data-area-delete>${icon('trash')} Delete area</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
+  const archivedHeadings = headingsFor('area', area.id, true).filter((heading) => heading.archived);
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="area-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Area options</h2><p>Areas represent ongoing responsibilities that do not finish.</p><div class="form-field"><label for="area-title">Name</label><input id="area-title" required value="${esc(area.title)}"></div><div class="form-field"><label for="area-color">Color</label><input id="area-color" type="color" value="${esc(area.color || '#5b7cfa')}"></div><div class="form-field"><label for="area-tags">Tags inherited by its to-dos</label><input id="area-tags" value="${esc((area.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-area-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}<div class="settings-section button-row"><button class="button" type="button" data-area-new-heading>${icon('heading')} New heading</button><button class="danger-button" type="button" data-area-delete>${icon('trash')} Delete area</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -2700,11 +2957,15 @@ function openAreaModal(areaId) {
   areaTagInput.remove();
   bindTagPicker($('#area-form'));
   $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.color = $('#area-color').value; area.tags = selectedPickerTags($('#area-form')); scheduleSave(); closeModal(); render(); });
+  $('[data-area-new-heading]').addEventListener('click', () => { closeModal(); setView('area', area.id); openHeadingModal(); });
+  $$('[data-restore-area-heading]').forEach((button) => button.addEventListener('click', () => { const heading = ui.state.headings.find((item) => item.id === button.dataset.restoreAreaHeading); if (heading) heading.archived = false; scheduleSave(); closeModal(); render(); showToast('Heading restored'); }));
   $('[data-area-delete]').addEventListener('click', () => {
     confirmAction('Delete this area?', 'Its projects and to-dos will be kept.', 'Delete area', () => {
       ui.state.areas = ui.state.areas.filter((item) => item.id !== area.id);
       ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.areaId = null; });
-      ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.areaId = task.projectId ? projectById(task.projectId)?.areaId || null : null; });
+      const headingIds = new Set(headingsFor('area', area.id, true).map((heading) => heading.id));
+      ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.areaId = task.projectId ? projectById(task.projectId)?.areaId || null : null; if (headingIds.has(task.headingId)) task.headingId = null; });
+      ui.state.headings = ui.state.headings.filter((heading) => !headingIds.has(heading.id));
       scheduleSave(); setView('inbox'); showToast('Area deleted; its projects and to-dos were kept');
     });
   });
@@ -2920,7 +3181,8 @@ function handleGlobalKeydown(event) {
     }
   }
   if (event.key === 'Escape') {
-    if ($('#modal-root').children.length) closeModal();
+    if (!$('#context-menu')?.hidden) closeContextMenu();
+    else if ($('#modal-root').children.length) closeModal();
     else if (ui.noteFindOpen) { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(true); }
     else if (ui.selectedTaskIds.size) clearTaskSelection();
     else if (ui.selectedTaskId) closeInspector();

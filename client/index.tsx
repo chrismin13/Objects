@@ -53,6 +53,20 @@ function OfflineScreen() {
   );
 }
 
+function SessionRecoveryScreen() {
+  return (
+    <main className="auth-screen">
+      <section className="auth-card" aria-labelledby="session-title">
+        <BrandMark />
+        <p className="auth-brand">Objects on Lakebed</p>
+        <h1 id="session-title">The session check is taking longer than expected</h1>
+        <p className="auth-copy">Your data is safe. Reconnect the current tab to Lakebed without closing it.</p>
+        <button className="button primary auth-submit" type="button" onClick={() => window.location.reload()}>Retry session</button>
+      </section>
+    </main>
+  );
+}
+
 const OBJECTS_SHELL = `
   <div id="objects-shell" class="app-shell" aria-busy="true">
     <aside id="sidebar" class="sidebar" aria-label="Lists">
@@ -83,6 +97,7 @@ const OBJECTS_SHELL = `
     <div id="sidebar-scrim" class="scrim"></div>
   </div>
   <div id="modal-root"></div>
+  <div id="context-menu" class="context-menu" role="menu" hidden></div>
   <div id="toast-region" class="toast-region" aria-live="polite"></div>`;
 
 class StableObjectsDom extends Component {
@@ -122,7 +137,7 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
     return () => window.clearTimeout(timer);
   }, [ready]);
 
-  if (!ready) return online && !stateTimedOut ? <SignInScreen loading /> : <OfflineScreen />;
+  if (!ready) return !online ? <OfflineScreen /> : stateTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading />;
 
   return <StableObjectsDom />;
 }
@@ -131,6 +146,7 @@ export function App() {
   const auth = useAuth();
   const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [authTimedOut, setAuthTimedOut] = useState(false);
+  const wasAuthenticated = useRef(false);
   const localGuest = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   useEffect(() => {
@@ -153,10 +169,32 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!auth.isLoading) { setAuthTimedOut(false); return; }
+    if (!auth.isLoading) { setAuthTimedOut(false); sessionStorage.removeItem('objects-auth-loading-recovery'); return; }
     const timer = window.setTimeout(() => setAuthTimedOut(true), 4000);
     return () => window.clearTimeout(timer);
   }, [auth.isLoading]);
+
+  useEffect(() => {
+    const recoveryKey = 'objects-auth-recovery';
+    if (!auth.isLoading && !auth.isGuest) {
+      wasAuthenticated.current = true;
+      sessionStorage.removeItem(recoveryKey);
+      return;
+    }
+    if (!online || auth.isLoading || !auth.isGuest || !wasAuthenticated.current || sessionStorage.getItem(recoveryKey)) return;
+    sessionStorage.setItem(recoveryKey, String(Date.now()));
+    window.location.reload();
+  }, [auth.isLoading, auth.isGuest, online]);
+
+  useEffect(() => {
+    const retryStalledSession = () => {
+      if (document.visibilityState !== 'visible' || !navigator.onLine || !auth.isLoading || !authTimedOut || sessionStorage.getItem('objects-auth-loading-recovery')) return;
+      sessionStorage.setItem('objects-auth-loading-recovery', String(Date.now()));
+      window.location.reload();
+    };
+    document.addEventListener('visibilitychange', retryStalledSession);
+    return () => document.removeEventListener('visibilitychange', retryStalledSession);
+  }, [auth.isLoading, authTimedOut]);
 
   useEffect(() => {
     const syncOnlineState = () => setOnline(navigator.onLine);
@@ -171,7 +209,7 @@ export function App() {
   return (
     <>
       <style>{`${styles}\n${responsiveStyles}\n${featureStyles}\n${tagStyles}\n${thingsStyles}`}</style>
-      {auth.isLoading ? online && !authTimedOut ? <SignInScreen loading /> : <OfflineScreen /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
+      {auth.isLoading ? !online ? <OfflineScreen /> : authTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
     </>
   );
 }
