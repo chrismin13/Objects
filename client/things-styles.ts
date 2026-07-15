@@ -42,11 +42,6 @@ body { font-size: 14px; }
 }
 .window-bar { height: 58px; padding: 17px 13px 7px 18px; }
 .window-bar-spacer { flex: 1; }
-.traffic-lights { gap: 7px; }
-.traffic-lights i { width: 10px; height: 10px; background: #cfd1d4 !important; }
-.traffic-lights:hover i:first-child { background: #ff5f57 !important; }
-.traffic-lights:hover i:nth-child(2) { background: #febc2e !important; }
-.traffic-lights:hover i:last-child { background: #28c840 !important; }
 #search-button { opacity: .72; }
 .sidebar-nav { padding: 4px 10px 20px; }
 .nav-list { gap: 0; }
