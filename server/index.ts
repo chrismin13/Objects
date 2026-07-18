@@ -45,7 +45,7 @@ const PWA_MANIFEST = JSON.stringify({
 });
 
 
-const SERVICE_WORKER = `const CACHE = "objects-pwa-v8";
+const SERVICE_WORKER = `const CACHE = "objects-pwa-v9";
 const CORE = ["/", "/client.js", "/manifest.webmanifest", "/favicon.svg"];
 const network = self["fet" + "ch"].bind(self);
 

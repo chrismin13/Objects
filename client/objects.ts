@@ -84,6 +84,7 @@ function uid(prefix) {
 }
 
 const ENTITY_KINDS = ['spaces', 'areas', 'projects', 'headings', 'calendarEvents', 'tasks'];
+const MAX_ENTITY_CHANGES_PER_SAVE = 20;
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
@@ -106,19 +107,24 @@ function buildChangeSet() {
   if (!ui.state || !ui.syncedState) return null;
   const changes = { mutationId: uid('mutation'), settings: recordPatch(ui.syncedState.settings, ui.state.settings), entities: {}, deletes: {} };
   let changed = Object.keys(changes.settings).length > 0;
+  let entityChanges = 0;
   for (const kind of ENTITY_KINDS) {
     const previous = new Map((ui.syncedState[kind] || []).map((item) => [item.id, item]));
     const current = new Map((ui.state[kind] || []).map((item) => [item.id, item]));
     const patches = [];
     const deletes = [];
     for (const [id, item] of current) {
+      if (entityChanges >= MAX_ENTITY_CHANGES_PER_SAVE) break;
       const patch = recordPatch(previous.get(id), item);
       if (!previous.has(id)) {
         for (const [key, value] of Object.entries(item)) if (key !== 'id') patch[key] = value;
       }
-      if (Object.keys(patch).length) patches.push({ id, patch });
+      if (Object.keys(patch).length) { patches.push({ id, patch }); entityChanges += 1; }
     }
-    for (const id of previous.keys()) if (!current.has(id)) deletes.push(id);
+    for (const id of previous.keys()) {
+      if (entityChanges >= MAX_ENTITY_CHANGES_PER_SAVE) break;
+      if (!current.has(id)) { deletes.push(id); entityChanges += 1; }
+    }
     if (patches.length) { changes.entities[kind] = patches; changed = true; }
     if (deletes.length) { changes.deletes[kind] = deletes; changed = true; }
   }
@@ -180,8 +186,10 @@ const ui = {
   selectedTaskIds: new Set(),
   selectionAnchorId: null,
   saveTimer: null,
+  saveReady: false,
   saveInFlight: false,
   saveQueued: false,
+  saveFailures: 0,
   renderAfterSave: false,
   ownMutationIds: new Set(),
   lastCompleted: null,
@@ -331,6 +339,9 @@ export function mountObjects(serializedState, options) {
   app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
   persistChanges = options.saveChanges; initializePersistentState = options.initializeState; performSignOut = options.signOut; ui.user = options.user;
   try {
+    ui.saveReady = false;
+    ui.saveQueued = false;
+    ui.saveFailures = 0;
     ui.state = JSON.parse(serializedState);
     const receivedState = cloneData(ui.state);
     let migrated = normalizeState();
@@ -341,11 +352,17 @@ export function mountObjects(serializedState, options) {
     const logged = applyLogbookPolicy();
     initializeActiveSpace();
     materializeRecurringTasks(); applyTheme(); render(); handleCaptureUrl(); startReminderChecks(); startLogbookChecks();
-    if (logged || recoveredPending || migratedDraft || migrated) scheduleSave();
+    const needsInitialSave = logged || recoveredPending || migratedDraft || migrated;
     if (!staticEventsBound) { bindStaticEvents(); staticEventsBound = true; render(); }
     app.setAttribute('aria-busy', 'false');
-    void initializePersistentState(JSON.stringify(ui.syncedState)).then(syncObjectsState).catch(() => {
+    void initializePersistentState(JSON.stringify(ui.syncedState)).then((state) => {
+      ui.saveReady = true;
+      syncObjectsState(state);
+      if (needsInitialSave || ui.saveQueued || buildChangeSet()) scheduleSave();
+    }).catch(() => {
+      ui.saveReady = true;
       showToast('Could not prepare sync');
+      if (needsInitialSave || ui.saveQueued || buildChangeSet()) scheduleSave();
     });
   } catch (error) {
     content.innerHTML = `<div class="empty-state">${icon('cloud')}<h2>Objects could not start</h2><p>${esc(error.message)}. Refresh this page and try again.</p></div>`;
@@ -403,27 +420,8 @@ function normalizeState() {
     const personalSpace = { id: 'space-personal', title: personalArea?.title || 'Personal', color: personalArea?.color || '#e49b3c', pinned: true, order: 0 };
     const workSpace = { id: 'space-work', title: workArea?.title || 'Work', color: workArea?.color || '#5b7cfa', pinned: true, order: 1 };
     ui.state.spaces = [personalSpace, workSpace];
-    const promoted = new Map([[personalArea?.id, personalSpace], [workArea?.id, workSpace]].filter(([id]) => id));
-    for (const [areaId, space] of promoted) {
-      const sourceArea = ui.state.areas.find((area) => area.id === areaId);
-      const inheritedTags = sourceArea?.tags || [];
-      ui.state.projects.filter((project) => project.areaId === areaId).forEach((project) => {
-        project.spaceId = space.id; project.areaId = null; project.tags = [...new Set([...(project.tags || []), ...inheritedTags])];
-      });
-      const areaHeadings = ui.state.headings.filter((heading) => heading.areaId === areaId && !heading.projectId);
-      let generalArea = null;
-      if (areaHeadings.length) {
-        generalArea = { id: `area-${space.id}-general`, title: 'General', color: space.color, tags: inheritedTags, spaceId: space.id, order: 0 };
-        ui.state.areas.push(generalArea);
-        areaHeadings.forEach((heading) => { heading.areaId = generalArea.id; });
-      }
-      ui.state.tasks.filter((task) => task.areaId === areaId).forEach((task) => {
-        task.spaceId = space.id;
-        task.areaId = task.headingId && generalArea ? generalArea.id : null;
-        if (!task.projectId) task.tags = [...new Set([...(task.tags || []), ...inheritedTags])];
-      });
-    }
-    ui.state.areas = ui.state.areas.filter((area) => !promoted.has(area.id));
+    if (personalArea) personalArea.spaceId = personalSpace.id;
+    if (workArea) workArea.spaceId = workSpace.id;
   }
   ui.state.spaces.forEach((space, index) => {
     space.title ||= `Space ${index + 1}`;
@@ -460,7 +458,7 @@ function normalizeState() {
     task.order ??= index;
     const parentProject = projectById(task.projectId);
     const parentArea = areaById(task.areaId);
-    task.spaceId = parentProject ? parentProject.spaceId : parentArea ? parentArea.spaceId : task.spaceId || ui.state.settings.defaultSpaceId || null;
+    if (!parentProject && !parentArea && !spaceById(task.spaceId)) task.spaceId = ui.state.settings.defaultSpaceId || null;
   });
   ui.state.projects.forEach((project, index) => {
     if (project.status === 'cancelled') project.status = project.trashedAt ? 'trashed' : 'canceled';
@@ -1447,7 +1445,7 @@ function sourceTasks() { return ui.state.tasks.filter((task) => matchesActiveSpa
 function projectById(id) { return ui.state.projects.find((project) => project.id === id); }
 function areaById(id) { return ui.state.areas.find((area) => area.id === id); }
 function spaceById(id) { return ui.state?.spaces?.find((space) => space.id === id); }
-function itemSpaceId(item) { const project = projectById(item?.projectId); if (project) return project.spaceId ?? null; const area = areaById(item?.areaId); if (area) return area.spaceId ?? null; return item?.spaceId ?? null; }
+function itemSpaceId(item) { const project = projectById(item?.projectId); if (project) return areaById(project.areaId)?.spaceId ?? project.spaceId ?? null; const area = areaById(item?.areaId); if (area) return area.spaceId ?? null; return item?.spaceId ?? null; }
 function matchesActiveSpace(item) { return ui.activeSpaceId === 'all' || itemSpaceId(item) === ui.activeSpaceId; }
 function currentCreationSpaceId() { return ui.activeSpaceId === 'all' ? ui.state.settings.defaultSpaceId || ui.state.spaces[0]?.id || null : ui.activeSpaceId; }
 function spaceLabel(id) { return spaceById(id)?.title || 'Unassigned'; }
@@ -3581,6 +3579,7 @@ function handleGlobalKeydown(event) {
 
 function scheduleSave(renderAfter = false) {
   ui.renderAfterSave ||= renderAfter;
+  if (!ui.saveReady) { ui.saveQueued = true; return; }
   clearTimeout(ui.saveTimer);
   ui.saveTimer = setTimeout(flushSave, 350);
 }
@@ -3597,9 +3596,12 @@ async function flushSave() {
   ui.saveQueued = false;
   const pendingSnapshot = ui.pendingEntry ? cloneData(ui.pendingEntry) : null;
   ui.ownMutationIds.add(changes.mutationId);
+  let retryDelay = 0;
   try {
     const serializedAck = await persistChanges(JSON.stringify(changes));
     acknowledgeChanges(changes, serializedAck);
+    if (ui.saveFailures) showToast('Changes saved');
+    ui.saveFailures = 0;
     if (pendingSnapshot && ui.pendingEntry?.revision === pendingSnapshot.revision) {
       const taskChanged = (changes.entities?.tasks || []).some((change) => change.id === pendingSnapshot.task.id);
       const taskDeleted = (changes.deletes?.tasks || []).includes(pendingSnapshot.task.id);
@@ -3610,12 +3612,15 @@ async function flushSave() {
     }
   } catch (error) {
     ui.ownMutationIds.delete(changes.mutationId);
-    showToast('Could not save changes');
+    ui.saveFailures += 1;
+    retryDelay = Math.min(30_000, 1000 * (2 ** Math.min(ui.saveFailures - 1, 5)));
+    if (ui.saveFailures === 1) showToast('Could not save changes — retrying');
+    console.error('Objects save failed', error);
   } finally {
     ui.saveInFlight = false;
     if (ui.saveQueued || buildChangeSet()) {
       clearTimeout(ui.saveTimer);
-      ui.saveTimer = setTimeout(flushSave, 0);
+      ui.saveTimer = setTimeout(flushSave, retryDelay);
     } else {
       if (ui.renderAfterSave) { ui.renderAfterSave = false; render(); }
     }
