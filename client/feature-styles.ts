@@ -5,6 +5,8 @@ export const featureStyles = `
 .checklist-reorder { display: grid; grid-template-columns: 1fr 1fr; opacity: .35; }
 .checklist-item:hover .checklist-reorder,
 .checklist-item:focus-within .checklist-reorder { opacity: 1; }
+.checklist-item.sortable-ghost { opacity: .28; }
+.checklist-item.sortable-chosen { background: var(--surface-subtle); }
 .checklist-reorder button {
   width: 17px;
   height: 24px;
@@ -17,8 +19,14 @@ export const featureStyles = `
 }
 .checklist-reorder button:disabled { opacity: .2; cursor: default; }
 .context-menu {
-  position: fixed;
   z-index: 260;
+  --wa-focus-ring-width: 0;
+  --wa-panel-background-color: color-mix(in srgb, var(--surface) 96%, transparent);
+  --wa-panel-border-color: var(--border-strong);
+  --wa-panel-border-radius: 11px;
+  --wa-panel-border-width: 1px;
+}
+.context-menu::part(menu) {
   width: min(220px, calc(100vw - 16px));
   padding: 6px;
   border: 1px solid var(--border-strong);
@@ -27,23 +35,26 @@ export const featureStyles = `
   box-shadow: var(--shadow);
   backdrop-filter: blur(16px);
 }
-.context-menu[hidden] { display: none; }
-.context-menu button {
-  width: 100%;
-  min-height: 36px;
-  padding: 7px 9px;
+.context-menu-trigger {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  padding: 0;
   border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
 }
-.context-menu button:hover,
-.context-menu button:focus-visible { outline: 0; background: var(--surface-subtle); }
-.context-menu button.danger { color: var(--red); }
+.context-menu wa-dropdown-item { color: var(--text); font-size: 14px; }
+.context-menu wa-dropdown-item::part(base) { min-height: 32px; padding: 6px 9px; border-radius: 7px; }
+.context-menu wa-dropdown-item:focus::part(base),
+.context-menu wa-dropdown-item:hover::part(base) { background: var(--surface-subtle); }
+.context-menu wa-dropdown-item.danger { color: var(--red); }
 .task-row { grid-template-columns: 26px minmax(0, 1fr) 28px 16px; }
 .task-row.bulk-selected { background: var(--blue-soft); }
+.task-row.sortable-ghost { opacity: .25; }
+.task-row.sortable-chosen { background: var(--surface-subtle); }
+.section.sortable-ghost { opacity: .25; }
+.section.sortable-chosen > .heading-header { background: var(--surface-subtle); border-radius: 7px; }
 .task-select {
   width: 28px;
   height: 28px;

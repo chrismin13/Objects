@@ -1,15 +1,14 @@
 import { SignInWithGoogle, signOut, useAuth, useMutation, useQuery } from "lakebed/client";
 import { Component } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { mountObjects, syncObjectsState } from "./objects";
 import { initializePwa } from "./pwa";
-import { responsiveStyles } from "./responsive-styles";
-import { styles } from "./styles";
-import { featureStyles } from "./feature-styles";
-import { tagStyles } from "./tag-styles";
-import { thingsStyles } from "./things-styles";
+import { objectsTheme } from "./theme";
+import { webAwesomeReady } from "./vendor/webawesome/loader";
+import { objectsRuntimeReady } from "./runtime/loader";
 
 type AuthIdentity = ReturnType<typeof useAuth>;
+
+void webAwesomeReady;
 
 function BrandMark() {
   return <div className="auth-mark" aria-hidden="true"><span /><span /><span /></div>;
@@ -67,45 +66,54 @@ function SessionRecoveryScreen() {
   );
 }
 
-const OBJECTS_SHELL = `
-  <div id="objects-shell" class="app-shell" aria-busy="true">
-    <aside id="sidebar" class="sidebar" aria-label="Lists">
-      <div class="window-bar">
-        <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="Close sidebar"></button>
-        <div id="space-controls" class="space-controls" aria-label="Task Space"></div>
-        <div class="window-actions">
-          <button id="space-settings-button" class="icon-button space-settings-button" type="button" aria-label="Spaces and launch schedule"></button>
-          <button id="search-button" class="icon-button" type="button" aria-label="Quick find"></button>
-        </div>
-      </div>
-      <nav id="sidebar-nav" class="sidebar-nav"></nav>
-      <div class="sidebar-footer">
-        <button id="new-list-button" class="quiet-button" type="button"></button>
-        <div class="sidebar-tools">
-          <button id="settings-button" class="icon-button" type="button" aria-label="Settings"></button>
-          <button id="theme-button" class="icon-button" type="button" aria-label="Change theme"></button>
-        </div>
-      </div>
-    </aside>
-    <main class="main-pane">
-      <header class="mobile-header">
-        <button id="sidebar-open" class="icon-button" type="button" aria-label="Open sidebar"></button>
-        <span class="mobile-brand">Objects</span>
-        <button id="mobile-search" class="icon-button" type="button" aria-label="Quick find"></button>
-      </header>
-      <section id="content" class="content" aria-live="polite"></section>
-      <button id="magic-add" class="magic-add" type="button" aria-label="Quick add to-do"></button>
-    </main>
-    <aside id="inspector" class="inspector" aria-label="To-do details"></aside>
-    <div id="sidebar-scrim" class="scrim"></div>
-  </div>
-  <div id="modal-root"></div>
-  <div id="context-menu" class="context-menu" role="menu" hidden></div>
-  <div id="toast-region" class="toast-region" aria-live="polite"></div>`;
+const WaDropdown = "wa-dropdown" as never;
 
 class StableObjectsDom extends Component {
   shouldComponentUpdate() { return false; }
-  render() { return <div dangerouslySetInnerHTML={{ __html: OBJECTS_SHELL }} />; }
+  render() {
+    return <>
+      <div id="objects-shell" className="app-shell" aria-busy="true">
+        <span id="sidebar-anchor" hidden />
+        <aside id="sidebar" className="sidebar" aria-label="Lists">
+          <div className="window-bar">
+            <button id="sidebar-close" className="icon-button sidebar-close" type="button" aria-label="Close sidebar" />
+            <div id="space-controls" className="space-controls" aria-label="Task Space" />
+            <div className="window-actions">
+              <button id="space-settings-button" className="icon-button space-settings-button" type="button" aria-label="Spaces and launch schedule" />
+              <button id="search-button" className="icon-button" type="button" aria-label="Quick find" />
+            </div>
+          </div>
+          <nav id="sidebar-nav" className="sidebar-nav" />
+          <div className="sidebar-footer">
+            <button id="new-list-button" className="quiet-button" type="button" />
+            <div className="sidebar-tools">
+              <button id="settings-button" className="icon-button" type="button" aria-label="Settings" />
+              <button id="theme-button" className="icon-button" type="button" aria-label="Change theme" />
+            </div>
+          </div>
+        </aside>
+        <main className="main-pane">
+          <header className="mobile-header">
+            <button id="sidebar-open" className="icon-button" type="button" aria-label="Open sidebar" />
+            <span className="mobile-brand">Objects</span>
+            <button id="mobile-search" className="icon-button" type="button" aria-label="Quick find" />
+          </header>
+          <section id="content" className="content" aria-live="polite" />
+          <button id="magic-add" className="magic-add" type="button" aria-label="Quick add to-do" />
+        </main>
+        <span id="inspector-anchor" hidden />
+        <aside id="inspector" className="inspector" aria-label="To-do details" />
+        <div id="sidebar-scrim" className="scrim" />
+      </div>
+      <div id="drawer-root" />
+      <div id="modal-root" />
+      <WaDropdown id="context-menu" class="context-menu" placement="bottom-start" distance="0">
+        <button className="context-menu-trigger" slot="trigger" type="button" tabIndex={-1} aria-hidden="true" />
+        <div id="context-menu-items" />
+      </WaDropdown>
+      <div id="toast-region" className="toast-region" aria-live="polite" />
+    </>;
+  }
 }
 
 function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean }) {
@@ -119,19 +127,27 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
 
   useEffect(() => {
     if (!ready) return;
-    return mountObjects(initialState.current!, {
-      initializeState: initializeNormalized,
-      saveChanges: applyChanges,
-      user: auth,
-      signOut: async () => {
-        await signOut();
-        window.location.reload();
-      }
+    let active = true;
+    let dispose: (() => void) | undefined;
+    void objectsRuntimeReady.then(({ mountObjects }) => {
+      if (!active) return;
+      dispose = mountObjects(initialState.current!, {
+        initializeState: initializeNormalized,
+        saveChanges: applyChanges,
+        user: auth,
+        signOut: async () => {
+          await signOut();
+          window.location.reload();
+        }
+      });
     });
+    return () => { active = false; dispose?.(); };
   }, [ready]);
 
   useEffect(() => {
-    if (typeof serializedState === "string" && serializedState.length > 0) syncObjectsState(serializedState);
+    if (typeof serializedState === "string" && serializedState.length > 0) {
+      void objectsRuntimeReady.then(({ syncObjectsState }) => syncObjectsState(serializedState));
+    }
   }, [serializedState]);
 
   useEffect(() => {
@@ -211,7 +227,7 @@ export function App() {
 
   return (
     <>
-      <style>{`${styles}\n${responsiveStyles}\n${featureStyles}\n${tagStyles}\n${thingsStyles}`}</style>
+      <style>{objectsTheme}</style>
       {auth.isLoading ? !online ? <OfflineScreen /> : authTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
     </>
   );

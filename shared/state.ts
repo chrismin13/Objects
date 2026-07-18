@@ -1,13 +1,141 @@
+export type ItemStatus = "open" | "completed" | "canceled" | "trashed";
+export type Bucket = "inbox" | "today" | "upcoming" | "anytime" | "someday";
+
+export type RepeatRule = {
+  mode: "fixed" | "afterCompletion";
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  interval: number;
+  weekdays: number[];
+  nextDate: string;
+  reminderTime?: string;
+  deadlineOffset?: number | null;
+  paused?: boolean;
+};
+
+export type LaunchRule = {
+  id: string;
+  spaceId: string;
+  weekdays: number[];
+  start: string;
+  end: string;
+  order: number;
+};
+
+export type ChecklistItem = {
+  id: string;
+  title: string;
+  done: boolean;
+};
+
+export type Space = {
+  id: string;
+  title: string;
+  color: string;
+  pinned: boolean;
+  order: number;
+};
+
+export type Area = {
+  id: string;
+  spaceId: string | null;
+  title: string;
+  color: string;
+  tags: string[];
+  order: number;
+};
+
+export type Project = {
+  id: string;
+  spaceId: string | null;
+  areaId: string | null;
+  title: string;
+  notes: string;
+  bucket: Bucket;
+  scheduledFor: string | null;
+  deadline: string | null;
+  tags: string[];
+  status: ItemStatus;
+  repeat: RepeatRule | null;
+  repeatTemplateId?: string | null;
+  completedAt: string | null;
+  loggedAt?: string | null;
+  trashedAt?: string | null;
+  previousStatus?: ItemStatus;
+  order: number;
+};
+
+export type Heading = {
+  id: string;
+  projectId?: string | null;
+  areaId?: string | null;
+  title: string;
+  archived: boolean;
+  order: number;
+};
+
+export type CalendarEvent = {
+  id: string;
+  spaceId: string | null;
+  title: string;
+  start: string;
+  end: string;
+  calendar: string;
+  allDay?: boolean;
+  order?: number;
+};
+
+export type Task = {
+  id: string;
+  spaceId: string | null;
+  title: string;
+  notes: string;
+  status: ItemStatus;
+  bucket: Bucket;
+  scheduledFor: string | null;
+  evening: boolean;
+  reminderAt: string | null;
+  reminderSentAt?: string | null;
+  deadline: string | null;
+  projectId: string | null;
+  headingId: string | null;
+  areaId: string | null;
+  tags: string[];
+  checklist: ChecklistItem[];
+  repeat: RepeatRule | null;
+  repeatTemplateId?: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  loggedAt?: string | null;
+  trashedAt?: string | null;
+  previousStatus?: ItemStatus;
+  order: number;
+};
+
+export type ObjectsSettings = {
+  theme: "system" | "light" | "dark";
+  groupToday: boolean;
+  notifications: boolean;
+  weekStartsOn: 0 | 1;
+  showCalendar: boolean;
+  logCompletedItems: "immediately" | "daily" | "manually";
+  tags: string[];
+  defaultSpaceId: string | null;
+  spaceSchedule: { rules: LaunchRule[] };
+  quickDraft?: { value: string; updatedAt?: string; viewType?: string; viewId?: string | null; sectionKey?: string } | null;
+  [key: string]: unknown;
+};
+
 export type ObjectsState = {
   version: number;
   updatedAt: string;
-  settings: Record<string, unknown>;
-  spaces: Array<Record<string, unknown>>;
-  areas: Array<Record<string, unknown>>;
-  projects: Array<Record<string, unknown>>;
-  headings: Array<Record<string, unknown>>;
-  calendarEvents: Array<Record<string, unknown>>;
-  tasks: Array<Record<string, unknown>>;
+  syncMutationId?: string;
+  settings: ObjectsSettings;
+  spaces: Space[];
+  areas: Area[];
+  projects: Project[];
+  headings: Heading[];
+  calendarEvents: CalendarEvent[];
+  tasks: Task[];
 };
 
 function isoDay(offset = 0): string {
@@ -28,16 +156,16 @@ export function createSeed(): ObjectsState {
   return {
     version: 7,
     updatedAt: "seed-v7",
-    settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily", tags: ["Creative", "Deep work", "Errand", "Focused", "Home", "Quick"], defaultSpaceId: "space-personal", spaceSchedule: { rules: [{ id: "rule-work-weekdays", spaceId: "space-work", weekdays: [1, 2, 3, 4, 5], start: "09:00", end: "17:30" }] } },
+    settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily", tags: ["Creative", "Deep work", "Errand", "Focused", "Home", "Quick"], defaultSpaceId: "space-personal", spaceSchedule: { rules: [{ id: "rule-work-weekdays", spaceId: "space-work", weekdays: [1, 2, 3, 4, 5], start: "09:00", end: "17:30", order: 0 }] } },
     spaces: [
       { id: "space-personal", title: "Personal", color: "#e49b3c", pinned: true, order: 0 },
       { id: "space-work", title: "Work", color: "#5b7cfa", pinned: true, order: 1 }
     ],
     areas: [],
     projects: [
-      { id: "project-launch", spaceId: "space-work", areaId: null, title: "Launch the new site", notes: "Everything needed for a quiet, confident launch.", bucket: "anytime", scheduledFor: null, deadline: isoDay(9), tags: ["Focused"], status: "open", completedAt: null, order: 0 },
-      { id: "project-home", spaceId: "space-personal", areaId: null, title: "Refresh the studio", notes: "Make the room feel lighter and easier to use.", bucket: "anytime", scheduledFor: null, deadline: null, tags: ["Home"], status: "open", completedAt: null, order: 1 },
-      { id: "project-trip", spaceId: "space-personal", areaId: null, title: "Weekend in Hydra", notes: "", bucket: "anytime", scheduledFor: null, deadline: isoDay(18), tags: [], status: "open", completedAt: null, order: 2 }
+      { id: "project-launch", spaceId: "space-work", areaId: null, title: "Launch the new site", notes: "Everything needed for a quiet, confident launch.", bucket: "anytime", scheduledFor: null, deadline: isoDay(9), tags: ["Focused"], status: "open", repeat: null, completedAt: null, order: 0 },
+      { id: "project-home", spaceId: "space-personal", areaId: null, title: "Refresh the studio", notes: "Make the room feel lighter and easier to use.", bucket: "anytime", scheduledFor: null, deadline: null, tags: ["Home"], status: "open", repeat: null, completedAt: null, order: 1 },
+      { id: "project-trip", spaceId: "space-personal", areaId: null, title: "Weekend in Hydra", notes: "", bucket: "anytime", scheduledFor: null, deadline: isoDay(18), tags: [], status: "open", repeat: null, completedAt: null, order: 2 }
     ],
     headings: [{ id: "heading-launch-polish", projectId: "project-launch", title: "Final polish", archived: false, order: 0 }],
     calendarEvents: [{ id: "event-design-sync", spaceId: "space-work", title: "Design sync", start: `${isoDay()}T11:00:00`, end: `${isoDay()}T11:45:00`, calendar: "Work" }],
@@ -56,7 +184,7 @@ export function createSeed(): ObjectsState {
   };
 }
 
-export function addCapturedTask(state: ObjectsState, input: Record<string, unknown>): Record<string, unknown> {
+export function addCapturedTask(state: ObjectsState, input: Record<string, unknown>): Task {
   const title = typeof input.title === "string" ? input.title.trim().slice(0, 500) : "";
   if (!title) throw new Error("A title is required");
   const scheduledFor = typeof input.scheduledFor === "string" ? input.scheduledFor : null;
@@ -66,13 +194,14 @@ export function addCapturedTask(state: ObjectsState, input: Record<string, unkno
   const area = state.areas.find((item) => item.id === areaId);
   const requestedSpaceId = typeof input.spaceId === "string" ? input.spaceId : null;
   const defaultSpaceId = typeof state.settings.defaultSpaceId === "string" ? state.settings.defaultSpaceId : null;
-  const bucket = typeof input.bucket === "string" ? input.bucket : scheduledFor ? (scheduledFor <= isoDay() ? "today" : "upcoming") : projectId || areaId ? "anytime" : "inbox";
+  const requestedBucket = typeof input.bucket === "string" && ["inbox", "today", "upcoming", "anytime", "someday"].includes(input.bucket) ? input.bucket as Bucket : null;
+  const bucket: Bucket = requestedBucket ?? (scheduledFor ? (scheduledFor <= isoDay() ? "today" : "upcoming") : projectId || areaId ? "anytime" : "inbox");
   const checklist = Array.isArray(input.checklist) ? input.checklist.slice(0, 200).map((item, index) => {
     if (typeof item === "string") return { id: `check-${Date.now().toString(36)}-${index}`, title: item.slice(0, 1000), done: false };
     const value = item && typeof item === "object" ? item as Record<string, unknown> : {};
     return { id: `check-${Date.now().toString(36)}-${index}`, title: typeof value.title === "string" ? value.title.slice(0, 1000) : "", done: Boolean(value.done) };
   }).filter((item) => item.title.trim()) : [];
-  const task = {
+  const task: Task = {
     id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
     title,
     notes: typeof input.notes === "string" ? input.notes.slice(0, 20000) : "",
@@ -88,7 +217,7 @@ export function addCapturedTask(state: ObjectsState, input: Record<string, unkno
     spaceId: requestedSpaceId ?? (typeof project?.spaceId === "string" ? project.spaceId : null) ?? (typeof area?.spaceId === "string" ? area.spaceId : null) ?? defaultSpaceId,
     tags: Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 50) : [],
     checklist,
-    repeat: input.repeat && typeof input.repeat === "object" ? input.repeat : null,
+    repeat: input.repeat && typeof input.repeat === "object" ? input.repeat as RepeatRule : null,
     createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now()
   };
   state.tasks.push(task);
