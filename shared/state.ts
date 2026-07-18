@@ -1,13 +1,130 @@
+export type ItemStatus = "open" | "completed" | "canceled" | "trashed";
+export type Bucket = "inbox" | "today" | "upcoming" | "anytime" | "someday";
+
+export type RepeatRule = {
+  mode: "fixed" | "afterCompletion";
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  interval: number;
+  weekdays: number[];
+  nextDate: string;
+  reminderTime?: string;
+  deadlineOffset?: number | null;
+  paused?: boolean;
+};
+
+export type ChecklistItem = {
+  id: string;
+  title: string;
+  done: boolean;
+};
+
+export type Space = {
+  id: string;
+  title: string;
+  color: string;
+  pinned: boolean;
+  order: number;
+};
+
+export type Area = {
+  id: string;
+  spaceId: string | null;
+  title: string;
+  color: string;
+  tags: string[];
+  order: number;
+};
+
+export type Project = {
+  id: string;
+  spaceId: string | null;
+  areaId: string | null;
+  title: string;
+  notes: string;
+  bucket: Bucket;
+  scheduledFor: string | null;
+  deadline: string | null;
+  tags: string[];
+  status: ItemStatus;
+  repeat: RepeatRule | null;
+  completedAt: string | null;
+  loggedAt?: string | null;
+  trashedAt?: string | null;
+  previousStatus?: ItemStatus;
+  order: number;
+};
+
+export type Heading = {
+  id: string;
+  projectId?: string | null;
+  areaId?: string | null;
+  title: string;
+  archived: boolean;
+  order: number;
+};
+
+export type CalendarEvent = {
+  id: string;
+  spaceId: string | null;
+  title: string;
+  start: string;
+  end: string;
+  calendar: string;
+  allDay?: boolean;
+  order?: number;
+};
+
+export type Task = {
+  id: string;
+  spaceId: string | null;
+  title: string;
+  notes: string;
+  status: ItemStatus;
+  bucket: Bucket;
+  scheduledFor: string | null;
+  evening: boolean;
+  reminderAt: string | null;
+  reminderSentAt?: string | null;
+  deadline: string | null;
+  projectId: string | null;
+  headingId: string | null;
+  areaId: string | null;
+  tags: string[];
+  checklist: ChecklistItem[];
+  repeat: RepeatRule | null;
+  repeatTemplateId?: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  loggedAt?: string | null;
+  trashedAt?: string | null;
+  previousStatus?: ItemStatus;
+  order: number;
+};
+
+export type ObjectsSettings = {
+  theme: "system" | "light" | "dark";
+  groupToday: boolean;
+  notifications: boolean;
+  weekStartsOn: 0 | 1;
+  showCalendar: boolean;
+  logCompletedItems: "immediately" | "daily" | "manually";
+  tags: string[];
+  defaultSpaceId: string | null;
+  spaceSchedule?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 export type ObjectsState = {
   version: number;
   updatedAt: string;
-  settings: Record<string, unknown>;
-  spaces: Array<Record<string, unknown>>;
-  areas: Array<Record<string, unknown>>;
-  projects: Array<Record<string, unknown>>;
-  headings: Array<Record<string, unknown>>;
-  calendarEvents: Array<Record<string, unknown>>;
-  tasks: Array<Record<string, unknown>>;
+  syncMutationId?: string;
+  settings: ObjectsSettings;
+  spaces: Space[];
+  areas: Area[];
+  projects: Project[];
+  headings: Heading[];
+  calendarEvents: CalendarEvent[];
+  tasks: Task[];
 };
 
 function isoDay(offset = 0): string {
