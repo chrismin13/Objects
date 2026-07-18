@@ -55,7 +55,6 @@ body { font-size: 14px; }
 [data-theme="dark"] .space-segment.active { background: #393a3e; }
 .space-overflow { max-width: 34px; flex-basis: 34px; }
 .space-title-dot { width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--space-color); }
-.space-meta i { width: 6px; height: 6px; border-radius: 50%; background: var(--space-color); }
 .sidebar-nav { padding: 4px 10px 20px; }
 .nav-list { gap: 0; }
 .nav-list + .nav-list { margin-top: 17px; }

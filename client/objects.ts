@@ -1827,7 +1827,6 @@ function renderTask(task) {
   const completed = ['completed', 'canceled'].includes(task.status);
   const checked = task.status !== 'open';
   const meta = [];
-  if (ui.activeSpaceId === 'all') meta.push(`<span class="meta-item space-meta"><i style="--space-color:${esc(spaceById(itemSpaceId(task))?.color || '#85878b')}"></i>${esc(spaceLabel(itemSpaceId(task)))}</span>`);
   if (project && ui.view.type !== 'project') meta.push(`<span class="meta-item">${icon('list')}${esc(project.title)}</span>`);
   else if (area && !['area', 'project'].includes(ui.view.type)) meta.push(`<span class="meta-item">${esc(area.title)}</span>`);
   if (task.deadline) meta.push(`<span class="meta-item deadline">${icon('flag')} ${deadlineLabel(task.deadline)}</span>`);
