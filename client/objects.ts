@@ -1224,10 +1224,12 @@ function openContextMenu(target, x, y) {
     items = menuButton('edit-heading', 'Edit heading') + menuButton('new-heading-task', 'New to-do here') + menuButton('delete-heading', 'Delete heading', true);
   } else if (projectCard || list?.dataset.listKind === 'project') {
     kind = 'project'; id = projectCard?.dataset.projectCard || list.dataset.id;
-    items = menuButton('new-project-task', 'New to-do') + menuButton('edit-project', 'Project options…');
+    const project = projectById(id);
+    if (!project) return;
+    items = menuButton('new-project-task', 'New to-do') + menuButton('edit-project', 'Project options…') + (isTrashed(project) ? '' : menuButton('delete-project', 'Move list to Trash', true));
   } else if (list?.dataset.listKind === 'area') {
     kind = 'area'; id = list.dataset.id;
-    items = menuButton('new-area-task', 'New standalone to-do') + menuButton('new-area-project', 'New project') + menuButton('new-area-heading', 'New heading') + menuButton('edit-area', 'Area options…');
+    items = menuButton('new-area-task', 'New standalone to-do') + menuButton('new-area-project', 'New project') + menuButton('new-area-heading', 'New heading') + menuButton('edit-area', 'Area options…') + menuButton('delete-area', 'Delete area', true);
   }
   if (!items) return;
   menu.dataset.kind = kind; menu.dataset.id = id; menu.innerHTML = items; menu.hidden = false;
@@ -1274,12 +1276,14 @@ function handleContextMenuClick(event) {
   if (kind === 'project') {
     if (action === 'edit-project') openProjectModal(id);
     if (action === 'new-project-task') { setView('project', id); setTimeout(() => beginQuickAdd(), 0); }
+    if (action === 'delete-project') moveProjectToTrash(id);
   }
   if (kind === 'area') {
     if (action === 'edit-area') openAreaModal(id);
     if (action === 'new-area-project') openNewListModal({ type: 'project', areaId: id });
     if (action === 'new-area-heading') { setView('area', id); openHeadingModal(); }
     if (action === 'new-area-task') { setView('area', id); setTimeout(() => beginQuickAdd(), 0); }
+    if (action === 'delete-area') deleteArea(id);
   }
 }
 
@@ -3066,6 +3070,20 @@ function deleteHeading(headingId) {
   });
 }
 
+function moveProjectToTrash(projectId) {
+  const project = projectById(projectId);
+  if (!project || isTrashed(project)) return;
+  confirmAction(`Move “${project.title}” to Trash?`, 'The list and all to-dos inside it can be restored from Trash.', 'Move to Trash', () => {
+    if (project.repeatTemplateId) {
+      const template = projectById(project.repeatTemplateId);
+      if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
+    }
+    project.previousStatus = project.status; project.status = 'trashed'; project.trashedAt = new Date().toISOString(); project.loggedAt = null;
+    ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.previousStatus = task.status; task.status = 'trashed'; task.trashedAt = project.trashedAt; task.loggedAt = null; });
+    scheduleSave(); setView('trash'); showToast('List moved to Trash');
+  });
+}
+
 function openProjectModal(projectId) {
   const project = projectById(projectId);
   if (!project) return;
@@ -3119,15 +3137,7 @@ function openProjectModal(projectId) {
   $$('[data-project-action]').forEach((button) => button.addEventListener('click', () => {
     const action = button.dataset.projectAction;
     if (action === 'delete') {
-      confirmAction('Move this project to Trash?', 'The project and all to-dos inside it can be restored from Trash.', 'Move to Trash', () => {
-        if (project.repeatTemplateId) {
-          const template = projectById(project.repeatTemplateId);
-          if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
-        }
-        project.previousStatus = project.status; project.status = 'trashed'; project.trashedAt = new Date().toISOString(); project.loggedAt = null;
-        ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.previousStatus = task.status; task.status = 'trashed'; task.trashedAt = project.trashedAt; task.loggedAt = null; });
-        scheduleSave(); setView('trash'); showToast('Project moved to Trash');
-      });
+      moveProjectToTrash(project.id);
       return;
     }
     if (action === 'restore-trash') {
@@ -3204,6 +3214,19 @@ function duplicateProject(project) {
   setView('project', copy.id); showToast('Project duplicated');
 }
 
+function deleteArea(areaId) {
+  const area = areaById(areaId);
+  if (!area) return;
+  confirmAction(`Delete “${area.title}”?`, 'Its projects and to-dos will be kept.', 'Delete area', () => {
+    ui.state.areas = ui.state.areas.filter((item) => item.id !== area.id);
+    ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.areaId = null; });
+    const headingIds = new Set(headingsFor('area', area.id, true).map((heading) => heading.id));
+    ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.areaId = task.projectId ? projectById(task.projectId)?.areaId || null : null; if (headingIds.has(task.headingId)) task.headingId = null; });
+    ui.state.headings = ui.state.headings.filter((heading) => !headingIds.has(heading.id));
+    scheduleSave(); setView('inbox'); showToast('Area deleted; its projects and to-dos were kept');
+  });
+}
+
 function openAreaModal(areaId) {
   const area = areaById(areaId);
   if (!area) return;
@@ -3221,16 +3244,7 @@ function openAreaModal(areaId) {
   $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.spaceId = $('#area-space').value || area.spaceId; area.color = $('#area-color').value; area.tags = selectedPickerTags($('#area-form')); ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.spaceId = area.spaceId; ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.spaceId = area.spaceId; }); }); ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.spaceId = area.spaceId; }); scheduleSave(); closeModal(); render(); });
   $('[data-area-new-heading]').addEventListener('click', () => { closeModal(); setView('area', area.id); openHeadingModal(); });
   $$('[data-restore-area-heading]').forEach((button) => button.addEventListener('click', () => { const heading = ui.state.headings.find((item) => item.id === button.dataset.restoreAreaHeading); if (heading) heading.archived = false; scheduleSave(); closeModal(); render(); showToast('Heading restored'); }));
-  $('[data-area-delete]').addEventListener('click', () => {
-    confirmAction('Delete this area?', 'Its projects and to-dos will be kept.', 'Delete area', () => {
-      ui.state.areas = ui.state.areas.filter((item) => item.id !== area.id);
-      ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.areaId = null; });
-      const headingIds = new Set(headingsFor('area', area.id, true).map((heading) => heading.id));
-      ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.areaId = task.projectId ? projectById(task.projectId)?.areaId || null : null; if (headingIds.has(task.headingId)) task.headingId = null; });
-      ui.state.headings = ui.state.headings.filter((heading) => !headingIds.has(heading.id));
-      scheduleSave(); setView('inbox'); showToast('Area deleted; its projects and to-dos were kept');
-    });
-  });
+  $('[data-area-delete]').addEventListener('click', () => deleteArea(area.id));
 }
 
 function openSpaceSwitcher() {
