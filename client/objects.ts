@@ -83,7 +83,7 @@ function uid(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-const ENTITY_KINDS = ['areas', 'projects', 'headings', 'calendarEvents', 'tasks'];
+const ENTITY_KINDS = ['spaces', 'areas', 'projects', 'headings', 'calendarEvents', 'tasks'];
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
@@ -174,6 +174,7 @@ const ui = {
   state: null,
   syncedState: null,
   user: null,
+  activeSpaceId: 'all',
   view: { type: 'today', id: null },
   selectedTaskId: null,
   selectedTaskIds: new Set(),
@@ -225,6 +226,48 @@ function storageIdentity() {
 
 function pendingEntryStorageKey() {
   return `objects-pending-entry:${storageIdentity()}`;
+}
+
+function spaceSelectionStorageKey() {
+  return `objects-active-space:${storageIdentity()}`;
+}
+
+function readRememberedSpace() {
+  try { return localStorage.getItem(spaceSelectionStorageKey()) || 'all'; } catch (_) { return 'all'; }
+}
+
+function rememberActiveSpace() {
+  try { localStorage.setItem(spaceSelectionStorageKey(), ui.activeSpaceId); } catch (_) {}
+}
+
+function minutesFromClock(value) {
+  const [hours, minutes] = String(value || '').split(':').map(Number);
+  return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : null;
+}
+
+function scheduleRuleMatches(rule, date = new Date()) {
+  const start = minutesFromClock(rule.start);
+  const end = minutesFromClock(rule.end);
+  const weekdays = Array.isArray(rule.weekdays) ? rule.weekdays : [];
+  if (start === null || end === null || start === end || !weekdays.length) return false;
+  const now = date.getHours() * 60 + date.getMinutes();
+  if (start < end) return weekdays.includes(date.getDay()) && now >= start && now < end;
+  if (now >= start) return weekdays.includes(date.getDay());
+  const previousDay = (date.getDay() + 6) % 7;
+  return now < end && weekdays.includes(previousDay);
+}
+
+function scheduledSpaceOnLaunch() {
+  const schedule = ui.state.settings.spaceSchedule;
+  if (!schedule?.enabled) return null;
+  const match = (schedule.rules || []).find((rule) => spaceById(rule.spaceId) && scheduleRuleMatches(rule));
+  return match?.spaceId || (spaceById(ui.state.settings.defaultSpaceId)?.id ?? 'all');
+}
+
+function initializeActiveSpace() {
+  const scheduled = scheduledSpaceOnLaunch();
+  const remembered = readRememberedSpace();
+  ui.activeSpaceId = scheduled || (remembered === 'all' || spaceById(remembered) ? remembered : 'all');
 }
 
 function legacyDraftStorageKey() {
@@ -288,13 +331,17 @@ export function mountObjects(serializedState, options) {
   app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
   persistChanges = options.saveChanges; initializePersistentState = options.initializeState; performSignOut = options.signOut; ui.user = options.user;
   try {
-    ui.state = JSON.parse(serializedState); normalizeState();
-    ui.syncedState = cloneData(ui.state);
+    ui.state = JSON.parse(serializedState);
+    const receivedState = cloneData(ui.state);
+    let migrated = normalizeState();
+    ui.syncedState = cloneData(migrated ? receivedState : ui.state);
     const recoveredPending = recoverPendingEntry();
+    if (recoveredPending) migrated = normalizeState() || migrated;
     const migratedDraft = migrateLegacyDraft(recoveredPending);
     const logged = applyLogbookPolicy();
+    initializeActiveSpace();
     materializeRecurringTasks(); applyTheme(); render(); handleCaptureUrl(); startReminderChecks(); startLogbookChecks();
-    if (logged || recoveredPending || migratedDraft) scheduleSave();
+    if (logged || recoveredPending || migratedDraft || migrated) scheduleSave();
     if (!staticEventsBound) { bindStaticEvents(); staticEventsBound = true; render(); }
     app.setAttribute('aria-busy', 'false');
     void initializePersistentState(JSON.stringify(ui.syncedState)).then(syncObjectsState).catch(() => {
@@ -323,6 +370,7 @@ export function syncObjectsState(serializedState) {
     for (const kind of ENTITY_KINDS) merged[kind] = mergeCollection(previous[kind], local[kind], remote[kind]);
     ui.syncedState = cloneData(remote);
     ui.state = merged; normalizeState();
+    if (ui.activeSpaceId !== 'all' && !spaceById(ui.activeSpaceId)) ui.activeSpaceId = 'all';
     const selected = ui.selectedTaskId;
     const logged = applyLogbookPolicy();
     if (selected && !ui.state.tasks.some((task) => task.id === selected)) ui.selectedTaskId = null;
@@ -334,18 +382,69 @@ export function syncObjectsState(serializedState) {
 }
 
 function normalizeState() {
+  const before = JSON.stringify(ui.state);
   ui.state.settings ||= { theme: 'system', groupToday: true };
   ui.state.settings.notifications ??= false;
   ui.state.settings.weekStartsOn ??= 1;
   ui.state.settings.showCalendar ??= true;
   if (ui.state.settings.quickDraft && typeof ui.state.settings.quickDraft.value !== 'string') ui.state.settings.quickDraft = null;
   if (!['immediately', 'daily', 'manually'].includes(ui.state.settings.logCompletedItems)) ui.state.settings.logCompletedItems = 'daily';
+  ui.state.version = 7;
+  ui.state.spaces ||= [];
   ui.state.areas ||= [];
   ui.state.projects ||= [];
   ui.state.headings ||= [];
   ui.state.calendarEvents ||= [];
   ui.state.calendarEvents = ui.state.calendarEvents.filter((event) => event && typeof event.start === 'string' && typeof event.title === 'string');
   ui.state.tasks ||= [];
+  if (!ui.state.spaces.length) {
+    const personalArea = ui.state.areas.find((area) => String(area.title || '').trim().toLocaleLowerCase() === 'personal');
+    const workArea = ui.state.areas.find((area) => String(area.title || '').trim().toLocaleLowerCase() === 'work');
+    const personalSpace = { id: 'space-personal', title: personalArea?.title || 'Personal', color: personalArea?.color || '#e49b3c', pinned: true, order: 0 };
+    const workSpace = { id: 'space-work', title: workArea?.title || 'Work', color: workArea?.color || '#5b7cfa', pinned: true, order: 1 };
+    ui.state.spaces = [personalSpace, workSpace];
+    const promoted = new Map([[personalArea?.id, personalSpace], [workArea?.id, workSpace]].filter(([id]) => id));
+    for (const [areaId, space] of promoted) {
+      const sourceArea = ui.state.areas.find((area) => area.id === areaId);
+      const inheritedTags = sourceArea?.tags || [];
+      ui.state.projects.filter((project) => project.areaId === areaId).forEach((project) => {
+        project.spaceId = space.id; project.areaId = null; project.tags = [...new Set([...(project.tags || []), ...inheritedTags])];
+      });
+      const areaHeadings = ui.state.headings.filter((heading) => heading.areaId === areaId && !heading.projectId);
+      let generalArea = null;
+      if (areaHeadings.length) {
+        generalArea = { id: `area-${space.id}-general`, title: 'General', color: space.color, tags: inheritedTags, spaceId: space.id, order: 0 };
+        ui.state.areas.push(generalArea);
+        areaHeadings.forEach((heading) => { heading.areaId = generalArea.id; });
+      }
+      ui.state.tasks.filter((task) => task.areaId === areaId).forEach((task) => {
+        task.spaceId = space.id;
+        task.areaId = task.headingId && generalArea ? generalArea.id : null;
+        if (!task.projectId) task.tags = [...new Set([...(task.tags || []), ...inheritedTags])];
+      });
+    }
+    ui.state.areas = ui.state.areas.filter((area) => !promoted.has(area.id));
+  }
+  ui.state.spaces.forEach((space, index) => {
+    space.title ||= `Space ${index + 1}`;
+    space.color ||= ['#e49b3c', '#5b7cfa', '#5ba67a', '#b06bd3'][index % 4];
+    space.pinned ??= index < 2;
+    space.order ??= index;
+  });
+  const personalSpace = ui.state.spaces.find((space) => String(space.title).toLocaleLowerCase() === 'personal') || ui.state.spaces[0];
+  const workSpace = ui.state.spaces.find((space) => String(space.title).toLocaleLowerCase() === 'work') || ui.state.spaces[1] || personalSpace;
+  if (!spaceById(ui.state.settings.defaultSpaceId)) ui.state.settings.defaultSpaceId = personalSpace?.id || null;
+  ui.state.settings.spaceSchedule ||= { enabled: false, rules: workSpace ? [{ id: 'rule-work-weekdays', spaceId: workSpace.id, weekdays: [1, 2, 3, 4, 5], start: '09:00', end: '17:30' }] : [] };
+  ui.state.settings.spaceSchedule.enabled ??= false;
+  ui.state.settings.spaceSchedule.rules = Array.isArray(ui.state.settings.spaceSchedule.rules) ? ui.state.settings.spaceSchedule.rules.filter((rule) => rule && spaceById(rule.spaceId)).map((rule, index) => ({ id: rule.id || uid('space-rule'), spaceId: rule.spaceId, weekdays: Array.isArray(rule.weekdays) ? rule.weekdays : [1, 2, 3, 4, 5], start: rule.start || '09:00', end: rule.end || '17:30', order: rule.order ?? index })) : [];
+  ui.state.areas.forEach((area) => { area.spaceId ??= null; });
+  ui.state.projects.forEach((project) => { const parentArea = areaById(project.areaId); project.spaceId = parentArea ? parentArea.spaceId : project.spaceId || ui.state.settings.defaultSpaceId || null; });
+  ui.state.calendarEvents.forEach((event) => {
+    if (event.spaceId === undefined) {
+      const namedSpace = ui.state.spaces.find((space) => String(event.calendar || '').toLocaleLowerCase().includes(String(space.title).toLocaleLowerCase()));
+      event.spaceId = namedSpace?.id || ui.state.settings.defaultSpaceId || null;
+    }
+  });
   ui.state.tasks.forEach((task, index) => {
     if (task.status === 'cancelled') task.status = task.trashedAt ? 'trashed' : 'canceled';
     task.status ||= 'open';
@@ -359,6 +458,9 @@ function normalizeState() {
     if (['completed', 'canceled'].includes(task.status) && task.loggedAt === undefined) task.loggedAt = task.completedAt || new Date().toISOString();
     if (!['completed', 'canceled'].includes(task.status)) task.loggedAt = null;
     task.order ??= index;
+    const parentProject = projectById(task.projectId);
+    const parentArea = areaById(task.areaId);
+    task.spaceId = parentProject ? parentProject.spaceId : parentArea ? parentArea.spaceId : task.spaceId || ui.state.settings.defaultSpaceId || null;
   });
   ui.state.projects.forEach((project, index) => {
     if (project.status === 'cancelled') project.status = project.trashedAt ? 'trashed' : 'canceled';
@@ -385,6 +487,7 @@ function normalizeState() {
   [...ui.state.areas, ...ui.state.projects, ...ui.state.tasks].forEach((item) => {
     item.tags = cleanTagList(item.tags).map((tag) => canonicalTags.get(tag.toLocaleLowerCase()) || tag);
   });
+  return before !== JSON.stringify(ui.state);
 }
 
 function cleanTagList(tags) {
@@ -492,7 +595,7 @@ export function applyLogbookPolicyToItems(items, policy, now = new Date()) {
 }
 
 function logCompletedNow() {
-  return applyLogbookPolicyToItems([...ui.state.tasks, ...ui.state.projects], 'immediately');
+  return applyLogbookPolicyToItems([...ui.state.tasks, ...ui.state.projects].filter(matchesActiveSpace), 'immediately');
 }
 
 function applyLogbookPolicy() {
@@ -874,11 +977,13 @@ function handleCaptureUrl() {
     const listTarget = params.get('list-id') || params.get('list') || params.get('project');
     const project = ui.state.projects.find((item) => item.id === listTarget || item.title.toLowerCase() === listTarget?.toLowerCase());
     const area = ui.state.areas.find((item) => item.id === listTarget || item.title.toLowerCase() === listTarget?.toLowerCase());
-    const task = createTaskFromParsed(parsed, { notes, projectId: project?.id || null, useCurrentView: false });
-    if (area && !project) { task.areaId = area.id; task.bucket = 'anytime'; }
+    const requestedSpace = params.get('space-id') || params.get('space');
+    const space = ui.state.spaces.find((item) => item.id === requestedSpace || item.title.toLowerCase() === requestedSpace?.toLowerCase());
+    const task = createTaskFromParsed(parsed, { notes, projectId: project?.id || null, spaceId: space?.id || undefined, useCurrentView: false });
+    if (area && !project) { task.areaId = area.id; task.spaceId = area.spaceId || task.spaceId; task.bucket = 'anytime'; }
     const headingName = params.get('heading');
     const heading = headingName && ui.state.headings.find((item) => !item.archived && (item.id === headingName || item.title.toLocaleLowerCase() === headingName.toLocaleLowerCase()) && (!project || item.projectId === project.id) && (!area || item.areaId === area.id || item.projectId === project?.id));
-    if (heading) { const parent = projectById(heading.projectId); task.headingId = heading.id; task.projectId = heading.projectId || null; task.areaId = parent?.areaId || heading.areaId || null; task.bucket = task.bucket === 'inbox' ? 'anytime' : task.bucket; }
+    if (heading) { const parent = projectById(heading.projectId); const parentArea = areaById(heading.areaId); task.headingId = heading.id; task.projectId = heading.projectId || null; task.areaId = parent?.areaId || heading.areaId || null; task.spaceId = parent?.spaceId || parentArea?.spaceId || task.spaceId; task.bucket = task.bucket === 'inbox' ? 'anytime' : task.bucket; }
     const when = params.get('when');
     if (when) {
       if (when.toLowerCase() === 'someday') { task.bucket = 'someday'; task.scheduledFor = null; }
@@ -946,6 +1051,7 @@ function bindStaticEvents() {
   $('#magic-add').draggable = true;
   $('#new-list-button').innerHTML = `${icon('plus')}<span>New List</span>`;
   $('#settings-button').innerHTML = icon('settings');
+  $('#space-settings-button').innerHTML = icon('clock');
   $('#search-button').addEventListener('click', () => openSearch());
   $('#mobile-search').addEventListener('click', () => openSearch());
   $('#magic-add').addEventListener('click', () => beginQuickAdd(true));
@@ -962,6 +1068,7 @@ function bindStaticEvents() {
   });
   $('#new-list-button').addEventListener('click', () => openNewListModal());
   $('#settings-button').addEventListener('click', openSettings);
+  $('#space-settings-button').addEventListener('click', openSpaceSettings);
   $('#theme-button').addEventListener('click', cycleTheme);
   $('#sidebar-open').addEventListener('click', openSidebar);
   $('#sidebar-close').addEventListener('click', closeSidebar);
@@ -977,6 +1084,11 @@ function bindStaticEvents() {
     const button = event.target.closest('[data-view]');
     if (!button) return;
     setView(button.dataset.view, button.dataset.id || null);
+  });
+  $('#space-controls').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-space-id]');
+    if (button) setActiveSpace(button.dataset.spaceId);
+    else if (event.target.closest('[data-space-overflow]')) openSpaceSwitcher();
   });
   sidebar.addEventListener('dragstart', (event) => {
     const list = event.target.closest('[data-list-kind]');
@@ -1330,13 +1442,18 @@ function projectAllowsTask(task) {
   const project = projectById(task.projectId);
   return !project || (!project.repeat && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= localDay()) && (project.status === 'open' || isCompletedButVisible(project)));
 }
-function openTasks() { return ui.state.tasks.filter((task) => task.status === 'open' && !task.repeat && projectAllowsTask(task)); }
-function sourceTasks() { return ui.state.tasks.filter((task) => (task.status === 'open' || isCompletedButVisible(task)) && !task.repeat && projectAllowsTask(task)); }
+function openTasks() { return ui.state.tasks.filter((task) => matchesActiveSpace(task) && task.status === 'open' && !task.repeat && projectAllowsTask(task)); }
+function sourceTasks() { return ui.state.tasks.filter((task) => matchesActiveSpace(task) && (task.status === 'open' || isCompletedButVisible(task)) && !task.repeat && projectAllowsTask(task)); }
 function projectById(id) { return ui.state.projects.find((project) => project.id === id); }
 function areaById(id) { return ui.state.areas.find((area) => area.id === id); }
+function spaceById(id) { return ui.state?.spaces?.find((space) => space.id === id); }
+function itemSpaceId(item) { const project = projectById(item?.projectId); if (project) return project.spaceId ?? null; const area = areaById(item?.areaId); if (area) return area.spaceId ?? null; return item?.spaceId ?? null; }
+function matchesActiveSpace(item) { return ui.activeSpaceId === 'all' || itemSpaceId(item) === ui.activeSpaceId; }
+function currentCreationSpaceId() { return ui.activeSpaceId === 'all' ? ui.state.settings.defaultSpaceId || ui.state.spaces[0]?.id || null : ui.activeSpaceId; }
+function spaceLabel(id) { return spaceById(id)?.title || 'Unassigned'; }
 function effectiveTags(task) { return [...new Set([...(areaById(task.areaId)?.tags || []), ...(projectById(task.projectId)?.tags || []), ...(task.tags || [])])]; }
 function effectiveProjectTags(project) { return [...new Set([...(areaById(project.areaId)?.tags || []), ...(project.tags || [])])]; }
-function projectIsActive(project) { return project && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat; }
+function projectIsActive(project) { return project && matchesActiveSpace(project) && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat; }
 function projectIsToday(project, today = localDay()) { return projectIsActive(project) && (project.bucket === 'today' || (project.scheduledFor && project.scheduledFor <= today) || (project.deadline && project.deadline <= today)); }
 
 function upcomingTaskEntries(today, taskFilter) {
@@ -1345,13 +1462,13 @@ function upcomingTaskEntries(today, taskFilter) {
     agendaDay: task.scheduledFor && task.scheduledFor > today ? task.scheduledFor : task.deadline,
     agendaDeadlineOnly: !(task.scheduledFor && task.scheduledFor > today),
   }));
-  const repeating = ui.state.tasks.filter((task) => task.status === 'open' && task.repeat && !task.repeat.paused && task.repeat.nextDate > today).map((task) => ({ ...task, agendaDay: task.repeat.nextDate, agendaPreview: true }));
+  const repeating = ui.state.tasks.filter((task) => matchesActiveSpace(task) && task.status === 'open' && task.repeat && !task.repeat.paused && task.repeat.nextDate > today).map((task) => ({ ...task, agendaDay: task.repeat.nextDate, agendaPreview: true }));
   return [...dated, ...repeating];
 }
 
 function upcomingProjectEntries(today) {
   const dated = ui.state.projects.filter((project) => projectIsActive(project) && ((project.scheduledFor && project.scheduledFor > today) || (project.deadline && project.deadline > today))).map((project) => ({ ...project, agendaDay: project.scheduledFor && project.scheduledFor > today ? project.scheduledFor : project.deadline }));
-  const repeating = ui.state.projects.filter((project) => project.status === 'open' && project.repeat && !project.repeat.paused && project.repeat.nextDate > today).map((project) => ({ ...project, agendaDay: project.repeat.nextDate, agendaPreview: true }));
+  const repeating = ui.state.projects.filter((project) => matchesActiveSpace(project) && project.status === 'open' && project.repeat && !project.repeat.paused && project.repeat.nextDate > today).map((project) => ({ ...project, agendaDay: project.repeat.nextDate, agendaPreview: true }));
   return [...dated, ...repeating];
 }
 
@@ -1377,7 +1494,36 @@ function progressRing(value) {
   return `<span class="nav-progress"><svg viewBox="0 0 16 16"><circle class="track" cx="8" cy="8" r="6"/><circle class="value" cx="8" cy="8" r="6" stroke-dasharray="${circumference}" stroke-dashoffset="${circumference - circumference * value / 100}"/></svg></span>`;
 }
 
+function setActiveSpace(spaceId) {
+  if (spaceId !== 'all' && !spaceById(spaceId)) return;
+  ui.activeSpaceId = spaceId;
+  rememberActiveSpace();
+  ui.activeTags.clear();
+  const currentArea = ui.view.type === 'area' ? areaById(ui.view.id) : null;
+  const currentProject = ui.view.type === 'project' ? projectById(ui.view.id) : null;
+  if ((currentArea && !matchesActiveSpace(currentArea)) || (currentProject && !matchesActiveSpace(currentProject))) ui.view = { type: 'today', id: null };
+  if (ui.selectedTaskId && !matchesActiveSpace(currentTask())) closeInspector({ restoreFocus: false });
+  render();
+}
+
+function renderSpaceControls() {
+  const root = $('#space-controls');
+  if (!root) return;
+  const ordered = [...ui.state.spaces].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const pinned = ordered.filter((space) => space.pinned);
+  let visible = pinned.slice(0, 2);
+  const active = spaceById(ui.activeSpaceId);
+  if (active && !visible.some((space) => space.id === active.id)) visible = visible.length < 2 ? [...visible, active] : [visible[0], active].filter(Boolean);
+  const hidden = ordered.filter((space) => !visible.some((candidate) => candidate.id === space.id));
+  root.innerHTML = `<div class="space-pill" role="tablist" aria-label="Task Space"><button type="button" role="tab" class="space-segment ${ui.activeSpaceId === 'all' ? 'active' : ''}" data-space-id="all" aria-selected="${ui.activeSpaceId === 'all'}">All</button>${visible.map((space) => `<button type="button" role="tab" class="space-segment ${ui.activeSpaceId === space.id ? 'active' : ''}" data-space-id="${esc(space.id)}" aria-selected="${ui.activeSpaceId === space.id}" style="--space-color:${esc(space.color)}">${esc(space.title)}</button>`).join('')}${hidden.length ? `<button type="button" class="space-segment space-overflow ${active && hidden.some((space) => space.id === active.id) ? 'active' : ''}" data-space-overflow aria-label="${hidden.length} more Spaces">+${hidden.length}</button>` : ''}</div>`;
+  const scheduleButton = $('#space-settings-button');
+  const enabled = Boolean(ui.state.settings.spaceSchedule?.enabled);
+  scheduleButton?.classList.toggle('schedule-enabled', enabled);
+  if (scheduleButton) scheduleButton.setAttribute('aria-label', enabled ? 'Spaces and launch schedule, automatic selection on' : 'Spaces and launch schedule');
+}
+
 function renderSidebar() {
+  renderSpaceControls();
   const today = localDay();
   const standard = [
     ['inbox', 'Inbox', 'inbox'],
@@ -1394,37 +1540,41 @@ function renderSidebar() {
     return `<li><button class="nav-item ${active ? 'active' : ''}" data-view="${type}">${icon(iconName)}<span class="nav-title">${label}</span>${count ? `<span class="nav-count">${count}</span>` : ''}</button></li>`;
   }).join('');
 
-  const areasHtml = ui.state.areas.sort((a, b) => a.order - b.order).map((area) => {
-    const areaProjects = ui.state.projects.filter((project) => project.areaId === area.id && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today)).sort((a, b) => a.order - b.order);
-    return `<li>
-      <button class="nav-item ${ui.view.type === 'area' && ui.view.id === area.id ? 'active' : ''}" data-view="area" data-id="${area.id}" data-list-kind="area" draggable="true">
-        ${icon('area', 'nav-area-icon')}<span class="nav-title">${esc(area.title)}</span><span class="nav-count">${taskCount('area', area.id) || ''}</span>
-      </button>
-      ${areaProjects.length ? `<ul class="nav-list">${areaProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" data-list-kind="project" draggable="true" style="padding-left:37px">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('')}</ul>` : ''}
-    </li>`;
-  }).join('');
-
-  const looseProjects = ui.state.projects.filter((project) => !project.areaId && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today));
-  const projectsHtml = looseProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" data-list-kind="project" draggable="true">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('');
+  const renderUserLists = (spaceId, title = '') => {
+    const areas = ui.state.areas.filter((area) => area.spaceId === spaceId).sort((a, b) => a.order - b.order);
+    const areasHtml = areas.map((area) => {
+      const areaProjects = ui.state.projects.filter((project) => project.spaceId === spaceId && project.areaId === area.id && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today)).sort((a, b) => a.order - b.order);
+      return `<li><button class="nav-item ${ui.view.type === 'area' && ui.view.id === area.id ? 'active' : ''}" data-view="area" data-id="${area.id}" data-list-kind="area" draggable="true" style="--area-color:${esc(area.color || spaceById(spaceId)?.color || '#5b7cfa')}">${icon('area', 'nav-area-icon')}<span class="nav-title">${esc(area.title)}</span><span class="nav-count">${taskCount('area', area.id) || ''}</span></button>${areaProjects.length ? `<ul class="nav-list">${areaProjects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" data-list-kind="project" draggable="true" style="padding-left:37px">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('')}</ul>` : ''}</li>`;
+    }).join('');
+    const projects = ui.state.projects.filter((project) => project.spaceId === spaceId && !project.areaId && (project.status === 'open' || isCompletedButVisible(project)) && !project.repeat && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today)).sort((a, b) => a.order - b.order);
+    const projectsHtml = projects.map((project) => `<li><button class="nav-item ${ui.view.type === 'project' && ui.view.id === project.id ? 'active' : ''}" data-view="project" data-id="${project.id}" data-list-kind="project" draggable="true">${progressRing(projectProgress(project.id))}<span class="nav-title">${esc(project.title)}</span></button></li>`).join('');
+    if (!areasHtml && !projectsHtml) return '';
+    return `${title ? `<li class="nav-section-title"><span class="space-title-dot" style="--space-color:${esc(spaceById(spaceId)?.color || '#85878b')}"></span>${esc(title)}</li>` : ''}${areasHtml}${projectsHtml}`;
+  };
+  let userListsHtml = '';
+  if (ui.activeSpaceId === 'all') {
+    userListsHtml = [...ui.state.spaces].sort((a, b) => a.order - b.order).map((space) => renderUserLists(space.id, space.title)).join('');
+    userListsHtml += renderUserLists(null, 'Unassigned');
+  } else userListsHtml = renderUserLists(ui.activeSpaceId);
 
   sidebar.innerHTML = `<ul class="nav-list">${standardHtml}</ul>
-    <ul class="nav-list nav-user-lists">${areasHtml || ''}${projectsHtml || ''}</ul>`;
+    <ul class="nav-list nav-user-lists">${userListsHtml}</ul>`;
 }
 
 function viewDefinition() {
   const today = localDay();
-  const taskFilter = (task) => (task.status === 'open' || isCompletedButVisible(task)) && !task.repeat && projectAllowsTask(task);
+  const taskFilter = (task) => matchesActiveSpace(task) && (task.status === 'open' || isCompletedButVisible(task)) && !task.repeat && projectAllowsTask(task);
   const definitions = {
     inbox: { title: 'Inbox', icon: 'inbox', eyebrow: 'Collect now, decide later', subtitle: 'Unsorted thoughts and to-dos waiting for a home.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.bucket === 'inbox') },
     today: { title: 'Today', icon: 'star', eyebrow: new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date()), subtitle: 'Your clear, focused plan for the day.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'today' || (t.scheduledFor && t.scheduledFor <= today && t.bucket !== 'someday' && t.bucket !== 'inbox') || (t.deadline && t.deadline <= today))), projects: ui.state.projects.filter((p) => projectIsToday(p, today)) },
     upcoming: { title: 'Upcoming', icon: 'calendar', eyebrow: 'Plan ahead', subtitle: 'Start dates, repeating plans, deadlines, and calendar events in one agenda.', tasks: upcomingTaskEntries(today, taskFilter), projects: upcomingProjectEntries(today) },
     anytime: { title: 'Anytime', icon: 'layers', eyebrow: 'Available now', subtitle: 'Everything active that you could make progress on.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && (t.bucket === 'anytime' || t.bucket === 'today') && (!t.scheduledFor || t.scheduledFor <= today)) },
-    someday: { title: 'Someday', icon: 'archive', eyebrow: 'Ideas for later', subtitle: 'Possibilities worth keeping, without a commitment.', tasks: ui.state.tasks.filter((t) => (t.status === 'open' || isCompletedButVisible(t)) && !t.repeat && t.bucket === 'someday'), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.bucket === 'someday') },
-    logbook: { title: 'Logbook', icon: 'check', eyebrow: 'Completed', subtitle: 'A record of the progress you have made.', tasks: ui.state.tasks.filter((t) => isLogged(t)), projects: ui.state.projects.filter((p) => isLogged(p)) },
-    trash: { title: 'Trash', icon: 'trash', eyebrow: 'Discarded', subtitle: 'Items moved here stay available for recovery.', tasks: ui.state.tasks.filter(isTrashed), projects: ui.state.projects.filter(isTrashed) },
+    someday: { title: 'Someday', icon: 'archive', eyebrow: 'Ideas for later', subtitle: 'Possibilities worth keeping, without a commitment.', tasks: ui.state.tasks.filter((t) => matchesActiveSpace(t) && (t.status === 'open' || isCompletedButVisible(t)) && !t.repeat && t.bucket === 'someday'), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.bucket === 'someday') },
+    logbook: { title: 'Logbook', icon: 'check', eyebrow: 'Completed', subtitle: 'A record of the progress you have made.', tasks: ui.state.tasks.filter((t) => matchesActiveSpace(t) && isLogged(t)), projects: ui.state.projects.filter((p) => matchesActiveSpace(p) && isLogged(p)) },
+    trash: { title: 'Trash', icon: 'trash', eyebrow: 'Discarded', subtitle: 'Items moved here stay available for recovery.', tasks: ui.state.tasks.filter((t) => matchesActiveSpace(t) && isTrashed(t)), projects: ui.state.projects.filter((p) => matchesActiveSpace(p) && isTrashed(p)) },
     tomorrow: { title: 'Tomorrow', icon: 'calendar', eyebrow: formatDate(addDays(today, 1), { weekday: 'long', month: 'long', day: 'numeric' }), subtitle: 'Start dates, repeating plans, and deadlines for the next day.', tasks: upcomingTaskEntries(today, taskFilter).filter((task) => task.agendaDay === addDays(today, 1)), projects: upcomingProjectEntries(today).filter((project) => project.agendaDay === addDays(today, 1)) },
     deadlines: { title: 'Deadlines', icon: 'flag', eyebrow: 'Commitments', subtitle: 'Open items ordered by the date they must be finished.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.deadline), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.deadline).sort((a, b) => a.deadline.localeCompare(b.deadline)) },
-    repeating: { title: 'Repeating', icon: 'repeat', eyebrow: 'Templates', subtitle: 'Routines that create fresh to-dos and projects on their schedule.', tasks: ui.state.tasks.filter((t) => t.status === 'open' && t.repeat), repeatingProjects: ui.state.projects.filter((p) => p.status === 'open' && p.repeat) },
+    repeating: { title: 'Repeating', icon: 'repeat', eyebrow: 'Templates', subtitle: 'Routines that create fresh to-dos and projects on their schedule.', tasks: ui.state.tasks.filter((t) => matchesActiveSpace(t) && t.status === 'open' && t.repeat), repeatingProjects: ui.state.projects.filter((p) => matchesActiveSpace(p) && p.status === 'open' && p.repeat) },
   };
   if (definitions[ui.view.type]) return definitions[ui.view.type];
   if (ui.view.type === 'project') {
@@ -1444,13 +1594,13 @@ function viewDefinition() {
     return { title: area.title, icon: 'circle', eyebrow: 'Area', subtitle: 'An ongoing part of life, with projects and standalone to-dos.', tasks: ui.state.tasks.filter((t) => t.areaId === area.id && !t.projectId && taskFilter(t)), projects: ui.state.projects.filter((project) => project.areaId === area.id && projectIsActive(project) && project.bucket !== 'someday' && (!project.scheduledFor || project.scheduledFor <= today)), area };
   }
   if (ui.view.type === 'tag') {
-    return { title: `#${ui.view.id}`, icon: 'tag', eyebrow: 'Tag', subtitle: 'Matching items from every active list.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && effectiveTags(t).includes(ui.view.id)), projects: ui.state.projects.filter((p) => projectIsActive(p) && effectiveProjectTags(p).includes(ui.view.id)) };
+    return { title: `#${ui.view.id}`, icon: 'tag', eyebrow: 'Tag', subtitle: 'Matching items from the active Space.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && effectiveTags(t).includes(ui.view.id)), projects: ui.state.projects.filter((p) => projectIsActive(p) && effectiveProjectTags(p).includes(ui.view.id)) };
   }
   if (ui.view.type === 'allProjects') {
-    return { title: 'All Projects', icon: 'list', eyebrow: 'Open projects', subtitle: 'Every active outcome across all areas.', tasks: [], projects: ui.state.projects.filter((p) => p.status === 'open') };
+    return { title: 'All Projects', icon: 'list', eyebrow: 'Open projects', subtitle: 'Every active outcome in this Space.', tasks: [], projects: ui.state.projects.filter((p) => matchesActiveSpace(p) && p.status === 'open') };
   }
   if (ui.view.type === 'loggedProjects') {
-    return { title: 'Logged Projects', icon: 'check', eyebrow: 'Completed projects', subtitle: 'Finished outcomes and their progress history.', tasks: [], projects: ui.state.projects.filter((p) => isLogged(p)) };
+    return { title: 'Logged Projects', icon: 'check', eyebrow: 'Completed projects', subtitle: 'Finished outcomes and their progress history.', tasks: [], projects: ui.state.projects.filter((p) => matchesActiveSpace(p) && isLogged(p)) };
   }
   return definitions.today;
 }
@@ -1497,6 +1647,7 @@ function renderContent() {
 function renderCalendarEvents(viewType) {
   const today = localDay();
   const events = ui.state.calendarEvents.filter((event) => {
+    if (!matchesActiveSpace(event)) return false;
     const day = event.start.slice(0, 10);
     if (viewType === 'today') return day === today;
     if (viewType === 'tomorrow') return day === addDays(today, 1);
@@ -1514,7 +1665,7 @@ function renderCalendarEvents(viewType) {
 
 function renderProjectCards(projects) {
   if (!projects.length) return `<div class="empty-state">${icon('list')}<h2>No projects here</h2><p>Projects will appear here as their status changes.</p></div>`;
-  return `<div class="project-card-list">${projects.map((project) => `<button class="project-card" data-project-card="${project.id}"><h2>${esc(project.title)}</h2><p>${project.agendaDay ? `${esc(relativeDateLabel(project.agendaDay))} · ` : ''}${project.repeat ? `${esc(repeatLabel(project.repeat))} · ` : ''}${project.deadline ? `Deadline ${esc(deadlineLabel(project.deadline))} · ` : ''}${esc(isTrashed(project) ? 'In Trash' : project.status === 'canceled' ? 'Canceled' : areaById(project.areaId)?.title || 'Project')} · ${projectProgress(project.id)}% complete</p></button>`).join('')}</div>`;
+  return `<div class="project-card-list">${projects.map((project) => `<button class="project-card" data-project-card="${project.id}"><h2>${esc(project.title)}</h2><p>${ui.activeSpaceId === 'all' ? `${esc(spaceLabel(project.spaceId))} · ` : ''}${project.agendaDay ? `${esc(relativeDateLabel(project.agendaDay))} · ` : ''}${project.repeat ? `${esc(repeatLabel(project.repeat))} · ` : ''}${project.deadline ? `Deadline ${esc(deadlineLabel(project.deadline))} · ` : ''}${esc(isTrashed(project) ? 'In Trash' : project.status === 'canceled' ? 'Canceled' : areaById(project.areaId)?.title || 'Project')} · ${projectProgress(project.id)}% complete</p></button>`).join('')}</div>`;
 }
 
 function buildSections(tasks) {
@@ -1572,9 +1723,9 @@ function buildSections(tasks) {
     const result = [];
     if (ui.state.settings.groupToday) {
       const addGrouped = (items, eveningMode = false) => {
-        const groups = groupBy(items, (task) => task.projectId || task.areaId || 'Standalone');
+        const groups = groupBy(items, (task) => task.projectId || task.areaId || (ui.activeSpaceId === 'all' ? task.spaceId : null) || 'Standalone');
         for (const [key, group] of groups) {
-          const parent = projectById(key) || areaById(key);
+          const parent = projectById(key) || areaById(key) || spaceById(key);
           result.push({ key: `${eveningMode ? 'evening-' : ''}${key}`, title: eveningMode ? 'This Evening' : (parent?.title || 'To-dos'), meta: eveningMode && parent ? parent.title : '', tasks: group, symbol: eveningMode ? '☾' : '' });
         }
       };
@@ -1587,14 +1738,16 @@ function buildSections(tasks) {
     return result;
   }
   if (['anytime', 'someday'].includes(ui.view.type)) {
-    const groups = groupBy(tasks, (task) => task.projectId || task.areaId || 'Standalone');
+    const groups = groupBy(tasks, (task) => task.projectId || task.areaId || (ui.activeSpaceId === 'all' ? task.spaceId : null) || 'Standalone');
     const rank = (key) => {
       if (key === 'Standalone') return -1;
       const project = projectById(key);
       if (project) return (areaById(project.areaId)?.order ?? 1000) * 1000 + (project.order ?? 0) + 1;
+      const space = spaceById(key);
+      if (space) return (space.order ?? 0) - 100;
       return (areaById(key)?.order ?? 1000) * 1000;
     };
-    return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b)).map(([key, items]) => ({ key, title: projectById(key)?.title || areaById(key)?.title || 'To-dos', tasks: items }));
+    return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b)).map(([key, items]) => ({ key, title: projectById(key)?.title || areaById(key)?.title || spaceById(key)?.title || 'To-dos', tasks: items }));
   }
   return [{ key: ui.view.type, title: ui.view.type === 'project' ? 'To-dos' : '', tasks }];
 }
@@ -1622,6 +1775,7 @@ function renderTask(task) {
   const completed = ['completed', 'canceled'].includes(task.status);
   const checked = task.status !== 'open';
   const meta = [];
+  if (ui.activeSpaceId === 'all') meta.push(`<span class="meta-item space-meta"><i style="--space-color:${esc(spaceById(itemSpaceId(task))?.color || '#85878b')}"></i>${esc(spaceLabel(itemSpaceId(task)))}</span>`);
   if (project && ui.view.type !== 'project') meta.push(`<span class="meta-item">${icon('list')}${esc(project.title)}</span>`);
   else if (area && !['area', 'project'].includes(ui.view.type)) meta.push(`<span class="meta-item">${esc(area.title)}</span>`);
   if (task.deadline) meta.push(`<span class="meta-item deadline">${icon('flag')} ${deadlineLabel(task.deadline)}</span>`);
@@ -1938,8 +2092,8 @@ function handleContentClick(event) {
   }
   if (action === 'empty-trash') {
     confirmAction('Empty Trash?', 'Every discarded to-do, project, and heading will be permanently deleted. This cannot be undone.', 'Empty Trash', () => {
-      const projectIds = new Set(ui.state.projects.filter(isTrashed).map((project) => project.id));
-      ui.state.tasks = ui.state.tasks.filter((task) => !isTrashed(task) && !projectIds.has(task.projectId));
+      const projectIds = new Set(ui.state.projects.filter((project) => matchesActiveSpace(project) && isTrashed(project)).map((project) => project.id));
+      ui.state.tasks = ui.state.tasks.filter((task) => !(matchesActiveSpace(task) && isTrashed(task)) && !projectIds.has(task.projectId));
       ui.state.headings = ui.state.headings.filter((heading) => !projectIds.has(heading.projectId));
       ui.state.projects = ui.state.projects.filter((project) => !projectIds.has(project.id));
       scheduleSave(); render(); showToast('Trash emptied');
@@ -2101,13 +2255,13 @@ function handleSidebarDrop(event) {
     const targetKind = destination.dataset.listKind;
     const target = targetKind === 'area' ? areaById(destination.dataset.id) : targetKind === 'project' ? projectById(destination.dataset.id) : null;
     if (!source || source === target) return;
-    if (ui.draggedList.kind === 'project' && targetKind === 'area') { source.areaId = target.id; source.order = Math.max(0, ...ui.state.projects.filter((item) => item.areaId === target.id).map((item) => item.order || 0)) + 1; }
-    else if (ui.draggedList.kind === 'project' && targetKind === 'project') { source.areaId = target.areaId || null; source.order = (target.order || 0) + .5; }
+    if (ui.draggedList.kind === 'project' && targetKind === 'area') { source.areaId = target.id; source.spaceId = target.spaceId || source.spaceId; source.order = Math.max(0, ...ui.state.projects.filter((item) => item.areaId === target.id).map((item) => item.order || 0)) + 1; }
+    else if (ui.draggedList.kind === 'project' && targetKind === 'project') { source.areaId = target.areaId || null; source.spaceId = target.spaceId || source.spaceId; source.order = (target.order || 0) + .5; }
     else if (ui.draggedList.kind === 'area' && targetKind === 'area') source.order = (target.order || 0) + .5;
     else return;
     const collection = ui.draggedList.kind === 'area' ? ui.state.areas : ui.state.projects;
     collection.sort((a, b) => (a.order || 0) - (b.order || 0)).forEach((item, index) => { item.order = index; });
-    if (ui.draggedList.kind === 'project') ui.state.tasks.filter((item) => item.projectId === source.id).forEach((item) => { item.areaId = source.areaId || null; });
+    if (ui.draggedList.kind === 'project') ui.state.tasks.filter((item) => item.projectId === source.id).forEach((item) => { item.areaId = source.areaId || null; item.spaceId = source.spaceId || item.spaceId; });
     ui.draggedList = null; scheduleSave(); render(); showToast('List moved'); return;
   }
   const tasks = draggedTasks().filter((item) => !item.repeat);
@@ -2123,8 +2277,8 @@ function handleSidebarDrop(event) {
     else if (type === 'upcoming') { item.bucket = 'upcoming'; item.scheduledFor = item.scheduledFor > localDay() ? item.scheduledFor : addDays(localDay(), 1); item.evening = false; moveReminderToDate(item, item.scheduledFor); }
     else if (type === 'anytime') { item.bucket = 'anytime'; item.scheduledFor = null; item.evening = false; moveReminderToDate(item, null); }
     else if (type === 'someday') { item.bucket = 'someday'; item.scheduledFor = null; item.evening = false; moveReminderToDate(item, null); }
-    else if (type === 'area' && id) { item.projectId = null; item.headingId = null; item.areaId = id; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
-    else if (type === 'project' && id) { const project = projectById(id); item.projectId = id; item.headingId = null; item.areaId = project?.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+    else if (type === 'area' && id) { const area = areaById(id); item.projectId = null; item.headingId = null; item.areaId = id; item.spaceId = area?.spaceId || item.spaceId; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+    else if (type === 'project' && id) { const project = projectById(id); item.projectId = id; item.headingId = null; item.areaId = project?.areaId || null; item.spaceId = project?.spaceId || item.spaceId; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
   });
   ui.draggedTaskId = null; scheduleSave(); render(); showToast(`Moved “${task.title}”`);
 }
@@ -2165,7 +2319,7 @@ function createTaskFromParsed(parsed, options = {}) {
   const targetView = options.view || ui.view;
   const task = {
     id: uid('task'), title: parsed.title, notes: options.notes || '', status: 'open', bucket: 'inbox', scheduledFor: null, evening: false, reminderAt: null, deadline: null,
-    projectId: options.projectId || null, headingId: null, areaId: null, tags: registerTags(parsed.tags || []), checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now(),
+    projectId: options.projectId || null, headingId: null, areaId: null, spaceId: options.spaceId || currentCreationSpaceId(), tags: registerTags(parsed.tags || []), checklist: [], repeat: null, createdAt: new Date().toISOString(), completedAt: null, loggedAt: null, order: Date.now(),
   };
   if (options.useCurrentView !== false) {
     if (targetView.type === 'today') {
@@ -2173,8 +2327,8 @@ function createTaskFromParsed(parsed, options = {}) {
       const parentKey = String(options.sectionKey || '').replace(/^evening-/, '');
       const project = projectById(parentKey);
       const area = areaById(parentKey);
-      if (project) { task.projectId = project.id; task.areaId = project.areaId || null; }
-      else if (area) task.areaId = area.id;
+      if (project) { task.projectId = project.id; task.areaId = project.areaId || null; task.spaceId = project.spaceId || task.spaceId; }
+      else if (area) { task.areaId = area.id; task.spaceId = area.spaceId || task.spaceId; }
       task.evening = String(options.sectionKey || '').startsWith('evening-');
     }
     else if (targetView.type === 'anytime') task.bucket = 'anytime';
@@ -2184,13 +2338,15 @@ function createTaskFromParsed(parsed, options = {}) {
     else if (targetView.type === 'tag') { task.bucket = 'anytime'; task.tags = [...new Set([...task.tags, targetView.id])]; }
     else if (targetView.type === 'project') {
       const project = projectById(targetView.id);
-      task.bucket = 'anytime'; task.projectId = project?.id || null; task.areaId = project?.areaId || null; task.headingId = project && options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
+      task.bucket = 'anytime'; task.projectId = project?.id || null; task.areaId = project?.areaId || null; task.spaceId = project?.spaceId || task.spaceId; task.headingId = project && options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
     } else if (targetView.type === 'area') {
-      task.bucket = 'anytime'; task.areaId = targetView.id; task.headingId = options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
+      const area = areaById(targetView.id);
+      task.bucket = 'anytime'; task.areaId = targetView.id; task.spaceId = area?.spaceId || task.spaceId; task.headingId = options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
     }
   }
   if (task.projectId && task.bucket === 'inbox' && options.useCurrentView === false) task.bucket = 'anytime';
   if (task.projectId && !task.areaId) task.areaId = projectById(task.projectId)?.areaId || null;
+  if (task.projectId) task.spaceId = projectById(task.projectId)?.spaceId || task.spaceId;
   if (parsed.bucket) task.bucket = parsed.bucket;
   if (parsed.scheduledFor) task.scheduledFor = parsed.scheduledFor;
   if (parsed.evening) task.evening = true;
@@ -2317,7 +2473,8 @@ function renderInspector(force = false) {
   if (!force && previousPane?.dataset.taskId === task.id) { syncSidebarAccessibility(); return; }
   const previousScrollTop = previousPane?.dataset.taskId === task.id ? previousPane.scrollTop : 0;
   const schedule = task.bucket === 'today' ? (task.evening ? 'evening' : 'today') : task.bucket;
-  const projectOptions = [`<option value="">No project</option>`, ...ui.state.projects.filter((p) => p.status === 'open').map((p) => `<option value="${p.id}" ${task.projectId === p.id ? 'selected' : ''}>${esc(p.title)}</option>`)].join('');
+  const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${itemSpaceId(task) === space.id ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
+  const projectOptions = [`<option value="">No project</option>`, ...ui.state.projects.filter((p) => p.status === 'open').map((p) => `<option value="${p.id}" ${task.projectId === p.id ? 'selected' : ''}>${esc(spaceLabel(p.spaceId))} › ${esc(p.title)}</option>`)].join('');
   const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => !h.archived && (task.projectId ? h.projectId === task.projectId : h.areaId === task.areaId && !h.projectId)).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
   const repeat = task.repeat;
   inspector.innerHTML = `<div class="inspector-scroll" data-task-id="${esc(task.id)}">
@@ -2329,6 +2486,7 @@ function renderInspector(force = false) {
     ${!repeat ? `<div class="detail-group"><span class="detail-label">When</span><div class="schedule-chips">
       ${[['inbox','Inbox'],['today','Today'],['evening','This evening'],['anytime','Anytime'],['someday','Someday']].map(([value, label]) => `<button class="chip ${schedule === value ? 'active' : ''}" data-schedule="${value}">${label}</button>`).join('')}
     </div><div class="detail-row" style="margin-top:9px"><input class="detail-input" type="date" data-field="scheduledFor" value="${task.scheduledFor || ''}" aria-label="Start date"><button class="checklist-add inline-add" type="button" data-inspector-action="clear-date">Clear</button></div></div>` : ''}
+    <div class="detail-group"><label class="detail-label" for="task-space">Space</label><select id="task-space" class="detail-select" data-field="spaceId">${spaceOptions}</select><p class="detail-help">Choosing a different Space removes this to-do from its current project or area.</p></div>
     <div class="detail-group"><label class="detail-label" for="task-project">Project</label><select id="task-project" class="detail-select" data-field="projectId">${projectOptions}</select></div>
     ${task.projectId || task.areaId ? `<div class="detail-group"><label class="detail-label" for="task-heading">Heading</label><select id="task-heading" class="detail-select" data-field="headingId">${headingOptions}</select></div>` : ''}
     <div class="detail-group"><label class="detail-label" for="task-reminder">Reminder</label><input id="task-reminder" class="detail-input" type="datetime-local" data-field="reminderAt" value="${task.reminderAt || ''}"></div>
@@ -2504,8 +2662,13 @@ function handleInspectorChange(event) {
   if (field === 'projectId') {
     task.projectId = event.target.value || null;
     const project = projectById(task.projectId);
-    if (project) task.areaId = project.areaId || null;
+    if (project) { task.areaId = project.areaId || null; task.spaceId = project.spaceId || task.spaceId; }
     if (!project || !ui.state.headings.some((heading) => heading.id === task.headingId && heading.projectId === project.id)) task.headingId = null;
+  }
+  if (field === 'spaceId') {
+    task.spaceId = event.target.value || task.spaceId;
+    if (projectById(task.projectId)?.spaceId !== task.spaceId) { task.projectId = null; task.areaId = null; task.headingId = null; }
+    else if (areaById(task.areaId)?.spaceId !== task.spaceId) { task.areaId = null; task.headingId = null; }
   }
   if (field === 'headingId') task.headingId = event.target.value || null;
   const repeatField = event.target.dataset.repeatField;
@@ -2535,7 +2698,7 @@ function handleInspectorChange(event) {
   if (deadlineInput) deadlineInput.value = task.deadline || '';
   renderSidebar();
   renderContent();
-  if (field === 'projectId' || repeatField === 'frequency') renderInspector(true);
+  if (field === 'projectId' || field === 'spaceId' || repeatField === 'frequency') renderInspector(true);
 }
 
 function handleInspectorClick(event) {
@@ -2668,12 +2831,12 @@ function openMoveTaskModal(taskOrTasks) {
     `<option value="inbox">Inbox</option>`,
     `<option value="anytime">No area or project (Anytime)</option>`,
     ...ui.state.areas.flatMap((area) => [
-      `<option value="area:${area.id}" ${single && task.areaId === area.id && !task.projectId && !task.headingId ? 'selected' : ''}>${esc(area.title)} (Area)</option>`,
-      ...ui.state.headings.filter((heading) => heading.areaId === area.id && !heading.projectId && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(area.title)} › ${esc(heading.title)}</option>`)
+      `<option value="area:${area.id}" ${single && task.areaId === area.id && !task.projectId && !task.headingId ? 'selected' : ''}>${esc(spaceLabel(area.spaceId))} › ${esc(area.title)} (Area)</option>`,
+      ...ui.state.headings.filter((heading) => heading.areaId === area.id && !heading.projectId && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(spaceLabel(area.spaceId))} › ${esc(area.title)} › ${esc(heading.title)}</option>`)
     ]),
     ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).flatMap((project) => [
-      `<option value="project:${project.id}" ${single && task.projectId === project.id && !task.headingId ? 'selected' : ''}>${esc(project.title)} (Project)</option>`,
-      ...ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(project.title)} › ${esc(heading.title)}</option>`)
+      `<option value="project:${project.id}" ${single && task.projectId === project.id && !task.headingId ? 'selected' : ''}>${esc(spaceLabel(project.spaceId))} › ${esc(project.title)} (Project)</option>`,
+      ...ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(spaceLabel(project.spaceId))} › ${esc(project.title)} › ${esc(heading.title)}</option>`)
     ])
   ].join('');
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="move-task-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Move ${tasks.length === 1 ? 'to-do' : `${tasks.length} to-dos`}</h2><p>Move ${tasks.length === 1 ? 'it' : 'them'} to the Inbox, an area, a project, or directly under a heading.</p><div class="form-field"><label for="move-search">Find a destination</label><input id="move-search" type="search" autocomplete="off" placeholder="Area, project, or heading"></div><div class="form-field"><label for="move-destination">Destination</label><select id="move-destination" size="7">${destinations}</select></div><div class="form-field"><label for="move-new-project">Or create a new project</label><input id="move-new-project" placeholder="New project name"></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Move</button></div></form></div>`;
@@ -2694,17 +2857,17 @@ function openMoveTaskModal(taskOrTasks) {
     let destinationProject = null;
     if (newTitle) {
       const selectedAreaId = value.startsWith('area:') ? value.slice(5) : null;
-      destinationProject = { id: uid('project'), areaId: selectedAreaId, title: newTitle, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
+      destinationProject = { id: uid('project'), areaId: selectedAreaId, spaceId: areaById(selectedAreaId)?.spaceId || itemSpaceId(task) || currentCreationSpaceId(), title: newTitle, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
       ui.state.projects.push(destinationProject);
     }
     tasks.forEach((item) => {
       item.projectId = null; item.headingId = null; item.areaId = null;
-      if (destinationProject) { item.projectId = destinationProject.id; item.areaId = destinationProject.areaId; }
+      if (destinationProject) { item.projectId = destinationProject.id; item.areaId = destinationProject.areaId; item.spaceId = destinationProject.spaceId; }
       else if (value === 'inbox') { item.bucket = 'inbox'; item.scheduledFor = null; item.evening = false; moveReminderToDate(item, null); }
       else if (value === 'anytime') { if (item.bucket === 'inbox') item.bucket = 'anytime'; }
-      else if (value.startsWith('area:')) { item.areaId = value.slice(5); if (item.bucket === 'inbox') item.bucket = 'anytime'; }
-      else if (value.startsWith('project:')) { const project = projectById(value.slice(8)); item.projectId = project.id; item.areaId = project.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
-      else if (value.startsWith('heading:')) { const heading = ui.state.headings.find((candidate) => candidate.id === value.slice(8)); const project = projectById(heading.projectId); item.headingId = heading.id; item.projectId = project?.id || null; item.areaId = project?.areaId || heading.areaId || null; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+      else if (value.startsWith('area:')) { const area = areaById(value.slice(5)); item.areaId = area.id; item.spaceId = area.spaceId || item.spaceId; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+      else if (value.startsWith('project:')) { const project = projectById(value.slice(8)); item.projectId = project.id; item.areaId = project.areaId || null; item.spaceId = project.spaceId || item.spaceId; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
+      else if (value.startsWith('heading:')) { const heading = ui.state.headings.find((candidate) => candidate.id === value.slice(8)); const project = projectById(heading.projectId); const area = areaById(heading.areaId); item.headingId = heading.id; item.projectId = project?.id || null; item.areaId = project?.areaId || heading.areaId || null; item.spaceId = project?.spaceId || area?.spaceId || item.spaceId; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
     });
     scheduleSave(); closeModal(); clearTaskSelection(); showToast(newTitle ? `Moved to new project “${newTitle}”` : `${tasks.length === 1 ? 'To-do' : `${tasks.length} to-dos`} moved`);
   });
@@ -2731,15 +2894,16 @@ function searchItems(query) {
   const special = [
     ['tomorrow','Tomorrow','calendar'], ['deadlines','Deadlines','flag'], ['repeating','Repeating','repeat'], ['allProjects','All Projects','list'], ['loggedProjects','Logged Projects','check']
   ].map(([type,title,iconName]) => ({ kind:'view', type, title, meta:'Special list', icon:iconName }));
-  const areas = ui.state.areas.map((area) => ({ kind:'view', type:'area', id:area.id, title:area.title, meta:'Area', icon:'circle' }));
-  const projects = ui.state.projects.filter((p) => p.status === 'open' || isCompletedButVisible(p)).map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:areaById(p.areaId)?.title || 'Project', icon:'list' }));
-  const headings = ui.state.headings.filter((h) => !h.archived).map((heading) => ({ kind:'heading', id:heading.id, projectId:heading.projectId, areaId:heading.areaId, title:heading.title, meta:projectById(heading.projectId)?.title || areaById(heading.areaId)?.title || 'Heading', icon:'heading' }));
+  const spaces = ui.state.spaces.map((space) => ({ kind:'space', id:space.id, title:space.title, meta:'Space', icon:'layers' }));
+  const areas = ui.state.areas.map((area) => ({ kind:'view', type:'area', id:area.id, title:area.title, meta:`${spaceLabel(area.spaceId)} · Area`, icon:'circle' }));
+  const projects = ui.state.projects.filter((p) => p.status === 'open' || isCompletedButVisible(p)).map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:`${spaceLabel(p.spaceId)} · ${areaById(p.areaId)?.title || 'Project'}`, icon:'list' }));
+  const headings = ui.state.headings.filter((h) => !h.archived).map((heading) => { const parent = projectById(heading.projectId) || areaById(heading.areaId); return { kind:'heading', id:heading.id, projectId:heading.projectId, areaId:heading.areaId, title:heading.title, meta:`${spaceLabel(parent?.spaceId)} · ${parent?.title || 'Heading'}`, icon:'heading' }; });
   const tags = [...new Set([...ui.state.tasks.flatMap((task) => effectiveTags(task)), ...ui.state.projects.flatMap((project) => effectiveProjectTags(project)), ...ui.state.areas.flatMap((area) => area.tags || [])])].map((tag) => ({ kind:'view', type:'tag', id:tag, title:tag, meta:'Tag', icon:'tag' }));
   const taskSource = ui.searchEverything ? ui.state.tasks : ui.state.tasks.filter((task) => task.status === 'open' || isCompletedButVisible(task));
-  const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:task.repeat ? 'Repeating template' : isLogged(task) ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do', icon:task.repeat ? 'repeat' : 'circle', searchText: ui.searchEverything ? `${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` : `${task.title} ${effectiveTags(task).join(' ')}` }));
-  const actions = [{ kind:'settings', title:'Settings', meta:'App preferences', icon:'settings' }];
+  const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:`${spaceLabel(itemSpaceId(task))} · ${task.repeat ? 'Repeating template' : isLogged(task) ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do'}`, icon:task.repeat ? 'repeat' : 'circle', searchText: ui.searchEverything ? `${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` : `${task.title} ${effectiveTags(task).join(' ')}` }));
+  const actions = [{ kind:'settings', title:'Settings', meta:'App preferences', icon:'settings' }, { kind:'space-settings', title:'Spaces & Schedule', meta:'Launch-time focus', icon:'clock' }];
   const queryTokens = q.split(/\s+/).filter(Boolean);
-  const matches = [...lists, ...special, ...actions, ...areas, ...projects, ...headings, ...tags, ...tasks].filter((item) => {
+  const matches = [...lists, ...special, ...actions, ...spaces, ...areas, ...projects, ...headings, ...tags, ...tasks].filter((item) => {
     const haystack = `${item.title} ${item.meta} ${item.searchText || ''}`.toLowerCase();
     return !q || queryTokens.every((token) => haystack.includes(token));
   }).slice(0, 24);
@@ -2776,6 +2940,8 @@ function chooseSearchResult(item) {
   }
   closeModal();
   if (item.kind === 'settings') openSettings();
+  else if (item.kind === 'space-settings') openSpaceSettings();
+  else if (item.kind === 'space') setActiveSpace(item.id);
   else if (item.kind === 'view') setView(item.type, item.id || null);
   else if (item.kind === 'heading') setView(item.projectId ? 'project' : 'area', item.projectId || item.areaId);
   else {
@@ -2792,23 +2958,35 @@ function chooseSearchResult(item) {
 }
 
 function openNewListModal(defaults = {}) {
-  const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}">${esc(area.title)}</option>`)].join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="new-list-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Create a list</h2><p>Use projects for outcomes and areas for the ongoing parts of your life.</p><div class="form-field"><label for="list-type">Type</label><select id="list-type"><option value="project" ${defaults.type !== 'area' ? 'selected' : ''}>Project</option><option value="area" ${defaults.type === 'area' ? 'selected' : ''}>Area</option></select></div><div class="form-field"><label for="list-title">Name</label><input id="list-title" required autocomplete="off" placeholder="e.g. Plan summer trip"></div><div class="form-field" id="area-field"><label for="list-area">Area</label><select id="list-area">${areaOptions}</select></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Create</button></div></form></div>`;
+  const initialSpaceId = areaById(defaults.areaId)?.spaceId || defaults.spaceId || currentCreationSpaceId();
+  const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${space.id === initialSpaceId ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
+  const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}" data-space-option="${esc(area.spaceId || '')}">${esc(spaceLabel(area.spaceId))} › ${esc(area.title)}</option>`)].join('');
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="new-list-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Create a list</h2><p>Use projects for outcomes, areas for ongoing responsibilities, and Spaces for the part of life they belong to.</p><div class="repeat-grid"><div class="form-field"><label for="list-type">Type</label><select id="list-type"><option value="project" ${defaults.type !== 'area' ? 'selected' : ''}>Project</option><option value="area" ${defaults.type === 'area' ? 'selected' : ''}>Area</option></select></div><div class="form-field"><label for="list-space">Space</label><select id="list-space">${spaceOptions}</select></div></div><div class="form-field"><label for="list-title">Name</label><input id="list-title" required autocomplete="off" placeholder="e.g. Plan summer trip"></div><div class="form-field" id="area-field"><label for="list-area">Area</label><select id="list-area">${areaOptions}</select></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Create</button></div></form></div>`;
   activateModal();
   if (defaults.areaId) $('#list-area').value = defaults.areaId;
   $('#area-field').hidden = defaults.type === 'area';
   $('#list-type').addEventListener('change', (event) => { $('#area-field').hidden = event.target.value === 'area'; });
+  const filterAreas = () => {
+    const spaceId = $('#list-space').value;
+    $$('[data-space-option]', $('#list-area')).forEach((option) => { option.hidden = option.dataset.spaceOption !== spaceId; });
+    const selected = $('#list-area').selectedOptions[0];
+    if (selected?.hidden) $('#list-area').value = '';
+  };
+  $('#list-space').addEventListener('change', filterAreas);
+  filterAreas();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
   $('#new-list-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const title = $('#list-title').value.trim();
     if (!title) return;
+    const spaceId = $('#list-space').value || currentCreationSpaceId();
     if ($('#list-type').value === 'area') {
-      const area = { id: uid('area'), title, color: ['#5b7cfa','#e49b3c','#5ba67a','#b06bd3'][ui.state.areas.length % 4], tags: [], order: ui.state.areas.length };
+      const area = { id: uid('area'), spaceId, title, color: spaceById(spaceId)?.color || ['#5b7cfa','#e49b3c','#5ba67a','#b06bd3'][ui.state.areas.length % 4], tags: [], order: ui.state.areas.length };
       ui.state.areas.push(area); closeModal(); setView('area', area.id);
     } else {
-      const project = { id: uid('project'), areaId: $('#list-area').value || null, title, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
+      const areaId = $('#list-area').value || null;
+      const project = { id: uid('project'), spaceId: areaById(areaId)?.spaceId || spaceId, areaId, title, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
       ui.state.projects.push(project); closeModal(); setView('project', project.id);
     }
     scheduleSave();
@@ -2820,8 +2998,8 @@ function openHeadingModal(headingId = null) {
   const heading = ui.state.headings.find((item) => item.id === headingId);
   const defaultParent = heading?.projectId ? `project:${heading.projectId}` : heading?.areaId ? `area:${heading.areaId}` : `${ui.view.type}:${ui.view.id}`;
   const parentOptions = [
-    ...ui.state.areas.map((area) => `<option value="area:${area.id}" ${defaultParent === `area:${area.id}` ? 'selected' : ''}>${esc(area.title)} (Area)</option>`),
-    ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).map((project) => `<option value="project:${project.id}" ${defaultParent === `project:${project.id}` ? 'selected' : ''}>${esc(project.title)} (Project)</option>`)
+    ...ui.state.areas.map((area) => `<option value="area:${area.id}" ${defaultParent === `area:${area.id}` ? 'selected' : ''}>${esc(spaceLabel(area.spaceId))} › ${esc(area.title)} (Area)</option>`),
+    ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).map((project) => `<option value="project:${project.id}" ${defaultParent === `project:${project.id}` ? 'selected' : ''}>${esc(spaceLabel(project.spaceId))} › ${esc(project.title)} (Project)</option>`)
   ].join('');
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="heading-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>${heading ? 'Edit heading' : 'New heading'}</h2><p>Headings divide an area or project into clear stages or categories.</p><div class="form-field"><label for="heading-title">Name</label><input id="heading-title" required value="${esc(heading?.title || '')}" placeholder="e.g. Preparation"></div><div class="form-field"><label for="heading-parent">Location</label><select id="heading-parent">${parentOptions}</select></div>${heading ? `<div class="settings-section button-row"><button class="button" type="button" data-heading-action="duplicate">Duplicate with to-dos</button><button class="button" type="button" data-heading-action="convert">Convert to project</button><button class="button" type="button" data-heading-action="archive">Archive</button><button class="danger-button" type="button" data-heading-action="delete">${icon('trash')} Delete heading</button></div>` : ''}<div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">${heading ? 'Save' : 'Create'}</button></div></form></div>`;
   activateModal();
@@ -2838,9 +3016,11 @@ function openHeadingModal(headingId = null) {
         heading.projectId = parentType === 'project' ? parentId : null;
         heading.areaId = parentType === 'area' ? parentId : null;
         const destination = parentType === 'project' ? projectById(parentId) : null;
+        const destinationArea = parentType === 'area' ? areaById(parentId) : null;
         ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => {
           task.projectId = destination?.id || null;
           task.areaId = destination?.areaId || (parentType === 'area' ? parentId : null);
+          task.spaceId = destination?.spaceId || destinationArea?.spaceId || task.spaceId;
         });
       }
     }
@@ -2860,9 +3040,10 @@ function openHeadingModal(headingId = null) {
       showToast('Heading archived');
     } else if (button.dataset.headingAction === 'convert') {
       const sourceProject = projectById(heading.projectId);
-      const project = { id: uid('project'), areaId: sourceProject?.areaId || heading.areaId || null, title: heading.title, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
+      const projectAreaId = sourceProject?.areaId || heading.areaId || null;
+      const project = { id: uid('project'), spaceId: sourceProject?.spaceId || areaById(projectAreaId)?.spaceId || currentCreationSpaceId(), areaId: projectAreaId, title: heading.title, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
       ui.state.projects.push(project);
-      ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => { task.projectId = project.id; task.headingId = null; task.areaId = project.areaId; });
+      ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => { task.projectId = project.id; task.headingId = null; task.areaId = project.areaId; task.spaceId = project.spaceId; });
       ui.state.headings = ui.state.headings.filter((item) => item.id !== heading.id);
       scheduleSave(); closeModal(); setView('project', project.id); showToast('Heading converted to project'); return;
     } else {
@@ -2890,12 +3071,13 @@ function deleteHeading(headingId) {
 function openProjectModal(projectId) {
   const project = projectById(projectId);
   if (!project) return;
-  const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}" ${project.areaId === area.id ? 'selected' : ''}>${esc(area.title)}</option>`)].join('');
+  const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${project.spaceId === space.id ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
+  const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}" ${project.areaId === area.id ? 'selected' : ''}>${esc(spaceLabel(area.spaceId))} › ${esc(area.title)}</option>`)].join('');
   const archivedHeadings = ui.state.headings.filter((heading) => heading.projectId === project.id && heading.archived);
   const projectActions = isTrashed(project)
     ? `<button class="button" type="button" data-project-action="restore-trash">Restore project</button><button class="danger-button" type="button" data-project-action="delete-forever">${icon('trash')} Delete forever</button>`
     : `<button class="button" type="button" data-project-action="duplicate">Duplicate project</button><button class="button" type="button" data-project-action="${['completed', 'canceled'].includes(project.status) ? 'restore' : 'complete'}">${['completed', 'canceled'].includes(project.status) ? 'Restore project' : 'Complete project'}</button>${project.status === 'open' ? '<button class="button" type="button" data-project-action="cancel">Cancel project</button>' : ''}<button class="danger-button" type="button" data-project-action="delete">${icon('trash')} Move to Trash</button>`;
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="project-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Project options</h2><p>Edit the outcome, move it, duplicate it, or send it to the Logbook.</p><div class="form-field"><label for="project-title">Name</label><input id="project-title" required value="${esc(project.title)}"></div><div class="form-field"><label for="project-notes">Notes</label><textarea id="project-notes" rows="4">${esc(project.notes || '')}</textarea></div><div class="form-field"><label for="project-area">Area</label><select id="project-area">${areaOptions}</select></div><div class="repeat-grid"><div class="form-field"><label for="project-when">When</label><select id="project-when"><option value="anytime" ${project.bucket === 'anytime' ? 'selected' : ''}>Anytime</option><option value="today" ${project.bucket === 'today' ? 'selected' : ''}>Today</option><option value="upcoming" ${project.bucket === 'upcoming' ? 'selected' : ''}>Upcoming</option><option value="someday" ${project.bucket === 'someday' ? 'selected' : ''}>Someday</option></select></div><div class="form-field"><label for="project-start">Start date</label><input id="project-start" type="date" value="${project.scheduledFor || ''}"></div><div class="form-field"><label for="project-deadline">Deadline</label><input id="project-deadline" type="date" value="${project.deadline || ''}"></div></div><div class="form-field"><label for="project-tags">Tags</label><input id="project-tags" value="${esc((project.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}${project.status === 'open' ? `<div class="settings-section"><h3>Repeat</h3>${project.repeat ? `<div class="repeat-grid"><select class="detail-select" data-project-repeat-field="mode"><option value="fixed" ${project.repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${project.repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-project-repeat-field="frequency"><option value="daily" ${project.repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${project.repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${project.repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${project.repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" data-project-repeat-field="interval" value="${project.repeat.interval || 1}" aria-label="Project repeat interval"><input class="detail-input" type="date" data-project-repeat-field="nextDate" value="${project.repeat.nextDate || addDays(localDay(), 7)}" aria-label="Project next occurrence"></div>${project.repeat.frequency === 'weekly' ? `<div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(project.repeat.weekdays || []).includes(day) ? 'active' : ''}" type="button" data-project-weekday="${day}">${label}</button>`).join('')}</div>` : ''}<button class="checklist-add" type="button" data-project-action="stop-repeat">Stop repeating</button>` : `<button class="button" type="button" data-project-action="repeat">Make project repeating…</button>`}</div>` : ''}<div class="settings-section button-row">${projectActions}</div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="project-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Project options</h2><p>Edit the outcome, move it, duplicate it, or send it to the Logbook.</p><div class="form-field"><label for="project-title">Name</label><input id="project-title" required value="${esc(project.title)}"></div><div class="form-field"><label for="project-notes">Notes</label><textarea id="project-notes" rows="4">${esc(project.notes || '')}</textarea></div><div class="repeat-grid"><div class="form-field"><label for="project-space">Space</label><select id="project-space">${spaceOptions}</select></div><div class="form-field"><label for="project-area">Area</label><select id="project-area">${areaOptions}</select></div></div><div class="repeat-grid"><div class="form-field"><label for="project-when">When</label><select id="project-when"><option value="anytime" ${project.bucket === 'anytime' ? 'selected' : ''}>Anytime</option><option value="today" ${project.bucket === 'today' ? 'selected' : ''}>Today</option><option value="upcoming" ${project.bucket === 'upcoming' ? 'selected' : ''}>Upcoming</option><option value="someday" ${project.bucket === 'someday' ? 'selected' : ''}>Someday</option></select></div><div class="form-field"><label for="project-start">Start date</label><input id="project-start" type="date" value="${project.scheduledFor || ''}"></div><div class="form-field"><label for="project-deadline">Deadline</label><input id="project-deadline" type="date" value="${project.deadline || ''}"></div></div><div class="form-field"><label for="project-tags">Tags</label><input id="project-tags" value="${esc((project.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}${project.status === 'open' ? `<div class="settings-section"><h3>Repeat</h3>${project.repeat ? `<div class="repeat-grid"><select class="detail-select" data-project-repeat-field="mode"><option value="fixed" ${project.repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${project.repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-project-repeat-field="frequency"><option value="daily" ${project.repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${project.repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${project.repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${project.repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" data-project-repeat-field="interval" value="${project.repeat.interval || 1}" aria-label="Project repeat interval"><input class="detail-input" type="date" data-project-repeat-field="nextDate" value="${project.repeat.nextDate || addDays(localDay(), 7)}" aria-label="Project next occurrence"></div>${project.repeat.frequency === 'weekly' ? `<div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(project.repeat.weekdays || []).includes(day) ? 'active' : ''}" type="button" data-project-weekday="${day}">${label}</button>`).join('')}</div>` : ''}<button class="checklist-add" type="button" data-project-action="stop-repeat">Stop repeating</button>` : `<button class="button" type="button" data-project-action="repeat">Make project repeating…</button>`}</div>` : ''}<div class="settings-section button-row">${projectActions}</div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -2909,6 +3091,7 @@ function openProjectModal(projectId) {
     project.title = $('#project-title').value.trim() || project.title;
     project.notes = $('#project-notes').value.trim();
     project.areaId = $('#project-area').value || null;
+    project.spaceId = areaById(project.areaId)?.spaceId || $('#project-space').value || project.spaceId;
     project.bucket = $('#project-when').value;
     project.scheduledFor = $('#project-start').value || null;
     if (project.bucket === 'today') project.scheduledFor = localDay();
@@ -2918,7 +3101,7 @@ function openProjectModal(projectId) {
     project.tags = selectedPickerTags($('#project-form'));
     $$('[data-project-repeat-field]').forEach((field) => { project.repeat[field.dataset.projectRepeatField] = field.dataset.projectRepeatField === 'interval' ? Math.max(1, Number(field.value) || 1) : field.value; });
     if (project.repeat) project.repeat.deadlineOffset = dayDistance(project.repeat.nextDate, project.deadline);
-    ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.areaId = project.areaId; });
+    ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.areaId = project.areaId; task.spaceId = project.spaceId; });
     scheduleSave(); closeModal(); render();
   });
   $$('[data-restore-heading]').forEach((button) => button.addEventListener('click', () => {
@@ -3027,7 +3210,8 @@ function openAreaModal(areaId) {
   const area = areaById(areaId);
   if (!area) return;
   const archivedHeadings = headingsFor('area', area.id, true).filter((heading) => heading.archived);
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="area-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Area options</h2><p>Areas represent ongoing responsibilities that do not finish.</p><div class="form-field"><label for="area-title">Name</label><input id="area-title" required value="${esc(area.title)}"></div><div class="form-field"><label for="area-color">Color</label><input id="area-color" type="color" value="${esc(area.color || '#5b7cfa')}"></div><div class="form-field"><label for="area-tags">Tags inherited by its to-dos</label><input id="area-tags" value="${esc((area.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-area-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}<div class="settings-section button-row"><button class="button" type="button" data-area-new-heading>${icon('heading')} New heading</button><button class="danger-button" type="button" data-area-delete>${icon('trash')} Delete area</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
+  const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${area.spaceId === space.id ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="area-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Area options</h2><p>Areas represent ongoing responsibilities that do not finish.</p><div class="form-field"><label for="area-title">Name</label><input id="area-title" required value="${esc(area.title)}"></div><div class="repeat-grid"><div class="form-field"><label for="area-space">Space</label><select id="area-space">${spaceOptions}</select></div><div class="form-field"><label for="area-color">Color</label><input id="area-color" type="color" value="${esc(area.color || '#5b7cfa')}"></div></div><div class="form-field"><label for="area-tags">Tags inherited by its to-dos</label><input id="area-tags" value="${esc((area.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-area-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}<div class="settings-section button-row"><button class="button" type="button" data-area-new-heading>${icon('heading')} New heading</button><button class="danger-button" type="button" data-area-delete>${icon('trash')} Delete area</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -3036,7 +3220,7 @@ function openAreaModal(areaId) {
   areaTagInput.insertAdjacentHTML('afterend', renderTagPicker(area.tags, 'area'));
   areaTagInput.remove();
   bindTagPicker($('#area-form'));
-  $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.color = $('#area-color').value; area.tags = selectedPickerTags($('#area-form')); scheduleSave(); closeModal(); render(); });
+  $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.spaceId = $('#area-space').value || area.spaceId; area.color = $('#area-color').value; area.tags = selectedPickerTags($('#area-form')); ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.spaceId = area.spaceId; ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.spaceId = area.spaceId; }); }); ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.spaceId = area.spaceId; }); scheduleSave(); closeModal(); render(); });
   $('[data-area-new-heading]').addEventListener('click', () => { closeModal(); setView('area', area.id); openHeadingModal(); });
   $$('[data-restore-area-heading]').forEach((button) => button.addEventListener('click', () => { const heading = ui.state.headings.find((item) => item.id === button.dataset.restoreAreaHeading); if (heading) heading.archived = false; scheduleSave(); closeModal(); render(); showToast('Heading restored'); }));
   $('[data-area-delete]').addEventListener('click', () => {
@@ -3051,11 +3235,80 @@ function openAreaModal(areaId) {
   });
 }
 
+function openSpaceSwitcher() {
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal space-switcher-modal" role="dialog" aria-modal="true" aria-label="Choose a Space"><h2>Choose a Space</h2><p>Quick Find remains available across every Space.</p><div class="space-switcher-list"><button class="space-switcher-item ${ui.activeSpaceId === 'all' ? 'active' : ''}" type="button" data-switch-space="all"><i style="--space-color:#85878b"></i><span>All</span>${ui.activeSpaceId === 'all' ? icon('check') : ''}</button>${[...ui.state.spaces].sort((a, b) => a.order - b.order).map((space) => `<button class="space-switcher-item ${ui.activeSpaceId === space.id ? 'active' : ''}" type="button" data-switch-space="${esc(space.id)}"><i style="--space-color:${esc(space.color)}"></i><span>${esc(space.title)}</span>${ui.activeSpaceId === space.id ? icon('check') : ''}</button>`).join('')}</div><div class="form-actions"><button class="button" type="button" data-manage-spaces>${icon('clock')} Spaces & schedule</button><button class="button primary" type="button" data-cancel>Done</button></div></div></div>`;
+  activateModal();
+  $$('[data-switch-space]').forEach((button) => button.addEventListener('click', () => { closeModal(); setActiveSpace(button.dataset.switchSpace); }));
+  $('[data-manage-spaces]').addEventListener('click', openSpaceSettings);
+  $('[data-cancel]').addEventListener('click', closeModal);
+  $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
+}
+
+function applySpaceSettingsForm() {
+  const form = $('#space-settings-form');
+  if (!form) return;
+  $$('[data-space-row]', form).forEach((row) => {
+    const space = spaceById(row.dataset.spaceRow);
+    if (!space) return;
+    space.title = $('[data-space-field="title"]', row).value.trim() || space.title;
+    space.color = $('[data-space-field="color"]', row).value;
+    space.pinned = $('[data-space-field="pinned"]', row).checked;
+  });
+  if (!ui.state.spaces.some((space) => space.pinned)) ui.state.spaces.slice(0, 2).forEach((space) => { space.pinned = true; });
+  const schedule = ui.state.settings.spaceSchedule;
+  schedule.enabled = $('#space-schedule-enabled').checked;
+  ui.state.settings.defaultSpaceId = $('#space-default').value || ui.state.spaces[0]?.id || null;
+  schedule.rules = $$('[data-space-rule]', form).map((row, index) => ({
+    id: row.dataset.spaceRule,
+    spaceId: $('[data-rule-field="spaceId"]', row).value,
+    weekdays: $$('[data-rule-weekday].active', row).map((button) => Number(button.dataset.ruleWeekday)),
+    start: $('[data-rule-field="start"]', row).value,
+    end: $('[data-rule-field="end"]', row).value,
+    order: index,
+  })).filter((rule) => rule.weekdays.length && spaceById(rule.spaceId));
+}
+
+function openSpaceSettings() {
+  const schedule = ui.state.settings.spaceSchedule;
+  const spaceOptions = (selectedId) => ui.state.spaces.map((space) => `<option value="${space.id}" ${space.id === selectedId ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="space-settings-form" class="modal form-modal settings-modal space-settings-modal" role="dialog" aria-modal="true" aria-labelledby="space-settings-title"><h2 id="space-settings-title">Spaces & schedule</h2><p>Spaces focus every list below the sidebar pill. Automatic selection is evaluated only when Objects launches or the page is reloaded.</p><div class="settings-section account-section"><h3>Spaces</h3><p>Up to two pinned Spaces appear directly in the pill. Additional Spaces are available through the overflow segment.</p><div class="space-manager">${[...ui.state.spaces].sort((a, b) => a.order - b.order).map((space) => `<div class="space-manager-row" data-space-row="${esc(space.id)}"><input class="space-color-input" type="color" value="${esc(space.color)}" data-space-field="color" aria-label="${esc(space.title)} color"><input class="detail-input" value="${esc(space.title)}" maxlength="40" data-space-field="title" aria-label="Space name"><label class="space-pin"><input type="checkbox" data-space-field="pinned" ${space.pinned ? 'checked' : ''}> Pin</label><button class="icon-button" type="button" data-delete-space="${esc(space.id)}" aria-label="Delete ${esc(space.title)}" ${ui.state.spaces.length < 2 ? 'disabled' : ''}>${icon('trash')}</button></div>`).join('')}</div><button class="button" type="button" data-add-space>${icon('plus')} Add Space</button></div><div class="settings-section"><h3>Choose Space on launch</h3><div class="settings-row"><label for="space-schedule-enabled">Automatic selection</label><input id="space-schedule-enabled" type="checkbox" ${schedule.enabled ? 'checked' : ''}></div><div class="settings-row"><label for="space-default">Default outside scheduled blocks</label><select id="space-default" class="detail-select">${spaceOptions(ui.state.settings.defaultSpaceId)}</select></div><p>The current Space never changes while you are using the app. A manual choice lasts until the next launch or reload.</p></div><div class="settings-section"><h3>Scheduled blocks</h3><div class="space-rules">${(schedule.rules || []).sort((a, b) => (a.order || 0) - (b.order || 0)).map((rule) => `<div class="space-rule" data-space-rule="${esc(rule.id)}"><div class="space-rule-top"><select class="detail-select" data-rule-field="spaceId">${spaceOptions(rule.spaceId)}</select><div class="space-rule-times"><input class="detail-input" type="time" value="${esc(rule.start)}" data-rule-field="start" aria-label="Start time"><span>to</span><input class="detail-input" type="time" value="${esc(rule.end)}" data-rule-field="end" aria-label="End time"></div><button class="icon-button" type="button" data-delete-rule="${esc(rule.id)}" aria-label="Delete scheduled block">${icon('trash')}</button></div><div class="weekday-row">${['S','M','T','W','T','F','S'].map((label, day) => `<button class="chip ${(rule.weekdays || []).includes(day) ? 'active' : ''}" type="button" data-rule-weekday="${day}" aria-pressed="${(rule.weekdays || []).includes(day)}" aria-label="${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}">${label}</button>`).join('')}</div></div>`).join('')}</div><button class="button" type="button" data-add-space-rule>${icon('plus')} Add scheduled block</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
+  activateModal();
+  $('[data-cancel]').addEventListener('click', closeModal);
+  $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
+  $$('[data-rule-weekday]').forEach((button) => button.addEventListener('click', () => { button.classList.toggle('active'); button.setAttribute('aria-pressed', button.classList.contains('active')); }));
+  $('[data-add-space]').addEventListener('click', () => {
+    applySpaceSettingsForm();
+    ui.state.spaces.push({ id: uid('space'), title: `Space ${ui.state.spaces.length + 1}`, color: ['#5ba67a', '#b06bd3', '#e49b3c', '#5b7cfa'][ui.state.spaces.length % 4], pinned: ui.state.spaces.filter((space) => space.pinned).length < 2, order: ui.state.spaces.length });
+    scheduleSave(); openSpaceSettings();
+  });
+  $('[data-add-space-rule]').addEventListener('click', () => {
+    applySpaceSettingsForm();
+    schedule.rules.push({ id: uid('space-rule'), spaceId: ui.state.spaces.find((space) => space.id !== ui.state.settings.defaultSpaceId)?.id || ui.state.spaces[0]?.id, weekdays: [1, 2, 3, 4, 5], start: '09:00', end: '17:30', order: schedule.rules.length });
+    scheduleSave(); openSpaceSettings();
+  });
+  $$('[data-delete-rule]').forEach((button) => button.addEventListener('click', () => { applySpaceSettingsForm(); schedule.rules = schedule.rules.filter((rule) => rule.id !== button.dataset.deleteRule); scheduleSave(); openSpaceSettings(); }));
+  $$('[data-delete-space]').forEach((button) => button.addEventListener('click', () => {
+    const space = spaceById(button.dataset.deleteSpace);
+    if (!space || ui.state.spaces.length < 2) return;
+    applySpaceSettingsForm();
+    confirmAction(`Delete “${space.title}”?`, 'Its areas, projects, to-dos, and calendar events will move to the default remaining Space.', 'Delete Space', () => {
+      const fallback = ui.state.spaces.find((candidate) => candidate.id !== space.id && candidate.id === ui.state.settings.defaultSpaceId) || ui.state.spaces.find((candidate) => candidate.id !== space.id);
+      [...ui.state.areas, ...ui.state.projects, ...ui.state.tasks, ...ui.state.calendarEvents].filter((item) => item.spaceId === space.id).forEach((item) => { item.spaceId = fallback.id; });
+      ui.state.spaces = ui.state.spaces.filter((candidate) => candidate.id !== space.id);
+      schedule.rules = schedule.rules.filter((rule) => rule.spaceId !== space.id);
+      if (ui.state.settings.defaultSpaceId === space.id) ui.state.settings.defaultSpaceId = fallback.id;
+      if (ui.activeSpaceId === space.id) { ui.activeSpaceId = fallback.id; rememberActiveSpace(); }
+      scheduleSave(); render(); openSpaceSettings(); showToast(`Deleted “${space.title}”`);
+    });
+  }));
+  $('#space-settings-form').addEventListener('submit', (event) => { event.preventDefault(); applySpaceSettingsForm(); scheduleSave(); closeModal(); render(); showToast('Space settings saved'); });
+}
+
 function openSettings() {
   const settings = ui.state.settings;
   const managedTags = getKnownTags();
   const pwa = getPwaStatus();
-  const pendingLogCount = [...ui.state.tasks, ...ui.state.projects].filter(isCompletedButVisible).length;
+  const pendingLogCount = [...ui.state.tasks, ...ui.state.projects].filter((item) => matchesActiveSpace(item) && isCompletedButVisible(item)).length;
   const logbookHelp = settings.logCompletedItems === 'immediately' ? 'Completed items move to the Logbook as soon as they are checked.' : settings.logCompletedItems === 'manually' ? 'Completed items stay in their original lists until you log them.' : 'Completed items stay visible for the rest of the day and move to the Logbook after midnight.';
   const installLabel = pwa.installed ? 'Installed' : pwa.canPromptInstall ? 'Install Objects' : 'Installation help';
   const installHelp = pwa.installed ? 'Objects is running as an installed app.' : pwa.ios ? 'On iPhone or iPad, use Share → Add to Home Screen. Notifications are available only after installation.' : 'Install from this button when available, or use your browser’s Install app / Add to Home Screen menu.';
@@ -3063,6 +3316,7 @@ function openSettings() {
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
     <h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p>
     <div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div>
+    <div class="settings-section"><h3>Spaces</h3><p>Separate areas of life while keeping everything searchable and editable.</p><div class="settings-row"><span>${ui.state.spaces.length} Space${ui.state.spaces.length === 1 ? '' : 's'} · ${settings.spaceSchedule?.enabled ? 'automatic launch selection on' : 'manual selection'}</span><button class="button" type="button" data-settings-action="spaces">Manage</button></div></div>
     <div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div>
     <div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div>
     <div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div>
@@ -3115,6 +3369,7 @@ function removeTag(tag) {
 }
 
 async function handleSettingsAction(action) {
+  if (action === 'spaces') { openSpaceSettings(); return; }
   if (action === 'logout') {
     closeModal(); await performSignOut();
     return;
@@ -3150,7 +3405,7 @@ async function handleSettingsAction(action) {
     const end = $('#event-end').value || start;
     if (!title || !start) { showToast('Add an event title and start time'); return; }
     if (end < start) { showToast('The event end must be after its start'); return; }
-    ui.state.calendarEvents.push({ id: uid('event'), title, start, end, calendar: 'Objects', allDay: false });
+    ui.state.calendarEvents.push({ id: uid('event'), spaceId: currentCreationSpaceId(), title, start, end, calendar: 'Objects', allDay: false });
     scheduleSave(); showToast('Calendar event added'); openSettings();
   }
   if (action === 'export') {
@@ -3167,8 +3422,8 @@ function importJsonFile(event) {
     try {
       const state = JSON.parse(reader.result);
       if (!state || !Array.isArray(state.tasks) || !Array.isArray(state.projects) || !Array.isArray(state.areas)) throw new Error('Invalid backup');
-      confirmAction('Replace all Objects data?', 'The imported backup will replace the current tasks, projects, areas, settings, and calendar events.', 'Import backup', () => {
-        ui.state = state; normalizeState(); scheduleSave(); setView('today'); showToast('Backup imported');
+      confirmAction('Replace all Objects data?', 'The imported backup will replace the current Spaces, tasks, projects, areas, settings, and calendar events.', 'Import backup', () => {
+        ui.state = state; normalizeState(); initializeActiveSpace(); scheduleSave(); setView('today'); showToast('Backup imported');
       });
     } catch (error) { showToast('This file is not a valid Objects backup'); }
   };
@@ -3189,7 +3444,7 @@ function importIcsFile(event) {
       if (!title || !startRaw) continue;
       const start = parseIcsDate(startRaw); const end = parseIcsDate(get('DTEND') || startRaw);
       const id = get('UID') || uid('event');
-      const event = { id, title: title.replace(/\\,/g, ',').replace(/\\n/gi, ' ').replace(/\\\\/g, '\\'), start, end, calendar: 'Imported', allDay: /^\d{8}$/.test(startRaw) };
+      const event = { id, spaceId: currentCreationSpaceId(), title: title.replace(/\\,/g, ',').replace(/\\n/gi, ' ').replace(/\\\\/g, '\\'), start, end, calendar: 'Imported', allDay: /^\d{8}$/.test(startRaw) };
       const existing = ui.state.calendarEvents.findIndex((item) => item.id === id);
       if (existing >= 0) ui.state.calendarEvents[existing] = event;
       else ui.state.calendarEvents.push(event);

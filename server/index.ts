@@ -3,7 +3,7 @@ import { addCapturedTask, createSeed, isObjectsState } from "../shared/state";
 
 const MAX_STATE_SIZE = 750_000;
 const MAX_ROW_SIZE = 60_000;
-const ENTITY_KINDS = ["areas", "projects", "headings", "calendarEvents", "tasks"] as const;
+const ENTITY_KINDS = ["spaces", "areas", "projects", "headings", "calendarEvents", "tasks"] as const;
 type EntityKind = typeof ENTITY_KINDS[number];
 type JsonRecord = Record<string, unknown>;
 type ChangeSet = {
@@ -45,7 +45,7 @@ const PWA_MANIFEST = JSON.stringify({
 });
 
 
-const SERVICE_WORKER = `const CACHE = "objects-pwa-v7";
+const SERVICE_WORKER = `const CACHE = "objects-pwa-v8";
 const CORE = ["/", "/client.js", "/manifest.webmanifest", "/favicon.svg"];
 const network = self["fet" + "ch"].bind(self);
 
@@ -146,7 +146,8 @@ function parseState(serialized: string, refreshUpdatedAt = true) {
   if (typeof serialized !== "string" || serialized.length > MAX_STATE_SIZE) throw new Error("Objects data is too large");
   const state: unknown = JSON.parse(serialized);
   if (!isObjectsState(state)) throw new Error("Invalid Objects data");
-  state.version = 5;
+  if (!Array.isArray(state.spaces)) state.spaces = [];
+  state.version = 7;
   if (refreshUpdatedAt || !state.updatedAt) state.updatedAt = new Date().toISOString();
   return state;
 }
@@ -215,7 +216,8 @@ async function normalizedState(ctx: any, ownerId: string, meta?: any) {
     .first();
   if (!workspace) return legacyState(ctx, ownerId);
 
-  const [areas, projects, headings, calendarEvents, tasks, checklistItems] = await Promise["al" + "l"]([
+  const [spaces, areas, projects, headings, calendarEvents, tasks, checklistItems] = await Promise["al" + "l"]([
+    collectOwned(ctx.db.spaces, ownerId),
     collectOwned(ctx.db.areas, ownerId),
     collectOwned(ctx.db.projects, ownerId),
     collectOwned(ctx.db.headings, ownerId),
@@ -237,10 +239,11 @@ async function normalizedState(ctx: any, ownerId: string, meta?: any) {
       .map(({ __position: _position, ...item }) => item)
   }));
   return JSON.stringify({
-    version: Number(workspace.version) || 6,
+    version: Number(workspace.version) || 7,
     updatedAt: workspace.stateUpdatedAt,
     syncMutationId: workspace.lastMutationId,
     settings: parseRecord(workspace.settingsData),
+    spaces: inflate(spaces),
     areas: inflate(areas),
     projects: inflate(projects),
     headings: inflate(headings),
@@ -347,7 +350,7 @@ async function initializeState(ctx: any, ownerId: string, serialized: string) {
   const updatedAt = new Date().toISOString();
   const id = await ctx.db.workspaceMeta.insert({
     ownerId,
-    version: "6",
+    version: "7",
     settingsData: serializeRecord(state.settings),
     stateUpdatedAt: updatedAt,
     lastMutationId: "migration"
@@ -385,7 +388,7 @@ async function applyChangeSet(ctx: any, ownerId: string, changes: ChangeSet) {
     : currentSettings;
   const updatedAt = new Date().toISOString();
   await ctx.db.workspaceMeta.update(meta.id, {
-    version: "6",
+    version: "7",
     settingsData: serializeRecord(settings),
     stateUpdatedAt: updatedAt,
     lastMutationId: changes.mutationId
@@ -410,6 +413,7 @@ export default capsule({
       stateUpdatedAt: string(),
       lastMutationId: string()
     }).index("by_owner", ["ownerId"]),
+    spaces: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
     areas: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
     projects: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
     headings: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),

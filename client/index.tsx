@@ -72,8 +72,11 @@ const OBJECTS_SHELL = `
     <aside id="sidebar" class="sidebar" aria-label="Lists">
       <div class="window-bar">
         <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="Close sidebar"></button>
-        <span class="window-bar-spacer" aria-hidden="true"></span>
-        <button id="search-button" class="icon-button" type="button" aria-label="Quick find"></button>
+        <div id="space-controls" class="space-controls" aria-label="Task Space"></div>
+        <div class="window-actions">
+          <button id="space-settings-button" class="icon-button space-settings-button" type="button" aria-label="Spaces and launch schedule"></button>
+          <button id="search-button" class="icon-button" type="button" aria-label="Quick find"></button>
+        </div>
       </div>
       <nav id="sidebar-nav" class="sidebar-nav"></nav>
       <div class="sidebar-footer">

@@ -11,6 +11,7 @@ Live app: [objects.lakebed.app](https://objects.lakebed.app)
 ## Features
 
 - Inbox, Today, This Evening, Upcoming, Anytime, Someday, Logbook, and recoverable Trash with Empty Trash
+- First-class Spaces with an All/Personal/Work sidebar pill, Space-scoped lists, launch-time schedules, and device-local manual selection
 - Areas, projects, project headings, checklists, notes, tags, inherited tags, deadlines, and start dates
 - Project scheduling across Today, Upcoming, Anytime, and Someday, including project deadlines, distinct completed/canceled states, unfinished-work resolution, and hierarchical Trash restoration
 - Things-style Move destinations for Inbox, areas, projects, and headings, with inline project creation
@@ -94,7 +95,7 @@ Notification permission is requested only from the Settings button. Reminders us
 
 ## Data model
 
-Objects stores areas, projects, headings, calendar events, tasks, and checklist items as separate owner-scoped rows. Client edits are sent as field-level patches, Lakebed mutations apply them transactionally, and live query results are merged with any unsaved local draft instead of replacing the active editor. Permanent deletions create tombstones so a stale client cannot recreate an item.
+Objects stores Spaces, areas, projects, headings, calendar events, tasks, and checklist items as separate owner-scoped rows. Client edits are sent as field-level patches, Lakebed mutations apply them transactionally, and live query results are merged with any unsaved local draft instead of replacing the active editor. Permanent deletions create tombstones so a stale client cannot recreate an item.
 
 Deployments created before the normalized schema are migrated automatically from the legacy `workspaceChunks` document on first load. The legacy rows are retained as a migration backup but are no longer used after the per-user `workspaceMeta` row exists. Data can still be exported as one portable JSON backup from Settings at any time.
 
