@@ -28,7 +28,7 @@ export function createSeed(): ObjectsState {
   return {
     version: 7,
     updatedAt: "seed-v7",
-    settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily", tags: ["Creative", "Deep work", "Errand", "Focused", "Home", "Quick"], defaultSpaceId: "space-personal", spaceSchedule: { enabled: false, rules: [{ id: "rule-work-weekdays", spaceId: "space-work", weekdays: [1, 2, 3, 4, 5], start: "09:00", end: "17:30" }] } },
+    settings: { theme: "system", groupToday: true, notifications: false, weekStartsOn: 1, showCalendar: true, logCompletedItems: "daily", tags: ["Creative", "Deep work", "Errand", "Focused", "Home", "Quick"], defaultSpaceId: "space-personal", spaceSchedule: { rules: [{ id: "rule-work-weekdays", spaceId: "space-work", weekdays: [1, 2, 3, 4, 5], start: "09:00", end: "17:30" }] } },
     spaces: [
       { id: "space-personal", title: "Personal", color: "#e49b3c", pinned: true, order: 0 },
       { id: "space-work", title: "Work", color: "#5b7cfa", pinned: true, order: 1 }

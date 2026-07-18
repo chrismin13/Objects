@@ -231,6 +231,8 @@ const ui = {
   draggingMagicAdd: false,
   suppressClickUntil: 0,
   pendingEntry: null,
+  launchRulesEnabled: false,
+  launchRulesPreferenceLoaded: false,
 };
 
 let app;
@@ -260,6 +262,31 @@ function spaceSelectionStorageKey() {
   return `objects-active-space:${storageIdentity()}`;
 }
 
+function launchRulesStorageKey() {
+  return `objects-use-launch-rules:${storageIdentity()}`;
+}
+
+function initializeLaunchRulesPreference(legacyValue = false) {
+  if (ui.launchRulesPreferenceLoaded) return;
+  ui.launchRulesPreferenceLoaded = true;
+  try {
+    const stored = localStorage.getItem(launchRulesStorageKey());
+    if (stored !== null) {
+      ui.launchRulesEnabled = stored === 'true';
+      return;
+    }
+    ui.launchRulesEnabled = Boolean(legacyValue);
+    localStorage.setItem(launchRulesStorageKey(), String(ui.launchRulesEnabled));
+  } catch (_) {
+    ui.launchRulesEnabled = Boolean(legacyValue);
+  }
+}
+
+function setLaunchRulesEnabled(enabled) {
+  ui.launchRulesEnabled = Boolean(enabled);
+  try { localStorage.setItem(launchRulesStorageKey(), String(ui.launchRulesEnabled)); } catch (_) {}
+}
+
 function readRememberedSpace() {
   try { return localStorage.getItem(spaceSelectionStorageKey()) || 'all'; } catch (_) { return 'all'; }
 }
@@ -287,7 +314,7 @@ function scheduleRuleMatches(rule, date = new Date()) {
 
 function scheduledSpaceOnLaunch() {
   const schedule = ui.state.settings.spaceSchedule;
-  if (!schedule?.enabled) return null;
+  if (!ui.launchRulesEnabled) return null;
   const match = (schedule.rules || []).find((rule) => spaceById(rule.spaceId) && scheduleRuleMatches(rule));
   return match?.spaceId || (spaceById(ui.state.settings.defaultSpaceId)?.id ?? 'all');
 }
@@ -362,6 +389,8 @@ export function mountObjects(serializedState, options) {
     ui.saveReady = false;
     ui.saveQueued = false;
     ui.saveFailures = 0;
+    ui.launchRulesEnabled = false;
+    ui.launchRulesPreferenceLoaded = false;
     ui.state = JSON.parse(serializedState);
     const receivedState = cloneData(ui.state);
     let migrated = normalizeState();
@@ -453,7 +482,8 @@ function normalizeState() {
   const workSpace = ui.state.spaces.find((space) => String(space.title).toLocaleLowerCase() === 'work') || ui.state.spaces[1] || personalSpace;
   if (!spaceById(ui.state.settings.defaultSpaceId)) ui.state.settings.defaultSpaceId = personalSpace?.id || null;
   ui.state.settings.spaceSchedule ||= { enabled: false, rules: workSpace ? [{ id: 'rule-work-weekdays', spaceId: workSpace.id, weekdays: [1, 2, 3, 4, 5], start: '09:00', end: '17:30' }] : [] };
-  ui.state.settings.spaceSchedule.enabled ??= false;
+  initializeLaunchRulesPreference(ui.state.settings.spaceSchedule.enabled);
+  delete ui.state.settings.spaceSchedule.enabled;
   ui.state.settings.spaceSchedule.rules = Array.isArray(ui.state.settings.spaceSchedule.rules) ? ui.state.settings.spaceSchedule.rules.filter((rule) => rule && spaceById(rule.spaceId)).map((rule, index) => ({ id: rule.id || uid('space-rule'), spaceId: rule.spaceId, weekdays: Array.isArray(rule.weekdays) ? rule.weekdays : [1, 2, 3, 4, 5], start: rule.start || '09:00', end: rule.end || '17:30', order: rule.order ?? index })) : [];
   ui.state.areas.forEach((area) => { area.spaceId ??= null; });
   ui.state.projects.forEach((project) => { const parentArea = areaById(project.areaId); project.spaceId = parentArea ? parentArea.spaceId : project.spaceId || ui.state.settings.defaultSpaceId || null; });
@@ -1539,7 +1569,7 @@ function renderSpaceControls() {
   const hidden = ordered.filter((space) => !visible.some((candidate) => candidate.id === space.id));
   root.innerHTML = `<div class="space-pill" role="tablist" aria-label="Task Space"><button type="button" role="tab" class="space-segment ${ui.activeSpaceId === 'all' ? 'active' : ''}" data-space-id="all" aria-selected="${ui.activeSpaceId === 'all'}">All</button>${visible.map((space) => `<button type="button" role="tab" class="space-segment ${ui.activeSpaceId === space.id ? 'active' : ''}" data-space-id="${esc(space.id)}" aria-selected="${ui.activeSpaceId === space.id}" style="--space-color:${esc(space.color)}">${esc(space.title)}</button>`).join('')}${hidden.length ? `<button type="button" class="space-segment space-overflow ${active && hidden.some((space) => space.id === active.id) ? 'active' : ''}" data-space-overflow aria-label="${hidden.length} more Spaces">+${hidden.length}</button>` : ''}</div>`;
   const scheduleButton = $('#space-settings-button');
-  const enabled = Boolean(ui.state.settings.spaceSchedule?.enabled);
+  const enabled = ui.launchRulesEnabled;
   scheduleButton?.classList.toggle('schedule-enabled', enabled);
   if (scheduleButton) scheduleButton.setAttribute('aria-label', enabled ? 'Spaces and launch schedule, automatic selection on' : 'Spaces and launch schedule');
 }
@@ -3291,7 +3321,7 @@ function applySpaceSettingsForm() {
   });
   if (!ui.state.spaces.some((space) => space.pinned)) ui.state.spaces.slice(0, 2).forEach((space) => { space.pinned = true; });
   const schedule = ui.state.settings.spaceSchedule;
-  schedule.enabled = $('#space-schedule-enabled').checked;
+  setLaunchRulesEnabled($('#space-schedule-enabled').checked);
   ui.state.settings.defaultSpaceId = $('#space-default').value || ui.state.spaces[0]?.id || null;
   schedule.rules = $$('[data-space-rule]', form).map((row, index) => ({
     id: row.dataset.spaceRule,
@@ -3310,7 +3340,7 @@ function openSpaceSettings() {
   const spaceOptions = (selectedId) => spaces.map((space) => `<option value="${space.id}" ${space.id === selectedId ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
   const spaceCards = spaces.map((space) => `<div class="space-editor-card" data-space-row="${esc(space.id)}"><input class="space-color-input" type="color" value="${esc(space.color)}" data-space-field="color" aria-label="${esc(space.title)} color"><input class="detail-input space-title-input" value="${esc(space.title)}" maxlength="40" data-space-field="title" aria-label="Space name"><label class="space-pin"><input type="checkbox" data-space-field="pinned" ${pinnedIds.has(space.id) ? 'checked' : ''}><span class="space-pin-long">Show in sidebar</span><span class="space-pin-short">Sidebar</span></label><button class="icon-button space-delete" type="button" data-delete-space="${esc(space.id)}" aria-label="Delete ${esc(space.title)}" ${spaces.length < 2 ? 'disabled' : ''}>${icon('trash')}</button></div>`).join('');
   const rules = (schedule.rules || []).sort((a, b) => (a.order || 0) - (b.order || 0)).map((rule) => `<div class="space-launch-rule" data-space-rule="${esc(rule.id)}"><div class="space-rule-main"><span>At launch, use</span><select class="detail-select" data-rule-field="spaceId" aria-label="Space for launch rule">${spaceOptions(rule.spaceId)}</select></div><div class="space-rule-days"><span class="space-rule-field-label">on</span><div class="weekday-row">${renderWeekdayPicker(rule.weekdays, 'data-rule-weekday', 'Use Space on')}</div></div><div class="space-rule-times"><label><span>from</span><input class="detail-input" type="time" value="${esc(rule.start)}" data-rule-field="start" aria-label="Start time"></label><label><span>to</span><input class="detail-input" type="time" value="${esc(rule.end)}" data-rule-field="end" aria-label="End time"></label></div><button class="icon-button space-rule-delete" type="button" data-delete-rule="${esc(rule.id)}" aria-label="Delete launch rule">${icon('trash')}</button></div>`).join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop space-settings-backdrop" data-modal-close><form id="space-settings-form" class="modal space-settings-modal" role="dialog" aria-modal="true" aria-labelledby="space-settings-title"><header class="space-settings-header"><button class="icon-button space-settings-back" type="button" data-space-close aria-label="Close Spaces and launch rules"><span class="desktop-only">${icon('x')}</span><span class="mobile-only">${icon('arrowLeft')}</span></button><div><h2 id="space-settings-title">Spaces & launch rules</h2><p>Set up your Spaces, then tell Objects which one to use when it opens.</p></div></header><div class="space-settings-body"><section class="space-settings-section" aria-labelledby="spaces-section-title"><h3 id="spaces-section-title">Spaces</h3><div class="space-card-grid">${spaceCards}<button class="space-add-card" type="button" data-add-space>${icon('plus')}<span>Add Space</span></button></div><p class="space-pin-usage" data-space-pin-usage>${pinnedIds.size} of 2 sidebar pins used</p></section><section class="space-settings-section space-default-section" aria-labelledby="space-default-title"><h3 id="space-default-title">Default behavior</h3><div class="space-default-controls"><label class="space-toggle"><input id="space-schedule-enabled" type="checkbox" ${schedule.enabled ? 'checked' : ''}><span aria-hidden="true"></span><b>Use launch rules</b></label><label class="space-default-choice"><span>If no rule matches, use</span><select id="space-default" class="detail-select">${spaceOptions(ui.state.settings.defaultSpaceId)}</select></label></div><p>Rules run only when Objects opens or reloads. Manual choices last until then.</p></section><section class="space-settings-section space-rules-section" aria-labelledby="space-rules-title"><h3 id="space-rules-title">Launch rules</h3><div class="space-rules">${rules}</div><button class="button space-add-rule" type="button" data-add-space-rule>${icon('plus')} Add launch rule</button></section></div><footer class="space-settings-footer"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save changes</button></footer></form></div>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop space-settings-backdrop" data-modal-close><form id="space-settings-form" class="modal space-settings-modal" role="dialog" aria-modal="true" aria-labelledby="space-settings-title"><header class="space-settings-header"><button class="icon-button space-settings-back" type="button" data-space-close aria-label="Close Spaces and launch rules"><span class="desktop-only">${icon('x')}</span><span class="mobile-only">${icon('arrowLeft')}</span></button><div><h2 id="space-settings-title">Spaces & launch rules</h2><p>Set up your Spaces, then tell Objects which one to use when it opens.</p></div></header><div class="space-settings-body"><section class="space-settings-section" aria-labelledby="spaces-section-title"><h3 id="spaces-section-title">Spaces</h3><div class="space-card-grid">${spaceCards}<button class="space-add-card" type="button" data-add-space>${icon('plus')}<span>Add Space</span></button></div><p class="space-pin-usage" data-space-pin-usage>${pinnedIds.size} of 2 sidebar pins used</p></section><section class="space-settings-section space-default-section" aria-labelledby="space-default-title"><h3 id="space-default-title">Default behavior</h3><div class="space-default-controls"><label class="space-toggle"><input id="space-schedule-enabled" type="checkbox" ${ui.launchRulesEnabled ? 'checked' : ''}><span aria-hidden="true"></span><b>Use launch rules on this device</b></label><label class="space-default-choice"><span>If no rule matches, use</span><select id="space-default" class="detail-select">${spaceOptions(ui.state.settings.defaultSpaceId)}</select></label></div><p>This preference is saved only on this device. Rules run when Objects opens or reloads; manual choices last until then.</p></section><section class="space-settings-section space-rules-section" aria-labelledby="space-rules-title"><h3 id="space-rules-title">Launch rules</h3><div class="space-rules">${rules}</div><button class="button space-add-rule" type="button" data-add-space-rule>${icon('plus')} Add launch rule</button></section></div><footer class="space-settings-footer"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save changes</button></footer></form></div>`;
   activateModal();
   $('[data-space-close]').addEventListener('click', closeModal);
   $('[data-cancel]').addEventListener('click', closeModal);
@@ -3364,7 +3394,7 @@ function openSettings() {
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
     <h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p>
     <div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div>
-    <div class="settings-section"><h3>Spaces</h3><p>Separate areas of life while keeping everything searchable and editable.</p><div class="settings-row"><span>${ui.state.spaces.length} Space${ui.state.spaces.length === 1 ? '' : 's'} · ${settings.spaceSchedule?.enabled ? 'automatic launch selection on' : 'manual selection'}</span><button class="button" type="button" data-settings-action="spaces">Manage</button></div></div>
+    <div class="settings-section"><h3>Spaces</h3><p>Separate areas of life while keeping everything searchable and editable.</p><div class="settings-row"><span>${ui.state.spaces.length} Space${ui.state.spaces.length === 1 ? '' : 's'} · ${ui.launchRulesEnabled ? 'automatic launch selection on this device' : 'manual selection on this device'}</span><button class="button" type="button" data-settings-action="spaces">Manage</button></div></div>
     <div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div>
     <div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div>
     <div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div>
