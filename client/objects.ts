@@ -1229,7 +1229,7 @@ function openContextMenu(target, x, y) {
     items = menuButton('new-project-task', 'New to-do') + menuButton('edit-project', 'Project options…') + (isTrashed(project) ? '' : menuButton('delete-project', 'Move list to Trash', true));
   } else if (list?.dataset.listKind === 'area') {
     kind = 'area'; id = list.dataset.id;
-    items = menuButton('new-area-task', 'New standalone to-do') + menuButton('new-area-project', 'New project') + menuButton('new-area-heading', 'New heading') + menuButton('edit-area', 'Area options…') + menuButton('delete-area', 'Delete area', true);
+    items = menuButton('new-area-task', 'New standalone to-do') + menuButton('new-area-project', 'New project') + menuButton('new-area-heading', 'New heading') + menuButton('edit-area', 'Area options…') + menuButton('remove-area', 'Remove area', true);
   }
   if (!items) return;
   menu.dataset.kind = kind; menu.dataset.id = id; menu.innerHTML = items; menu.hidden = false;
@@ -1283,7 +1283,7 @@ function handleContextMenuClick(event) {
     if (action === 'new-area-project') openNewListModal({ type: 'project', areaId: id });
     if (action === 'new-area-heading') { setView('area', id); openHeadingModal(); }
     if (action === 'new-area-task') { setView('area', id); setTimeout(() => beginQuickAdd(), 0); }
-    if (action === 'delete-area') deleteArea(id);
+    if (action === 'remove-area') removeArea(id);
   }
 }
 
@@ -3214,16 +3214,16 @@ function duplicateProject(project) {
   setView('project', copy.id); showToast('Project duplicated');
 }
 
-function deleteArea(areaId) {
+function removeArea(areaId) {
   const area = areaById(areaId);
   if (!area) return;
-  confirmAction(`Delete “${area.title}”?`, 'Its projects and to-dos will be kept.', 'Delete area', () => {
+  confirmAction(`Remove “${area.title}”?`, 'Its projects and to-dos will stay in the same Space. Projects become top-level lists, standalone to-dos become unfiled, and the area’s headings will be removed.', 'Remove area', () => {
     ui.state.areas = ui.state.areas.filter((item) => item.id !== area.id);
     ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.areaId = null; });
     const headingIds = new Set(headingsFor('area', area.id, true).map((heading) => heading.id));
     ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.areaId = task.projectId ? projectById(task.projectId)?.areaId || null : null; if (headingIds.has(task.headingId)) task.headingId = null; });
     ui.state.headings = ui.state.headings.filter((heading) => !headingIds.has(heading.id));
-    scheduleSave(); setView('inbox'); showToast('Area deleted; its projects and to-dos were kept');
+    scheduleSave(); setView('inbox'); showToast('Area removed; its projects and to-dos were kept');
   });
 }
 
@@ -3232,7 +3232,7 @@ function openAreaModal(areaId) {
   if (!area) return;
   const archivedHeadings = headingsFor('area', area.id, true).filter((heading) => heading.archived);
   const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${area.spaceId === space.id ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="area-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Area options</h2><p>Areas represent ongoing responsibilities that do not finish.</p><div class="form-field"><label for="area-title">Name</label><input id="area-title" required value="${esc(area.title)}"></div><div class="repeat-grid"><div class="form-field"><label for="area-space">Space</label><select id="area-space">${spaceOptions}</select></div><div class="form-field"><label for="area-color">Color</label><input id="area-color" type="color" value="${esc(area.color || '#5b7cfa')}"></div></div><div class="form-field"><label for="area-tags">Tags inherited by its to-dos</label><input id="area-tags" value="${esc((area.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-area-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}<div class="settings-section button-row"><button class="button" type="button" data-area-new-heading>${icon('heading')} New heading</button><button class="danger-button" type="button" data-area-delete>${icon('trash')} Delete area</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
+  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="area-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Area options</h2><p>Areas represent ongoing responsibilities that do not finish.</p><div class="form-field"><label for="area-title">Name</label><input id="area-title" required value="${esc(area.title)}"></div><div class="repeat-grid"><div class="form-field"><label for="area-space">Space</label><select id="area-space">${spaceOptions}</select></div><div class="form-field"><label for="area-color">Color</label><input id="area-color" type="color" value="${esc(area.color || '#5b7cfa')}"></div></div><div class="form-field"><label for="area-tags">Tags inherited by its to-dos</label><input id="area-tags" value="${esc((area.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-area-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}<div class="settings-section button-row"><button class="button" type="button" data-area-new-heading>${icon('heading')} New heading</button><button class="danger-button" type="button" data-area-remove>${icon('x')} Remove area</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
   activateModal();
   $('[data-cancel]').addEventListener('click', closeModal);
   $('.modal-backdrop').addEventListener('click', (event) => { if (event.target.hasAttribute('data-modal-close')) closeModal(); });
@@ -3244,7 +3244,7 @@ function openAreaModal(areaId) {
   $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.spaceId = $('#area-space').value || area.spaceId; area.color = $('#area-color').value; area.tags = selectedPickerTags($('#area-form')); ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.spaceId = area.spaceId; ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.spaceId = area.spaceId; }); }); ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.spaceId = area.spaceId; }); scheduleSave(); closeModal(); render(); });
   $('[data-area-new-heading]').addEventListener('click', () => { closeModal(); setView('area', area.id); openHeadingModal(); });
   $$('[data-restore-area-heading]').forEach((button) => button.addEventListener('click', () => { const heading = ui.state.headings.find((item) => item.id === button.dataset.restoreAreaHeading); if (heading) heading.archived = false; scheduleSave(); closeModal(); render(); showToast('Heading restored'); }));
-  $('[data-area-delete]').addEventListener('click', () => deleteArea(area.id));
+  $('[data-area-remove]').addEventListener('click', () => removeArea(area.id));
 }
 
 function openSpaceSwitcher() {
