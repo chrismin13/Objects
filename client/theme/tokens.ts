@@ -26,6 +26,7 @@ export const designTokens = `
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --overlay-padding: 20px;
   --control-compact: 30px;
   --control-default: 36px;
   --control-touch: 44px;

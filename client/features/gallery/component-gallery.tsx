@@ -138,7 +138,7 @@ export function ComponentGallery() {
         <label class="gallery-native-field">Name<input autofocus placeholder="Project name" /></label>
         <WaSelect label="Space" value="personal"><WaOption value="personal">Personal</WaOption><WaOption value="work">Work</WaOption></WaSelect>
       </div>
-      <div slot="footer" class="gallery-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, () => {})}>Cancel</WaButton><WaButton variant="brand" onClick={(event: Event) => hideWebAwesomeOverlay(event, () => {})}>Create</WaButton></div>
+      <div slot="footer" class="gallery-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, () => {})}>Cancel</WaButton><WaButton size="s" variant="brand" onClick={(event: Event) => hideWebAwesomeOverlay(event, () => {})}>Create</WaButton></div>
     </WaDialog>
     <WaDrawer ref={drawer} class="objects-mobile-drawer inspector-drawer" label="To-do details" placement="end">
       <div class="gallery-stack"><label class="gallery-native-field">Title<input value="Review the release checklist" /></label><WaSwitch checked>Today</WaSwitch><WaTag size="s" variant="brand">Focused</WaTag></div>

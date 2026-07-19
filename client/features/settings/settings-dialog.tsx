@@ -143,6 +143,6 @@ export function SettingsDialog({
         </WaTabPanel>
       </WaTabGroup>
     </div>
-    <div slot="footer" class="settings-footer"><WaButton variant="brand" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Done</WaButton></div>
+    <div slot="footer" class="settings-footer"><WaButton size="s" variant="brand" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Done</WaButton></div>
   </WaDialog>;
 }

@@ -77,7 +77,7 @@ export function NewListDialog({ spaces, areas, defaults, onClose, onSubmit }: {
         {type === "project" && <WaSelect class="full" label="Area" value={areaId} onChange={(event: Event) => setAreaId((event.currentTarget as HTMLElement & { value: string }).value)}><WaOption value="">No area</WaOption>{visibleAreas.map((area) => <WaOption key={area.id} value={area.id}>{area.title}</WaOption>)}</WaSelect>}
       </div>
     </form>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton variant="brand" onClick={() => onSubmit({ type, spaceId, areaId: type === "project" ? areaId || null : null, title: title.trim() })} disabled={!title.trim()}>Create</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" onClick={() => onSubmit({ type, spaceId, areaId: type === "project" ? areaId || null : null, title: title.trim() })} disabled={!title.trim()}>Create</WaButton></div>
   </WaDialog>;
 }
 
@@ -100,7 +100,7 @@ export function HeadingDialog({ heading, parents, initialParent, onClose, onSave
       <WaSelect label="Location" value={parent} onChange={(event: Event) => setParent(eventValue(event))}>{parents.map((option) => <WaOption key={option.value} value={option.value}>{option.label}</WaOption>)}</WaSelect>
       {heading && <div class="entity-secondary-actions"><WaButton size="s" appearance="plain" onClick={() => onAction("duplicate")}>Duplicate with to-dos</WaButton><WaButton size="s" appearance="plain" onClick={() => onAction("convert")}>Convert to project</WaButton><WaButton size="s" appearance="plain" onClick={() => onAction("archive")}>Archive</WaButton><WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("delete")}>Delete heading</WaButton></div>}
     </div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton variant="brand" disabled={!title.trim() || !parent} onClick={() => onSave(title.trim(), parent)}>{heading ? "Save" : "Create"}</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" disabled={!title.trim() || !parent} onClick={() => onSave(title.trim(), parent)}>{heading ? "Save" : "Create"}</WaButton></div>
   </WaDialog>;
 }
 
@@ -137,7 +137,7 @@ export function ProjectDialog({ project, spaces, areas, archivedHeadings, fallba
       {!trashed && project.status === "open" && <WaDetails summary={draft.repeat ? "Repeat · On" : "Repeat"}><RepeatEditor value={draft.repeat} fallbackDate={fallbackRepeatDate} onChange={(repeat) => update("repeat", repeat)} /></WaDetails>}
       <div class="entity-secondary-actions">{trashed ? <><WaButton size="s" appearance="plain" onClick={() => onAction("restore-trash")}>Restore project</WaButton><WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("delete-forever")}>Delete forever</WaButton></> : <><WaButton size="s" appearance="plain" onClick={() => onAction("duplicate")}>Duplicate project</WaButton><WaButton size="s" appearance="plain" onClick={() => onAction(project.status === "open" ? "complete" : "restore")}>{project.status === "open" ? "Complete project" : "Restore project"}</WaButton>{project.status === "open" && <WaButton size="s" appearance="plain" onClick={() => onAction("cancel")}>Cancel project</WaButton>}<WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("trash")}>Move to Trash</WaButton></>}</div>
     </div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton variant="brand" disabled={!draft.title.trim()} onClick={() => onSave({ ...draft, title: draft.title.trim(), notes: (draft.notes || "").trim() })}>Save</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" disabled={!draft.title.trim()} onClick={() => onSave({ ...draft, title: draft.title.trim(), notes: (draft.notes || "").trim() })}>Save</WaButton></div>
   </WaDialog>;
 }
 
@@ -163,7 +163,7 @@ export function AreaDialog({ area, spaces, archivedHeadings, onClose, onSave, on
       {archivedHeadings.length > 0 && <WaDetails summary={`Archived headings (${archivedHeadings.length})`}><div class="entity-secondary-actions">{archivedHeadings.map((heading) => <WaButton size="s" appearance="plain" onClick={() => onRestoreHeading(heading.id)}>Restore {heading.title}</WaButton>)}</div></WaDetails>}
       <div class="entity-secondary-actions"><WaButton size="s" appearance="plain" onClick={() => onAction("new-heading")}>New heading</WaButton><WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("remove")}>Remove area</WaButton></div>
     </div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton variant="brand" disabled={!draft.title.trim()} onClick={() => onSave({ ...draft, title: draft.title.trim() })}>Save</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" disabled={!draft.title.trim()} onClick={() => onSave({ ...draft, title: draft.title.trim() })}>Save</WaButton></div>
   </WaDialog>;
 }
 
@@ -172,7 +172,7 @@ export function FinishProjectDialog({ count, onClose, onFinish }: { count: numbe
   useWebAwesomeOverlay(dialog, onClose);
   return <WaDialog ref={dialog} class="objects-dialog" label={`${count} unfinished to-do${count === 1 ? "" : "s"}`}>
     <div class="entity-dialog"><div class="entity-confirm-copy">Things keeps an accurate history by recording whether the remaining work was finished or canceled.</div><div class="entity-completion-actions"><WaButton variant="brand" onClick={() => onFinish("completed")}>Mark all completed</WaButton><WaButton appearance="plain" onClick={() => onFinish("canceled")}>Mark unfinished as canceled</WaButton></div></div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Keep project open</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Keep project open</WaButton></div>
   </WaDialog>;
 }
 
@@ -188,7 +188,7 @@ export function BulkTagsDialog({ count, tags, onClose, onSubmit }: { count: numb
       <div class="entity-bulk-tags">{states.length ? states.map((item) => <WaButton key={item.tag} size="s" appearance={item.state === "all" ? "filled" : "outlined"} variant={item.state === "mixed" ? "neutral" : item.state === "all" ? "brand" : "neutral"} aria-pressed={item.state === "all"} onClick={() => toggle(item.tag)}>{item.state === "mixed" ? "— " : item.state === "all" ? "✓ " : ""}{item.tag}</WaButton>) : <span class="entity-empty-note">No tags yet.</span>}</div>
       <label class="entity-native-field">Add new tags<input value={additions} placeholder="Errand, Focused" onInput={(event) => setAdditions(event.currentTarget.value)} /></label>
     </div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton variant="brand" onClick={() => onSubmit(states, additions.split(",").map((tag) => tag.trim()).filter(Boolean))}>Apply tags</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" onClick={() => onSubmit(states, additions.split(",").map((tag) => tag.trim()).filter(Boolean))}>Apply tags</WaButton></div>
   </WaDialog>;
 }
 
@@ -198,7 +198,7 @@ export function SpaceSwitcherDialog({ spaces, activeId, onClose, onChoose, onMan
   const options = [{ id: "all", title: "All", color: "#85878b" }, ...spaces];
   return <WaDialog ref={dialog} class="objects-dialog" label="Choose a Space" light-dismiss>
     <div class="entity-dialog"><p>Quick Find remains available across every Space.</p><div class="entity-space-list">{options.map((space) => <button key={space.id} type="button" class={activeId === space.id ? "active" : ""} aria-pressed={activeId === space.id} onClick={() => onChoose(space.id)}><i style={{ "--entity-space-color": space.color }} /><span>{space.title}</span>{activeId === space.id && <b aria-hidden="true">✓</b>}</button>)}</div></div>
-    <div slot="footer" class="entity-space-footer"><WaButton appearance="plain" onClick={onManage}>Spaces & launch rules</WaButton><WaButton variant="brand" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Done</WaButton></div>
+    <div slot="footer" class="entity-space-footer"><WaButton size="s" appearance="plain" onClick={onManage}>Spaces & launch rules</WaButton><WaButton size="s" variant="brand" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Done</WaButton></div>
   </WaDialog>;
 }
 
@@ -240,7 +240,7 @@ export function SpacesSettingsDialog({ initial, onClose, onSave, onDeleteSpace, 
         <WaButton size="s" appearance="plain" variant="danger" aria-label="Delete launch rule" onClick={() => setRules((current) => current.filter((candidate) => candidate.id !== rule.id))}>Delete rule</WaButton>
       </div>)}</div><WaButton size="s" appearance="outlined" onClick={() => setRules((current) => [...current, makeRule(current.length, spaces.find((space) => space.id !== defaultId)?.id || spaces[0]?.id || "")])}>Add launch rule</WaButton></section>
     </div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton variant="brand" onClick={() => onSave(draft())}>Save changes</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" onClick={() => onSave(draft())}>Save changes</WaButton></div>
   </WaDialog>;
 }
 
@@ -268,7 +268,7 @@ export function MoveTasksDialog({ count, options, initialValue, onClose, onSubmi
       <label class="entity-native-field">Destination<select size={Math.min(7, Math.max(3, filtered.length))} value={destination} onChange={(event) => setDestination(event.currentTarget.value)}>{filtered.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
       <label class="entity-native-field">Or create a new project<input value={newProjectTitle} placeholder="New project name" onInput={(event) => setNewProjectTitle(event.currentTarget.value)} /></label>
     </div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton variant="brand" onClick={() => onSubmit(destination, newProjectTitle.trim())}>Move</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" onClick={() => onSubmit(destination, newProjectTitle.trim())}>Move</WaButton></div>
   </WaDialog>;
 }
 
@@ -284,6 +284,6 @@ export function ConfirmDialog({ title, message, label, danger = false, onClose, 
   useWebAwesomeOverlay(dialog, onClose);
   return <WaDialog ref={dialog} class="objects-dialog" label={title}>
     <div class="entity-dialog"><div class={danger ? "entity-danger-copy" : "entity-confirm-copy"}>{message}</div></div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton variant={danger ? "danger" : "brand"} onClick={() => { onClose(); onConfirm(); }}>{label}</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant={danger ? "danger" : "brand"} onClick={() => { onClose(); onConfirm(); }}>{label}</WaButton></div>
   </WaDialog>;
 }

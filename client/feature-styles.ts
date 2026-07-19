@@ -44,11 +44,25 @@ export const featureStyles = `
   opacity: 0;
   pointer-events: none;
 }
-.context-menu wa-dropdown-item { color: var(--text); font-size: 14px; }
-.context-menu wa-dropdown-item::part(base) { min-height: 32px; padding: 6px 9px; border-radius: 7px; }
-.context-menu wa-dropdown-item:focus::part(base),
-.context-menu wa-dropdown-item:hover::part(base) { background: var(--surface-subtle); }
+.context-menu wa-dropdown-item {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: default;
+  font-size: 14px;
+  line-height: 1.25;
+}
+.context-menu wa-dropdown-item + wa-dropdown-item { margin-top: 2px; }
+.context-menu wa-dropdown-item:focus,
+.context-menu wa-dropdown-item:hover { background: var(--surface-subtle); }
 .context-menu wa-dropdown-item.danger { color: var(--red); }
+
+@media (max-width: 820px) {
+  .context-menu wa-dropdown-item { min-height: var(--control-touch); padding-block: 10px; }
+}
 .task-row { grid-template-columns: 26px minmax(0, 1fr) 28px 16px; }
 .task-row.bulk-selected { background: var(--blue-soft); }
 .task-row.sortable-ghost { opacity: .25; }

@@ -60,13 +60,13 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
 
 .objects-dialog {
   --width: min(440px, calc(100vw - 24px));
-  --spacing: 0;
+  --spacing: var(--overlay-padding);
   --show-duration: 150ms;
   --hide-duration: 120ms;
   --backdrop-filter: blur(5px);
   color: var(--text);
 }
-.objects-dialog.dialog-quick-find { --width: min(580px, calc(100vw - 24px)); }
+.objects-dialog.dialog-quick-find { --width: min(580px, calc(100vw - 24px)); --spacing: 0; }
 .objects-dialog.dialog-settings { --width: min(610px, calc(100vw - 24px)); }
 .objects-dialog.dialog-spaces { --width: min(860px, calc(100vw - 24px)); }
 .objects-dialog.dialog-project { --width: min(650px, calc(100vw - 24px)); }
@@ -78,12 +78,20 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
   color: var(--text);
   box-shadow: var(--shadow);
 }
-.objects-dialog::part(body) { padding: 0; }
+.objects-dialog.dialog-quick-find::part(body) { padding: 0; }
 .objects-dialog .quick-find { margin: 0; }
+.objects-dialog [slot="footer"] wa-button::part(base) {
+  min-height: var(--control-compact);
+  height: var(--control-compact);
+  padding-inline: var(--space-3);
+  font-size: 13px;
+}
 
 @media (max-width: 520px) {
-  .objects-dialog { --width: calc(100vw - 16px); }
+  .objects-dialog { --width: calc(100vw - 16px); --spacing: var(--space-4); }
+  .objects-dialog.dialog-quick-find { --spacing: 0; }
   .objects-dialog::part(dialog) { max-height: calc(100dvh - 16px); border-radius: 13px; }
+  .objects-dialog [slot="footer"] wa-button::part(base) { min-height: var(--control-touch); height: var(--control-touch); }
 }
 
 .objects-mobile-drawer { --wa-focus-ring-width: 0; }
