@@ -86,3 +86,17 @@ Use `endpoint({ method, path }, handler)` from `lakebed/server` when the app nee
 - Non-empty `.env.lakebed.server` files sync only after a deploy is claimed.
 - Local state resets when `npx lakebed dev` restarts.
 - Hosted deploys are served on `lakebed.app` subdomains.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as local Markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five default canonical label names. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Domain documentation uses the single-context layout. See `docs/agents/domain.md`.
