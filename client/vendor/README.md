@@ -8,11 +8,11 @@ These files are pinned, locally bundled upstream dependencies. They are not appl
 - Version: `3.10.0`
 - Source tarball: `https://registry.npmjs.org/@awesome.me/webawesome/-/webawesome-3.10.0.tgz`
 - Tarball SHA-1: `85930336d5aa5f54bc28f771a0439cf3d44b4c73`
-- Local bundle SHA-256: `9606ce635f51df8b6b2997e40c1ea2da3682481d9b69ea6824b89b1448752444`
+- Local bundle SHA-256: `7ff4c5eed4a08d11e9708b1e065005d4c8be0a187895a3787719c4e82654e06c`
 - Flattened default theme SHA-256: `305220884e052cf511cd14ec490ea9d116476755ee393472e795056c0ae802f5`
 - License: MIT, retained in `webawesome/LICENSE.md`
 
-The production bundle contains Dialog, Drawer, Dropdown, Dropdown Item, and their transitive runtime code. It was generated from the package's self-contained `dist-cdn` entries with esbuild minification and retained legal comments. Lakebed reformats JavaScript modules while bundling, so the exact minified bundle is stored as a gzip-compressed local module payload and registered at startup through `loader.ts`; this keeps the deploy request below Lakebed's 2 MB limit without a CDN or runtime network request. Native inputs, selects, checkboxes, and buttons remain preferable where the browser already provides the required behavior. The default theme's CSS imports were flattened and exported as a string because Lakebed client modules do not process CSS imports.
+The production bundle contains Button, Button Group, Checkbox, Details, Dialog, Divider, Drawer, Dropdown, Dropdown Item, Option, Progress Ring, Select, Switch, Tab, Tab Group, Tab Panel, Tag, Tooltip, and their transitive runtime code. It was generated from the package's self-contained `dist-cdn` entries with esbuild minification and retained legal comments. Lakebed reformats JavaScript modules while bundling, so the exact minified bundle is stored as a gzip-compressed local module payload and registered at startup through `loader.ts`; this keeps the deploy request below Lakebed's request limit without a CDN or runtime network request. Native text, search, textarea, date, time, and color fields remain preferable where the browser already provides the required behavior. The default theme's CSS imports were flattened and exported as a string because Lakebed client modules do not process CSS imports.
 
 ## SortableJS
 
@@ -25,6 +25,6 @@ The production bundle contains Dialog, Drawer, Dropdown, Dropdown Item, and thei
 
 The local bundle is generated from `modular/sortable.complete.esm.js` and includes the MultiDrag plugin. Like Web Awesome, its exact minified source is stored as a gzip-compressed local module payload and loaded without a network request so Lakebed does not expand it in the deploy artifact.
 
-The private component/domain harness remains in `client/ui-harness.tsx` for local migration work, but is deliberately not imported by the production entrypoint because Lakebed deploys a single client bundle with a 2 MB request limit.
+The local-only production-themed component gallery lives at `client/features/gallery/component-gallery.tsx` and is available with `?ui_gallery=1` on localhost. It is imported by the production entrypoint so the same theme and component registration path are exercised, but the route guard prevents it from bypassing hosted authentication.
 
-For the same deployment constraint, the readable compatibility runtime in `client/objects.ts` is compiled into the local gzip payload in `client/runtime/packed.ts` and loaded by `client/runtime/loader.ts` after the Preact shell mounts. The current minified runtime SHA-256 is `758e8b45fad400a4f673fdb22baf90473d858aee242b96abd39b9607b0c8a0fb`. This is a local code-splitting boundary, not a network dependency.
+For the same deployment constraint, the readable compatibility runtime in `client/objects.ts` is compiled into the local gzip payload in `client/runtime/packed.ts` and loaded by `client/runtime/loader.ts` after the Preact shell mounts. The current minified runtime SHA-256 is `ff830882557b7e38704ef00cd4b17656d9a8eb23e317907cafc154a587c84c61`. This is a local code-splitting boundary, not a network dependency.

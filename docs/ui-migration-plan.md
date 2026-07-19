@@ -12,6 +12,47 @@ This document is the parity contract for simplifying the Objects client. The app
 
 Raw repository size is not a goal. Vendored, versioned upstream code is preferable to smaller but bespoke focus, keyboard, overlay, and drag-and-drop implementations.
 
+## Approved execution contract
+
+The migration optimizes for product polish, maintainability, and correctness rather than raw line count. A library component earns its place when it owns behavior or establishes a reusable visual standard; replacing a native tag merely to increase library adoption is not a goal.
+
+### Visual system
+
+- Define production tokens for spacing, control height, typography, radii, shadows, motion, color, and responsive breakpoints before migrating screens.
+- The component gallery must load the complete Objects theme and use realistic application compositions. Unthemed library defaults are not valid visual evidence.
+- Preserve the Things-inspired hierarchy, density, task rows, sidebar proportions, yellow accent, and restrained motion. The Spaces pill remains a distinctive Objects component.
+- Minor changes to commodity controls are acceptable when they improve consistency or accessibility without changing the workflow.
+
+### Component ownership
+
+- Web Awesome owns dialogs, drawers, menus, selects, switches, checkboxes, tooltips, tags, progress indicators, dividers, disclosure panels, and appropriate form actions.
+- Objects owns task rows, Magic Plus, sidebar composition, Quick Find behavior/results, the Spaces pill, and application-specific direct manipulation.
+- Native text, textarea, search, date, time, and color fields remain native unless a replacement demonstrably removes behavior or validation code.
+- Use theme tokens first and CSS parts second. A component requiring extensive internal overrides should remain native or custom.
+
+The sidebar, task rows, inline quick-add, project sections, drag ordering, and desktop inspector layout are intentional product UI rather than generic widgets. They stay custom because they define the Things-like feel, but they consume the shared tokens and Web Awesome mobile drawers. The Spaces pill and launch-rule editor are the deliberate product exception: their compact visual identity remains custom while their surrounding overlay and control behavior follows the shared component contract.
+
+### Vertical-slice rule
+
+Migrate a complete screen through Preact rendering, library primitives, typed actions, tests, responsive states, and visual verification. Once parity is proven, delete the screen's legacy renderer and event handlers in the same slice. Do not leave parallel production paths in anticipation of later cleanup.
+
+Introduce domain actions and selectors only when production consumes them. Speculative exports are removed rather than maintained for a future migration.
+
+### Polish and quality gates
+
+Each migrated slice explicitly covers empty, loading, error, disabled, success, destructive, and undo states; hover, pressed, selected, and focus-visible states; touch targets; reduced motion; long content; dense data; light/dark appearance; and mobile/desktop layouts.
+
+Review outcomes using maintenance and product measures:
+
+- one rendering path and one mutation path per migrated screen;
+- no direct DOM replacement inside migrated Preact screens;
+- overlay, menu, focus, and drag mechanics owned by platform or library primitives;
+- named and tested state changes;
+- feature changes localized to the relevant screen, action, and test;
+- passing visual, accessibility, persistence, offline, and end-to-end checks.
+
+Bundle size, library versions, checksums, and the vendoring procedure remain explicit release gates. Remove the compressed compatibility boundary once the legacy runtime is small enough for normal static imports.
+
 ## Restored baseline
 
 The rewrite in `9cf5a2b` was reverted by `157bff4`. The restored version builds, is deployed, and is the source of truth for the inventory below.

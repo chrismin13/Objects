@@ -131,13 +131,10 @@ export const responsiveStyles = `
   }
   .quick-add-input,
   .detail-select,
-  .detail-input,
-  .form-field input,
-  .form-field select {
+  .detail-input {
     min-height: 44px;
     font-size: 16px;
   }
-  .form-field textarea,
   .inspector-notes,
   .checklist-item input[type="text"] {
     font-size: 16px;
@@ -162,10 +159,6 @@ export const responsiveStyles = `
   .auth-card {
     padding-top: calc(28px + var(--safe-area-top));
     padding-bottom: calc(28px + var(--safe-area-bottom));
-  }
-  .modal-backdrop {
-    padding-top: calc(12px + var(--safe-area-top));
-    padding-bottom: calc(12px + var(--safe-area-bottom));
   }
 }
 `;

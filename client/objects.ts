@@ -5,6 +5,8 @@ import { parseNaturalDate as parseNaturalDateCore, parseNaturalTask as parseNatu
 import { reorderChecklist, reorderEntities, reorderTasks } from './app/actions';
 import { destroyChecklistSortable, destroyHeadingSortable, destroyTaskSortables, mountChecklistSortable, mountHeadingSortable, mountTaskSortables } from './ui/sortable';
 import { QuickFind } from './features/search/quick-find';
+import { SettingsDialog } from './features/settings/settings-dialog';
+import { AreaDialog, BulkTagsDialog, ConfirmDialog, FinishProjectDialog, HeadingDialog, MoveTasksDialog, NewListDialog, ProjectDialog, SpacesSettingsDialog, SpaceSwitcherDialog } from './features/entities/entity-dialogs';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -662,34 +664,6 @@ function startLogbookChecks() {
   }, 30000);
 }
 
-function bindLogbookSettings(settings) {
-  let field = $('#setting-logbook');
-  if (!field) {
-    const general = [...$$('.settings-section')].find((section) => $('h3', section)?.textContent === 'General');
-    if (!general) return;
-    const pending = [...ui.state.tasks, ...ui.state.projects].filter(isCompletedButVisible).length;
-    const help = settings.logCompletedItems === 'immediately' ? 'Completed items move to the Logbook as soon as they are checked.' : settings.logCompletedItems === 'manually' ? 'Completed items stay in their original lists until you log them.' : 'Completed items stay visible for the rest of the day and move to the Logbook after midnight.';
-    general.insertAdjacentHTML('afterend', `<div class="settings-section"><h3>Logbook</h3><p>${esc(help)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pending ? `<button class="button" type="button" data-log-completed-now>Log Completed Now (${pending})</button>` : ''}</div>`);
-    field = $('#setting-logbook');
-  }
-  field.addEventListener('change', (event) => {
-    settings.logCompletedItems = event.target.value;
-    const logged = applyLogbookPolicy();
-    scheduleSave(); render(); openSettings();
-    if (logged) showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`);
-  });
-  const logNow = $('[data-log-completed-now], [data-settings-action="log-now"]');
-  if (logNow) {
-    logNow.removeAttribute('data-settings-action');
-    logNow.setAttribute('data-log-completed-now', '');
-    logNow.addEventListener('click', () => {
-      const logged = logCompletedNow();
-      scheduleSave(); render(); openSettings();
-      showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`);
-    });
-  }
-}
-
 function nextRepeatDate(fromDay, repeat) {
   const date = new Date(`${fromDay}T12:00:00`);
   const interval = Math.max(1, Number(repeat.interval) || 1);
@@ -1206,7 +1180,7 @@ function cycleTheme() {
   showToast(`Theme: ${ui.state.settings.theme}`);
 }
 
-function createMobileDrawer(id, label, placement, panel, onDismiss) {
+function createMobileDrawer(id, label, placement, panel) {
   let drawer = $(`#${id}`);
   if (drawer) return drawer;
   drawer = document.createElement('wa-drawer');
@@ -1214,12 +1188,20 @@ function createMobileDrawer(id, label, placement, panel, onDismiss) {
   drawer.className = `objects-mobile-drawer ${placement === 'start' ? 'sidebar-drawer' : 'inspector-drawer'}`;
   drawer.setAttribute('label', label);
   drawer.setAttribute('placement', placement);
-  drawer.setAttribute('without-header', '');
-  drawer.setAttribute('light-dismiss', '');
+  if (placement === 'start') drawer.setAttribute('without-header', '');
   $('#drawer-root').appendChild(drawer);
   drawer.appendChild(panel);
-  drawer.addEventListener('wa-after-hide', onDismiss);
   return drawer;
+}
+
+function showMobileDrawer(drawer, onDismiss) {
+  void customElements.whenDefined('wa-drawer').then(() => {
+    requestAnimationFrame(() => {
+      if (!drawer.isConnected) return;
+      drawer.addEventListener('wa-after-show', () => drawer.addEventListener('wa-after-hide', onDismiss, { once: true }), { once: true });
+      drawer.setAttribute('open', '');
+    });
+  });
 }
 
 function restorePanel(anchorId, panel, drawer) {
@@ -1240,9 +1222,9 @@ function finalizeSidebarClose({ restoreFocus = true } = {}) {
 function openSidebar() {
   app.classList.add('sidebar-open');
   if (matchMedia('(max-width: 820px)').matches) {
-    const drawer = createMobileDrawer('mobile-sidebar-drawer', 'Lists', 'start', sidebarPanel, () => finalizeSidebarClose());
+    const drawer = createMobileDrawer('mobile-sidebar-drawer', 'Lists', 'start', sidebarPanel);
     app.classList.add('library-sidebar-open');
-    drawer.open = true;
+    showMobileDrawer(drawer, () => finalizeSidebarClose());
   }
   syncSidebarAccessibility();
   setTimeout(() => $('#sidebar-close')?.focus(), 20);
@@ -1250,8 +1232,8 @@ function openSidebar() {
 
 function closeSidebar(options = {}) {
   const drawer = $('#mobile-sidebar-drawer');
-  if (drawer?.open) {
-    drawer.hide();
+  if (drawer?.hasAttribute('open')) {
+    drawer.removeAttribute('open');
     return;
   }
   finalizeSidebarClose(options);
@@ -1918,31 +1900,28 @@ function handleBulkAction(action) {
 function openBulkTagsModal(tasks) {
   if (!tasks.length) return;
   const knownTags = getKnownTags();
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="bulk-tags-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Tag ${tasks.length} to-do${tasks.length === 1 ? '' : 's'}</h2><p>Checked tags will be applied to every selected to-do. A mixed tag stays unchanged until you click it.</p><div class="bulk-tag-grid">${knownTags.map((tag) => {
+  const tagStates = knownTags.map((tag) => {
     const count = tasks.filter((task) => task.tags.includes(tag)).length;
     const state = count === tasks.length ? 'all' : count ? 'mixed' : 'none';
-    return `<label class="bulk-tag-option"><input type="checkbox" value="${esc(tag)}" data-tag-state="${state}" ${state === 'all' ? 'checked' : ''}><span>${esc(tag)}</span></label>`;
-  }).join('') || '<p>No tags yet.</p>'}</div><div class="form-field"><label for="bulk-new-tags">Add new tags</label><input id="bulk-new-tags" placeholder="Errand, Focused"></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Apply tags</button></div></form></div>`;
-  activateModal();
-  $$('[data-tag-state="mixed"]').forEach((input) => { input.indeterminate = true; });
-  $$('.bulk-tag-option input').forEach((input) => input.addEventListener('change', () => { input.indeterminate = false; input.dataset.changed = 'true'; }));
-  $('[data-cancel]').addEventListener('click', closeModal);
-  $('#bulk-tags-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const tagInputs = $$('input[type="checkbox"]', event.currentTarget);
-    const newTags = registerTags($('#bulk-new-tags').value.split(','));
+    return { tag, state };
+  });
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(BulkTagsDialog, { count: tasks.length, tags: tagStates, onClose: closeModal, onSubmit: (states, additions) => {
+    const newTags = registerTags(additions);
     tasks.forEach((task) => {
       const next = new Set(task.tags);
-      tagInputs.forEach((input) => {
-        if (input.dataset.tagState === 'mixed' && input.dataset.changed !== 'true') return;
-        if (input.checked) next.add(input.value);
-        else next.delete(input.value);
+      states.forEach(({ tag, state }) => {
+        const original = tagStates.find((item) => item.tag === tag)?.state;
+        if (state === 'mixed' || (original === 'mixed' && state === original)) return;
+        if (state === 'all') next.add(tag);
+        else next.delete(tag);
       });
       newTags.forEach((tag) => next.add(tag));
       task.tags = [...next];
     });
     scheduleSave(); closeModal(); clearTaskSelection(); showToast(`Tags updated on ${tasks.length} to-do${tasks.length === 1 ? '' : 's'}`);
-  });
+  } }), $('#modal-root'));
 }
 
 function canQuickAdd() { return !['logbook', 'trash', 'upcoming', 'repeating', 'allProjects', 'loggedProjects'].includes(ui.view.type) && !(ui.view.type === 'project' && projectById(ui.view.id)?.status !== 'open'); }
@@ -2440,17 +2419,18 @@ function selectTask(taskId) {
 }
 
 function mountInspectorDrawer() {
-  const drawer = createMobileDrawer('mobile-inspector-drawer', 'To-do details', 'end', inspector, () => {
+  const drawer = createMobileDrawer('mobile-inspector-drawer', 'To-do details', 'end', inspector);
+  $('[data-inspector-action="close"]', inspector)?.addEventListener('click', () => drawer.removeAttribute('open'), { once: true });
+  showMobileDrawer(drawer, () => {
     if (ui.selectedTaskId) closeInspector({ restoreFocus: true, fromDrawer: true });
   });
   app.classList.add('library-inspector-open');
-  drawer.open = true;
 }
 
 function closeInspector({ restoreFocus = true, fromDrawer = false } = {}) {
   const drawer = $('#mobile-inspector-drawer');
-  if (!fromDrawer && drawer?.open) {
-    drawer.hide();
+  if (!fromDrawer && drawer?.hasAttribute('open')) {
+    drawer.removeAttribute('open');
     return;
   }
   const returnTaskId = ui.selectedTaskId;
@@ -2478,7 +2458,7 @@ function renderInspector(force = false) {
   const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => !h.archived && (task.projectId ? h.projectId === task.projectId : h.areaId === task.areaId && !h.projectId)).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
   const repeat = task.repeat;
   inspector.innerHTML = `<div class="inspector-scroll" data-task-id="${esc(task.id)}">
-    <div class="inspector-top"><span class="inspector-status">${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><button class="icon-button" data-inspector-action="close" aria-label="Close details">${icon('x')}</button></div>
+    <div class="inspector-top"><span class="inspector-status">${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><wa-button class="inspector-close-button" size="s" appearance="plain" data-inspector-action="close" data-drawer="close" aria-label="Close details">${icon('x')}</wa-button></div>
     <input id="inspector-title" class="inspector-title" type="text" data-field="title" value="${esc(task.title)}" placeholder="To-do title">
     ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)">${esc(task.notes)}</textarea>`}
     <div class="note-tools"><button class="markdown-toggle" data-inspector-action="markdown">${ui.markdownPreview ? 'Edit notes' : 'Preview Markdown'}</button><button class="markdown-toggle" data-inspector-action="find-text">Find in notes</button></div>
@@ -2807,31 +2787,26 @@ function openMoveTaskModal(taskOrTasks) {
   const task = tasks[0];
   const single = tasks.length === 1;
   const destinations = [
-    `<option value="inbox">Inbox</option>`,
-    `<option value="anytime">No area or project (Anytime)</option>`,
+    { value: 'inbox', label: 'Inbox' },
+    { value: 'anytime', label: 'No area or project (Anytime)' },
     ...ui.state.areas.flatMap((area) => [
-      `<option value="area:${area.id}" ${single && task.areaId === area.id && !task.projectId && !task.headingId ? 'selected' : ''}>${esc(spaceLabel(area.spaceId))} › ${esc(area.title)} (Area)</option>`,
-      ...ui.state.headings.filter((heading) => heading.areaId === area.id && !heading.projectId && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(spaceLabel(area.spaceId))} › ${esc(area.title)} › ${esc(heading.title)}</option>`)
+      { value: `area:${area.id}`, label: `${spaceLabel(area.spaceId)} › ${area.title} (Area)` },
+      ...ui.state.headings.filter((heading) => heading.areaId === area.id && !heading.projectId && !heading.archived).map((heading) => ({ value: `heading:${heading.id}`, label: `${spaceLabel(area.spaceId)} › ${area.title} › ${heading.title}` }))
     ]),
     ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).flatMap((project) => [
-      `<option value="project:${project.id}" ${single && task.projectId === project.id && !task.headingId ? 'selected' : ''}>${esc(spaceLabel(project.spaceId))} › ${esc(project.title)} (Project)</option>`,
-      ...ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.archived).map((heading) => `<option value="heading:${heading.id}" ${single && task.headingId === heading.id ? 'selected' : ''}>${esc(spaceLabel(project.spaceId))} › ${esc(project.title)} › ${esc(heading.title)}</option>`)
+      { value: `project:${project.id}`, label: `${spaceLabel(project.spaceId)} › ${project.title} (Project)` },
+      ...ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.archived).map((heading) => ({ value: `heading:${heading.id}`, label: `${spaceLabel(project.spaceId)} › ${project.title} › ${heading.title}` }))
     ])
-  ].join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="move-task-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Move ${tasks.length === 1 ? 'to-do' : `${tasks.length} to-dos`}</h2><p>Move ${tasks.length === 1 ? 'it' : 'them'} to the Inbox, an area, a project, or directly under a heading.</p><div class="form-field"><label for="move-search">Find a destination</label><input id="move-search" type="search" autocomplete="off" placeholder="Area, project, or heading"></div><div class="form-field"><label for="move-destination">Destination</label><select id="move-destination" size="7">${destinations}</select></div><div class="form-field"><label for="move-new-project">Or create a new project</label><input id="move-new-project" placeholder="New project name"></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Move</button></div></form></div>`;
-  activateModal();
-  $('#move-search').addEventListener('input', (event) => {
-    const tokens = event.target.value.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-    const options = $$('option', $('#move-destination'));
-    options.forEach((option) => { option.hidden = !tokens.every((token) => option.textContent.toLocaleLowerCase().includes(token)); });
-    const firstVisible = options.find((option) => !option.hidden);
-    if ($('#move-destination').selectedOptions[0]?.hidden && firstVisible) firstVisible.selected = true;
-  });
-  $('[data-cancel]').addEventListener('click', closeModal);
-  $('#move-task-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const value = $('#move-destination').value;
-    const newTitle = $('#move-new-project').value.trim();
+  ];
+  const initialValue = single && task.headingId ? `heading:${task.headingId}` : single && task.projectId ? `project:${task.projectId}` : single && task.areaId ? `area:${task.areaId}` : task.bucket === 'inbox' ? 'inbox' : 'anytime';
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(MoveTasksDialog, {
+    count: tasks.length,
+    options: destinations,
+    initialValue,
+    onClose: closeModal,
+    onSubmit: (value, newTitle) => {
     let destinationProject = null;
     if (newTitle) {
       const selectedAreaId = value.startsWith('area:') ? value.slice(5) : null;
@@ -2848,7 +2823,8 @@ function openMoveTaskModal(taskOrTasks) {
       else if (value.startsWith('heading:')) { const heading = ui.state.headings.find((candidate) => candidate.id === value.slice(8)); const project = projectById(heading.projectId); const area = areaById(heading.areaId); item.headingId = heading.id; item.projectId = project?.id || null; item.areaId = project?.areaId || heading.areaId || null; item.spaceId = project?.spaceId || area?.spaceId || item.spaceId; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
     });
     scheduleSave(); closeModal(); clearTaskSelection(); showToast(newTitle ? `Moved to new project “${newTitle}”` : `${tasks.length === 1 ? 'To-do' : `${tasks.length} to-dos`} moved`);
-  });
+    }
+  }), $('#modal-root'));
 }
 
 function openSearch(initialQuery = '') {
@@ -2916,76 +2892,64 @@ function chooseSearchResult(item) {
 
 function openNewListModal(defaults = {}) {
   const initialSpaceId = areaById(defaults.areaId)?.spaceId || defaults.spaceId || currentCreationSpaceId();
-  const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${space.id === initialSpaceId ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
-  const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}" data-space-option="${esc(area.spaceId || '')}">${esc(spaceLabel(area.spaceId))} › ${esc(area.title)}</option>`)].join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="new-list-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Create a list</h2><p>Use projects for outcomes, areas for ongoing responsibilities, and Spaces for the part of life they belong to.</p><div class="repeat-grid"><div class="form-field"><label for="list-type">Type</label><select id="list-type"><option value="project" ${defaults.type !== 'area' ? 'selected' : ''}>Project</option><option value="area" ${defaults.type === 'area' ? 'selected' : ''}>Area</option></select></div><div class="form-field"><label for="list-space">Space</label><select id="list-space">${spaceOptions}</select></div></div><div class="form-field"><label for="list-title">Name</label><input id="list-title" required autocomplete="off" placeholder="e.g. Plan summer trip"></div><div class="form-field" id="area-field"><label for="list-area">Area</label><select id="list-area">${areaOptions}</select></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Create</button></div></form></div>`;
-  activateModal();
-  if (defaults.areaId) $('#list-area').value = defaults.areaId;
-  $('#area-field').hidden = defaults.type === 'area';
-  $('#list-type').addEventListener('change', (event) => { $('#area-field').hidden = event.target.value === 'area'; });
-  const filterAreas = () => {
-    const spaceId = $('#list-space').value;
-    $$('[data-space-option]', $('#list-area')).forEach((option) => { option.hidden = option.dataset.spaceOption !== spaceId; });
-    const selected = $('#list-area').selectedOptions[0];
-    if (selected?.hidden) $('#list-area').value = '';
-  };
-  $('#list-space').addEventListener('change', filterAreas);
-  filterAreas();
-  $('[data-cancel]').addEventListener('click', closeModal);
-  $('#new-list-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const title = $('#list-title').value.trim();
-    if (!title) return;
-    const spaceId = $('#list-space').value || currentCreationSpaceId();
-    if ($('#list-type').value === 'area') {
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(NewListDialog, {
+    spaces: ui.state.spaces,
+    areas: ui.state.areas,
+    defaults: { type: defaults.type === 'area' ? 'area' : 'project', spaceId: initialSpaceId, areaId: defaults.areaId || null, title: defaults.title || '' },
+    onClose: closeModal,
+    onSubmit: ({ type, spaceId: requestedSpaceId, areaId, title }) => {
+    const spaceId = requestedSpaceId || currentCreationSpaceId();
+    if (type === 'area') {
       const area = { id: uid('area'), spaceId, title, color: spaceById(spaceId)?.color || ['#5b7cfa','#e49b3c','#5ba67a','#b06bd3'][ui.state.areas.length % 4], tags: [], order: ui.state.areas.length };
       ui.state.areas.push(area); closeModal(); setView('area', area.id);
     } else {
-      const areaId = $('#list-area').value || null;
       const project = { id: uid('project'), spaceId: areaById(areaId)?.spaceId || spaceId, areaId, title, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
       ui.state.projects.push(project); closeModal(); setView('project', project.id);
     }
     scheduleSave();
-  });
-  setTimeout(() => $('#list-title')?.focus(), 20);
+    }
+  }), $('#modal-root'));
 }
 
 function openHeadingModal(headingId = null) {
   const heading = ui.state.headings.find((item) => item.id === headingId);
   const defaultParent = heading?.projectId ? `project:${heading.projectId}` : heading?.areaId ? `area:${heading.areaId}` : `${ui.view.type}:${ui.view.id}`;
   const parentOptions = [
-    ...ui.state.areas.map((area) => `<option value="area:${area.id}" ${defaultParent === `area:${area.id}` ? 'selected' : ''}>${esc(spaceLabel(area.spaceId))} › ${esc(area.title)} (Area)</option>`),
-    ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).map((project) => `<option value="project:${project.id}" ${defaultParent === `project:${project.id}` ? 'selected' : ''}>${esc(spaceLabel(project.spaceId))} › ${esc(project.title)} (Project)</option>`)
-  ].join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="heading-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>${heading ? 'Edit heading' : 'New heading'}</h2><p>Headings divide an area or project into clear stages or categories.</p><div class="form-field"><label for="heading-title">Name</label><input id="heading-title" required value="${esc(heading?.title || '')}" placeholder="e.g. Preparation"></div><div class="form-field"><label for="heading-parent">Location</label><select id="heading-parent">${parentOptions}</select></div>${heading ? `<div class="settings-section button-row"><button class="button" type="button" data-heading-action="duplicate">Duplicate with to-dos</button><button class="button" type="button" data-heading-action="convert">Convert to project</button><button class="button" type="button" data-heading-action="archive">Archive</button><button class="danger-button" type="button" data-heading-action="delete">${icon('trash')} Delete heading</button></div>` : ''}<div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">${heading ? 'Save' : 'Create'}</button></div></form></div>`;
-  activateModal();
-  $('[data-cancel]').addEventListener('click', closeModal);
-  $('#heading-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const title = $('#heading-title').value.trim();
-    if (!title) return;
-    const [parentType, parentId] = $('#heading-parent').value.split(':');
-    if (heading) {
-      heading.title = title;
-      if (parentId !== (heading.projectId || heading.areaId)) {
-        heading.projectId = parentType === 'project' ? parentId : null;
-        heading.areaId = parentType === 'area' ? parentId : null;
-        const destination = parentType === 'project' ? projectById(parentId) : null;
-        const destinationArea = parentType === 'area' ? areaById(parentId) : null;
-        ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => {
-          task.projectId = destination?.id || null;
-          task.areaId = destination?.areaId || (parentType === 'area' ? parentId : null);
-          task.spaceId = destination?.spaceId || destinationArea?.spaceId || task.spaceId;
-        });
-      }
-    }
-    else ui.state.headings.push({ id: uid('heading'), projectId: parentType === 'project' ? parentId : null, areaId: parentType === 'area' ? parentId : null, title, archived: false, order: headingsFor(parentType, parentId, true).length });
-    scheduleSave(); closeModal(); render();
-  });
-  $$('[data-heading-action]').forEach((button) => button.addEventListener('click', () => {
-    if (button.dataset.headingAction === 'delete') {
-      closeModal(); deleteHeading(heading.id); return;
-    } else if (button.dataset.headingAction === 'archive') {
+    ...ui.state.areas.map((area) => ({ value: `area:${area.id}`, label: `${spaceLabel(area.spaceId)} › ${area.title} (Area)` })),
+    ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).map((project) => ({ value: `project:${project.id}`, label: `${spaceLabel(project.spaceId)} › ${project.title} (Project)` }))
+  ];
+  const initialParent = parentOptions.some((option) => option.value === defaultParent) ? defaultParent : parentOptions[0]?.value || '';
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(HeadingDialog, {
+    heading: heading || null,
+    parents: parentOptions,
+    initialParent,
+    onClose: closeModal,
+    onSave: (title, parent) => {
+      const [parentType, parentId] = parent.split(':');
+      if (heading) {
+        heading.title = title;
+        if (parentId !== (heading.projectId || heading.areaId)) {
+          heading.projectId = parentType === 'project' ? parentId : null;
+          heading.areaId = parentType === 'area' ? parentId : null;
+          const destination = parentType === 'project' ? projectById(parentId) : null;
+          const destinationArea = parentType === 'area' ? areaById(parentId) : null;
+          ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => {
+            task.projectId = destination?.id || null;
+            task.areaId = destination?.areaId || (parentType === 'area' ? parentId : null);
+            task.spaceId = destination?.spaceId || destinationArea?.spaceId || task.spaceId;
+          });
+        }
+      } else ui.state.headings.push({ id: uid('heading'), projectId: parentType === 'project' ? parentId : null, areaId: parentType === 'area' ? parentId : null, title, archived: false, order: headingsFor(parentType, parentId, true).length });
+      scheduleSave(); closeModal(); render();
+    },
+    onAction: (action) => {
+      if (!heading) return;
+      if (action === 'delete') { closeModal(); deleteHeading(heading.id); return; }
+      if (action === 'archive') {
       const unfinished = ui.state.tasks.filter((task) => task.headingId === heading.id && task.status === 'open' && !task.repeat);
       if (unfinished.length) {
         showToast(`Complete or move ${unfinished.length} unfinished to-do${unfinished.length === 1 ? '' : 's'} first`);
@@ -2993,7 +2957,7 @@ function openHeadingModal(headingId = null) {
       }
       heading.archived = true;
       showToast('Heading archived');
-    } else if (button.dataset.headingAction === 'convert') {
+      } else if (action === 'convert') {
       const sourceProject = projectById(heading.projectId);
       const projectAreaId = sourceProject?.areaId || heading.areaId || null;
       const project = { id: uid('project'), spaceId: sourceProject?.spaceId || areaById(projectAreaId)?.spaceId || currentCreationSpaceId(), areaId: projectAreaId, title: heading.title, notes: '', bucket: 'anytime', scheduledFor: null, deadline: null, tags: [], repeat: null, status: 'open', completedAt: null, loggedAt: null, order: ui.state.projects.length };
@@ -3001,15 +2965,15 @@ function openHeadingModal(headingId = null) {
       ui.state.tasks.filter((task) => task.headingId === heading.id).forEach((task) => { task.projectId = project.id; task.headingId = null; task.areaId = project.areaId; task.spaceId = project.spaceId; });
       ui.state.headings = ui.state.headings.filter((item) => item.id !== heading.id);
       scheduleSave(); closeModal(); setView('project', project.id); showToast('Heading converted to project'); return;
-    } else {
+      } else {
       const copy = { ...heading, id: uid('heading'), title: `${heading.title} copy`, order: heading.order + 0.5 };
       ui.state.headings.push(copy);
       ui.state.tasks.filter((task) => task.headingId === heading.id && task.status === 'open').forEach((task) => ui.state.tasks.push({ ...task, id: uid('task'), headingId: copy.id, tags: [...(task.tags || [])], repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null, checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), createdAt: new Date().toISOString(), order: Date.now() + Math.random() }));
       showToast('Heading duplicated');
+      }
+      scheduleSave(); closeModal(); render();
     }
-    scheduleSave(); closeModal(); render();
-  }));
-  setTimeout(() => $('#heading-title')?.focus(), 20);
+  }), $('#modal-root'));
 }
 
 function deleteHeading(headingId) {
@@ -3037,105 +3001,79 @@ function moveProjectToTrash(projectId) {
   });
 }
 
-function openProjectModal(projectId) {
+function openProjectModalPreact(projectId) {
   const project = projectById(projectId);
   if (!project) return;
-  const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${project.spaceId === space.id ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
-  const areaOptions = [`<option value="">No area</option>`, ...ui.state.areas.map((area) => `<option value="${area.id}" ${project.areaId === area.id ? 'selected' : ''}>${esc(spaceLabel(area.spaceId))} › ${esc(area.title)}</option>`)].join('');
   const archivedHeadings = ui.state.headings.filter((heading) => heading.projectId === project.id && heading.archived);
-  const projectActions = isTrashed(project)
-    ? `<button class="button" type="button" data-project-action="restore-trash">Restore project</button><button class="danger-button" type="button" data-project-action="delete-forever">${icon('trash')} Delete forever</button>`
-    : `<button class="button" type="button" data-project-action="duplicate">Duplicate project</button><button class="button" type="button" data-project-action="${['completed', 'canceled'].includes(project.status) ? 'restore' : 'complete'}">${['completed', 'canceled'].includes(project.status) ? 'Restore project' : 'Complete project'}</button>${project.status === 'open' ? '<button class="button" type="button" data-project-action="cancel">Cancel project</button>' : ''}<button class="danger-button" type="button" data-project-action="delete">${icon('trash')} Move to Trash</button>`;
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="project-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Project options</h2><p>Edit the outcome, move it, duplicate it, or send it to the Logbook.</p><div class="form-field"><label for="project-title">Name</label><input id="project-title" required value="${esc(project.title)}"></div><div class="form-field"><label for="project-notes">Notes</label><textarea id="project-notes" rows="4">${esc(project.notes || '')}</textarea></div><div class="repeat-grid"><div class="form-field"><label for="project-space">Space</label><select id="project-space">${spaceOptions}</select></div><div class="form-field"><label for="project-area">Area</label><select id="project-area">${areaOptions}</select></div></div><div class="repeat-grid"><div class="form-field"><label for="project-when">When</label><select id="project-when"><option value="anytime" ${project.bucket === 'anytime' ? 'selected' : ''}>Anytime</option><option value="today" ${project.bucket === 'today' ? 'selected' : ''}>Today</option><option value="upcoming" ${project.bucket === 'upcoming' ? 'selected' : ''}>Upcoming</option><option value="someday" ${project.bucket === 'someday' ? 'selected' : ''}>Someday</option></select></div><div class="form-field"><label for="project-start">Start date</label><input id="project-start" type="date" value="${project.scheduledFor || ''}"></div><div class="form-field"><label for="project-deadline">Deadline</label><input id="project-deadline" type="date" value="${project.deadline || ''}"></div></div><div class="form-field"><label for="project-tags">Tags</label><input id="project-tags" value="${esc((project.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}${project.status === 'open' ? `<div class="settings-section"><h3>Repeat</h3>${project.repeat ? `<div class="repeat-grid"><select class="detail-select" data-project-repeat-field="mode"><option value="fixed" ${project.repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${project.repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-project-repeat-field="frequency"><option value="daily" ${project.repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${project.repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${project.repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${project.repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" data-project-repeat-field="interval" value="${project.repeat.interval || 1}" aria-label="Project repeat interval"><input class="detail-input" type="date" data-project-repeat-field="nextDate" value="${project.repeat.nextDate || addDays(localDay(), 7)}" aria-label="Project next occurrence"></div>${project.repeat.frequency === 'weekly' ? `<div class="weekday-row">${renderWeekdayPicker(project.repeat.weekdays, 'data-project-weekday', 'Repeat project on')}</div>` : ''}<button class="checklist-add" type="button" data-project-action="stop-repeat">Stop repeating</button>` : `<button class="button" type="button" data-project-action="repeat">Make project repeating…</button>`}</div>` : ''}<div class="settings-section button-row">${projectActions}</div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
-  activateModal();
-  $('[data-cancel]').addEventListener('click', closeModal);
-  const projectTagInput = $('#project-tags');
-  projectTagInput.previousElementSibling?.removeAttribute('for');
-  projectTagInput.insertAdjacentHTML('afterend', renderTagPicker(project.tags, 'project'));
-  projectTagInput.remove();
-  bindTagPicker($('#project-form'));
-  $('#project-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    project.title = $('#project-title').value.trim() || project.title;
-    project.notes = $('#project-notes').value.trim();
-    project.areaId = $('#project-area').value || null;
-    project.spaceId = areaById(project.areaId)?.spaceId || $('#project-space').value || project.spaceId;
-    project.bucket = $('#project-when').value;
-    project.scheduledFor = $('#project-start').value || null;
-    if (project.bucket === 'today') project.scheduledFor = localDay();
-    if (['anytime', 'someday'].includes(project.bucket)) project.scheduledFor = null;
-    if (project.bucket === 'upcoming' && !project.scheduledFor) project.scheduledFor = addDays(localDay(), 1);
-    project.deadline = $('#project-deadline').value || null;
-    project.tags = selectedPickerTags($('#project-form'));
-    $$('[data-project-repeat-field]').forEach((field) => { project.repeat[field.dataset.projectRepeatField] = field.dataset.projectRepeatField === 'interval' ? Math.max(1, Number(field.value) || 1) : field.value; });
-    if (project.repeat) project.repeat.deadlineOffset = dayDistance(project.repeat.nextDate, project.deadline);
-    ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.areaId = project.areaId; task.spaceId = project.spaceId; });
-    scheduleSave(); closeModal(); render();
-  });
-  $$('[data-restore-heading]').forEach((button) => button.addEventListener('click', () => {
-    const heading = ui.state.headings.find((item) => item.id === button.dataset.restoreHeading);
-    if (heading) heading.archived = false;
-    scheduleSave(); closeModal(); render(); showToast('Heading restored');
-  }));
-  $$('[data-project-weekday]').forEach((button) => {
-    const day = Number(button.dataset.projectWeekday);
-    button.setAttribute('aria-label', `Repeat project on ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}`);
-    button.addEventListener('click', () => {
-      project.repeat.weekdays ||= [];
-      project.repeat.weekdays = project.repeat.weekdays.includes(day) ? project.repeat.weekdays.filter((value) => value !== day) : [...project.repeat.weekdays, day].sort();
-      scheduleSave(); openProjectModal(project.id);
-    });
-  });
-  $$('[data-project-action]').forEach((button) => button.addEventListener('click', () => {
-    const action = button.dataset.projectAction;
-    if (action === 'delete') {
-      moveProjectToTrash(project.id);
-      return;
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(ProjectDialog, {
+    project,
+    spaces: ui.state.spaces,
+    areas: ui.state.areas,
+    archivedHeadings,
+    fallbackRepeatDate: project.scheduledFor || addDays(localDay(), 7),
+    onClose: closeModal,
+    onSave: (draft) => {
+      project.title = draft.title || project.title;
+      project.notes = draft.notes || '';
+      project.areaId = draft.areaId || null;
+      project.spaceId = areaById(project.areaId)?.spaceId || draft.spaceId || project.spaceId;
+      project.bucket = draft.bucket;
+      project.scheduledFor = draft.scheduledFor || null;
+      if (project.bucket === 'today') project.scheduledFor = localDay();
+      if (['anytime', 'someday'].includes(project.bucket)) project.scheduledFor = null;
+      if (project.bucket === 'upcoming' && !project.scheduledFor) project.scheduledFor = addDays(localDay(), 1);
+      project.deadline = draft.deadline || null;
+      project.tags = cleanTagList(draft.tags || []);
+      project.repeat = draft.repeat ? { ...draft.repeat, weekdays: [...(draft.repeat.weekdays || [])], deadlineOffset: dayDistance(draft.repeat.nextDate, project.deadline) } : null;
+      ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.areaId = project.areaId; task.spaceId = project.spaceId; });
+      scheduleSave(); closeModal(); render();
+    },
+    onRestoreHeading: (headingId) => {
+      const heading = ui.state.headings.find((item) => item.id === headingId);
+      if (heading) heading.archived = false;
+      scheduleSave(); closeModal(); render(); showToast('Heading restored');
+    },
+    onAction: (action) => {
+      if (action === 'trash') { closeModal(); moveProjectToTrash(project.id); return; }
+      if (action === 'restore-trash') {
+        project.status = project.previousStatus || 'open'; project.previousStatus = null; project.trashedAt = null;
+        ui.state.tasks.filter((task) => task.projectId === project.id && isTrashed(task)).forEach((task) => { task.status = task.previousStatus || 'open'; task.previousStatus = null; task.trashedAt = null; });
+        applyLogbookPolicy(); scheduleSave(); closeModal(); setView(isLogged(project) ? 'logbook' : 'project', isLogged(project) ? null : project.id); showToast('Project restored'); return;
+      }
+      if (action === 'delete-forever') {
+        closeModal();
+        confirmAction('Delete this project forever?', 'The project, its headings, and every to-do inside it will be permanently deleted.', 'Delete forever', () => {
+          ui.state.projects = ui.state.projects.filter((item) => item.id !== project.id);
+          ui.state.headings = ui.state.headings.filter((item) => item.projectId !== project.id);
+          ui.state.tasks = ui.state.tasks.filter((task) => task.projectId !== project.id);
+          scheduleSave(); setView('trash'); showToast('Project permanently deleted');
+        });
+        return;
+      }
+      if (action === 'complete') { closeModal(); resolveProjectCompletion(project); return; }
+      if (action === 'cancel') finishProject(project, 'canceled', 'canceled');
+      else if (action === 'restore') {
+        project.status = 'open'; project.completedAt = null; project.loggedAt = null;
+        ui.state.tasks.filter((task) => task.completedWithProjectId === project.id).forEach((task) => { task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.completedWithProjectId = null; });
+        setView('project', project.id); showToast('Project restored');
+      } else duplicateProject(project);
+      scheduleSave(); closeModal(); render();
     }
-    if (action === 'restore-trash') {
-      project.status = project.previousStatus || 'open'; project.previousStatus = null; project.trashedAt = null;
-      ui.state.tasks.filter((task) => task.projectId === project.id && isTrashed(task)).forEach((task) => { task.status = task.previousStatus || 'open'; task.previousStatus = null; task.trashedAt = null; });
-      applyLogbookPolicy(); scheduleSave(); closeModal(); setView(isLogged(project) ? 'logbook' : 'project', isLogged(project) ? null : project.id); showToast('Project restored'); return;
-    }
-    if (action === 'delete-forever') {
-      confirmAction('Delete this project forever?', 'The project, its headings, and every to-do inside it will be permanently deleted.', 'Delete forever', () => {
-        ui.state.projects = ui.state.projects.filter((item) => item.id !== project.id);
-        ui.state.headings = ui.state.headings.filter((item) => item.projectId !== project.id);
-        ui.state.tasks = ui.state.tasks.filter((task) => task.projectId !== project.id);
-        scheduleSave(); setView('trash'); showToast('Project permanently deleted');
-      });
-      return;
-    }
-    if (action === 'complete') {
-      closeModal(); resolveProjectCompletion(project); return;
-    } else if (action === 'cancel') {
-      finishProject(project, 'canceled', 'canceled');
-    } else if (action === 'restore') {
-      project.status = 'open'; project.completedAt = null; project.loggedAt = null;
-      ui.state.tasks.filter((task) => task.completedWithProjectId === project.id).forEach((task) => { task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.completedWithProjectId = null; });
-      setView('project', project.id); showToast('Project restored');
-    } else if (action === 'repeat') {
-      const nextDate = project.scheduledFor || addDays(localDay(), 7);
-      project.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, nextDate, deadlineOffset: dayDistance(nextDate, project.deadline), paused: false };
-      setView('repeating'); showToast('Repeating project template created');
-    } else if (action === 'stop-repeat') {
-      project.repeat = null; setView('project', project.id); showToast('Project stopped repeating');
-    } else {
-      duplicateProject(project);
-    }
-    scheduleSave(); closeModal(); render();
-  }));
+  }), $('#modal-root'));
+}
+
+function openProjectModal(projectId) {
+  return openProjectModalPreact(projectId);
 }
 
 function resolveProjectCompletion(project) {
   const remaining = ui.state.tasks.filter((task) => task.projectId === project.id && task.status === 'open' && !task.repeat);
   if (!remaining.length) { finishProject(project, 'completed', 'completed'); return; }
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal" role="alertdialog" aria-modal="true" aria-labelledby="finish-project-title"><h2 id="finish-project-title">${remaining.length} unfinished to-do${remaining.length === 1 ? '' : 's'}</h2><p>Things keeps an accurate history by recording whether the remaining work was finished or canceled.</p><div class="completion-choices"><button class="button primary" type="button" data-finish-remaining="completed">Mark all completed</button><button class="button" type="button" data-finish-remaining="canceled">Mark unfinished as canceled</button></div><div class="form-actions"><button class="button" type="button" data-confirm-cancel>Keep project open</button></div></div></div>`;
-  activateModal();
-  $('[data-confirm-cancel]').addEventListener('click', closeModal);
-  $$('[data-finish-remaining]').forEach((button) => button.addEventListener('click', () => {
-    closeModal(); finishProject(project, 'completed', button.dataset.finishRemaining);
-  }));
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(FinishProjectDialog, { count: remaining.length, onClose: closeModal, onFinish: (status) => { closeModal(); finishProject(project, 'completed', status); } }), $('#modal-root'));
 }
 
 function finishProject(project, projectStatus, remainingStatus) {
@@ -3178,144 +3116,145 @@ function removeArea(areaId) {
   });
 }
 
-function openAreaModal(areaId) {
+function openAreaModalPreact(areaId) {
   const area = areaById(areaId);
   if (!area) return;
   const archivedHeadings = headingsFor('area', area.id, true).filter((heading) => heading.archived);
-  const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${area.spaceId === space.id ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><form id="area-form" class="modal form-modal" role="dialog" aria-modal="true"><h2>Area options</h2><p>Areas represent ongoing responsibilities that do not finish.</p><div class="form-field"><label for="area-title">Name</label><input id="area-title" required value="${esc(area.title)}"></div><div class="repeat-grid"><div class="form-field"><label for="area-space">Space</label><select id="area-space">${spaceOptions}</select></div><div class="form-field"><label for="area-color">Color</label><input id="area-color" type="color" value="${esc(area.color || '#5b7cfa')}"></div></div><div class="form-field"><label for="area-tags">Tags inherited by its to-dos</label><input id="area-tags" value="${esc((area.tags || []).join(', '))}"></div>${archivedHeadings.length ? `<div class="settings-section"><h3>Archived headings</h3><div class="button-row">${archivedHeadings.map((heading) => `<button class="button" type="button" data-restore-area-heading="${heading.id}">Restore ${esc(heading.title)}</button>`).join('')}</div></div>` : ''}<div class="settings-section button-row"><button class="button" type="button" data-area-new-heading>${icon('heading')} New heading</button><button class="danger-button" type="button" data-area-remove>${icon('x')} Remove area</button></div><div class="form-actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save</button></div></form></div>`;
-  activateModal();
-  $('[data-cancel]').addEventListener('click', closeModal);
-  const areaTagInput = $('#area-tags');
-  areaTagInput.previousElementSibling?.removeAttribute('for');
-  areaTagInput.insertAdjacentHTML('afterend', renderTagPicker(area.tags, 'area'));
-  areaTagInput.remove();
-  bindTagPicker($('#area-form'));
-  $('#area-form').addEventListener('submit', (event) => { event.preventDefault(); area.title = $('#area-title').value.trim() || area.title; area.spaceId = $('#area-space').value || area.spaceId; area.color = $('#area-color').value; area.tags = selectedPickerTags($('#area-form')); ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.spaceId = area.spaceId; ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.spaceId = area.spaceId; }); }); ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.spaceId = area.spaceId; }); scheduleSave(); closeModal(); render(); });
-  $('[data-area-new-heading]').addEventListener('click', () => { closeModal(); setView('area', area.id); openHeadingModal(); });
-  $$('[data-restore-area-heading]').forEach((button) => button.addEventListener('click', () => { const heading = ui.state.headings.find((item) => item.id === button.dataset.restoreAreaHeading); if (heading) heading.archived = false; scheduleSave(); closeModal(); render(); showToast('Heading restored'); }));
-  $('[data-area-remove]').addEventListener('click', () => removeArea(area.id));
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(AreaDialog, {
+    area,
+    spaces: ui.state.spaces,
+    archivedHeadings,
+    onClose: closeModal,
+    onSave: (draft) => {
+      area.title = draft.title || area.title;
+      area.spaceId = draft.spaceId || area.spaceId;
+      area.color = draft.color;
+      area.tags = cleanTagList(draft.tags || []);
+      ui.state.projects.filter((project) => project.areaId === area.id).forEach((project) => { project.spaceId = area.spaceId; ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.spaceId = area.spaceId; }); });
+      ui.state.tasks.filter((task) => task.areaId === area.id).forEach((task) => { task.spaceId = area.spaceId; });
+      scheduleSave(); closeModal(); render();
+    },
+    onRestoreHeading: (headingId) => {
+      const heading = ui.state.headings.find((item) => item.id === headingId);
+      if (heading) heading.archived = false;
+      scheduleSave(); closeModal(); render(); showToast('Heading restored');
+    },
+    onAction: (action) => {
+      closeModal();
+      if (action === 'new-heading') { setView('area', area.id); openHeadingModal(); }
+      else removeArea(area.id);
+    }
+  }), $('#modal-root'));
+}
+
+function openAreaModal(areaId) {
+  return openAreaModalPreact(areaId);
 }
 
 function openSpaceSwitcher() {
-  $('#modal-root').innerHTML = `<div class="modal-backdrop space-switcher-backdrop" data-modal-close><div class="modal space-switcher-modal" role="dialog" aria-modal="true" aria-labelledby="space-switcher-title"><header class="space-switcher-header"><div><h2 id="space-switcher-title">Choose a Space</h2><p>Quick Find remains available across every Space.</p></div><button class="icon-button" type="button" data-space-switcher-close aria-label="Close Space chooser">${icon('x')}</button></header><div class="space-switcher-list"><button class="space-switcher-item ${ui.activeSpaceId === 'all' ? 'active' : ''}" type="button" data-switch-space="all" aria-pressed="${ui.activeSpaceId === 'all'}"><i style="--space-color:#85878b"></i><span>All</span>${ui.activeSpaceId === 'all' ? icon('check') : ''}</button>${[...ui.state.spaces].sort((a, b) => a.order - b.order).map((space) => `<button class="space-switcher-item ${ui.activeSpaceId === space.id ? 'active' : ''}" type="button" data-switch-space="${esc(space.id)}" aria-pressed="${ui.activeSpaceId === space.id}"><i style="--space-color:${esc(space.color)}"></i><span>${esc(space.title)}</span>${ui.activeSpaceId === space.id ? icon('check') : ''}</button>`).join('')}</div><footer class="space-switcher-footer"><button class="button space-switcher-manage" type="button" data-manage-spaces>${icon('clock')}<span>Spaces & launch rules</span></button><button class="button primary space-switcher-done" type="button" data-space-switcher-close>Done</button></footer></div></div>`;
-  activateModal();
-  $$('[data-switch-space]').forEach((button) => button.addEventListener('click', () => { closeModal(); setActiveSpace(button.dataset.switchSpace); }));
-  $('[data-manage-spaces]').addEventListener('click', openSpaceSettings);
-  $$('[data-space-switcher-close]').forEach((button) => button.addEventListener('click', closeModal));
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(SpaceSwitcherDialog, {
+    spaces: [...ui.state.spaces].sort((a, b) => a.order - b.order),
+    activeId: ui.activeSpaceId,
+    onClose: closeModal,
+    onChoose: (id) => { closeModal(); setActiveSpace(id); },
+    onManage: () => { closeModal(); setTimeout(openSpaceSettings, 0); },
+  }), $('#modal-root'));
 }
 
-function applySpaceSettingsForm() {
-  const form = $('#space-settings-form');
-  if (!form) return;
+function applySpaceSettingsDraft(draft) {
+  const spaces = draft.spaces.map((space, index) => ({ ...space, title: space.title.trim() || `Space ${index + 1}`, order: index }));
   let pinnedCount = 0;
-  $$('[data-space-row]', form).forEach((row) => {
-    const space = spaceById(row.dataset.spaceRow);
-    if (!space) return;
-    space.title = $('[data-space-field="title"]', row).value.trim() || space.title;
-    space.color = $('[data-space-field="color"]', row).value;
-    const wantsPinned = $('[data-space-field="pinned"]', row).checked;
-    space.pinned = wantsPinned && pinnedCount < 2;
-    if (space.pinned) pinnedCount += 1;
-  });
-  if (!ui.state.spaces.some((space) => space.pinned)) ui.state.spaces.slice(0, 2).forEach((space) => { space.pinned = true; });
-  const schedule = ui.state.settings.spaceSchedule;
-  setLaunchRulesEnabled($('#space-schedule-enabled').checked);
-  ui.state.settings.defaultSpaceId = $('#space-default').value || ui.state.spaces[0]?.id || null;
-  schedule.rules = $$('[data-space-rule]', form).map((row, index) => ({
-    id: row.dataset.spaceRule,
-    spaceId: $('[data-rule-field="spaceId"]', row).value,
-    weekdays: $$('[data-rule-weekday].active', row).map((button) => Number(button.dataset.ruleWeekday)),
-    start: $('[data-rule-field="start"]', row).value,
-    end: $('[data-rule-field="end"]', row).value,
-    order: index,
-  })).filter((rule) => rule.weekdays.length && spaceById(rule.spaceId));
+  spaces.forEach((space) => { space.pinned = Boolean(space.pinned) && pinnedCount < 2; if (space.pinned) pinnedCount += 1; });
+  if (!spaces.some((space) => space.pinned)) spaces.slice(0, 2).forEach((space) => { space.pinned = true; });
+  ui.state.spaces = spaces;
+  setLaunchRulesEnabled(Boolean(draft.enabled));
+  ui.state.settings.defaultSpaceId = spaces.some((space) => space.id === draft.defaultId) ? draft.defaultId : spaces[0]?.id || null;
+  ui.state.settings.spaceSchedule.rules = draft.rules
+    .filter((rule) => rule.weekdays.length && spaces.some((space) => space.id === rule.spaceId))
+    .map((rule, index) => ({ ...rule, weekdays: [...rule.weekdays].sort(), order: index }));
 }
 
 function openSpaceSettings() {
-  const schedule = ui.state.settings.spaceSchedule;
   const spaces = [...ui.state.spaces].sort((a, b) => a.order - b.order);
-  const pinnedIds = new Set(spaces.filter((space) => space.pinned).slice(0, 2).map((space) => space.id));
-  const spaceOptions = (selectedId) => spaces.map((space) => `<option value="${space.id}" ${space.id === selectedId ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
-  const spaceCards = spaces.map((space) => `<div class="space-editor-card" data-space-row="${esc(space.id)}"><input class="space-color-input" type="color" value="${esc(space.color)}" data-space-field="color" aria-label="${esc(space.title)} color"><input class="detail-input space-title-input" value="${esc(space.title)}" maxlength="40" data-space-field="title" aria-label="Space name"><label class="space-pin"><input type="checkbox" data-space-field="pinned" ${pinnedIds.has(space.id) ? 'checked' : ''}><span class="space-pin-long">Show in sidebar</span><span class="space-pin-short">Sidebar</span></label><button class="icon-button space-delete" type="button" data-delete-space="${esc(space.id)}" aria-label="Delete ${esc(space.title)}" ${spaces.length < 2 ? 'disabled' : ''}>${icon('trash')}</button></div>`).join('');
-  const rules = (schedule.rules || []).sort((a, b) => (a.order || 0) - (b.order || 0)).map((rule) => `<div class="space-launch-rule" data-space-rule="${esc(rule.id)}"><div class="space-rule-main"><span>At launch, use</span><select class="detail-select" data-rule-field="spaceId" aria-label="Space for launch rule">${spaceOptions(rule.spaceId)}</select></div><div class="space-rule-days"><span class="space-rule-field-label">on</span><div class="weekday-row">${renderWeekdayPicker(rule.weekdays, 'data-rule-weekday', 'Use Space on')}</div></div><div class="space-rule-times"><label><span>from</span><input class="detail-input" type="time" value="${esc(rule.start)}" data-rule-field="start" aria-label="Start time"></label><label><span>to</span><input class="detail-input" type="time" value="${esc(rule.end)}" data-rule-field="end" aria-label="End time"></label></div><button class="icon-button space-rule-delete" type="button" data-delete-rule="${esc(rule.id)}" aria-label="Delete launch rule">${icon('trash')}</button></div>`).join('');
-  $('#modal-root').innerHTML = `<div class="modal-backdrop space-settings-backdrop" data-modal-close><form id="space-settings-form" class="modal space-settings-modal" role="dialog" aria-modal="true" aria-labelledby="space-settings-title"><header class="space-settings-header"><button class="icon-button space-settings-back" type="button" data-space-close aria-label="Close Spaces and launch rules"><span class="desktop-only">${icon('x')}</span><span class="mobile-only">${icon('arrowLeft')}</span></button><div><h2 id="space-settings-title">Spaces & launch rules</h2><p>Set up your Spaces, then tell Objects which one to use when it opens.</p></div></header><div class="space-settings-body"><section class="space-settings-section" aria-labelledby="spaces-section-title"><h3 id="spaces-section-title">Spaces</h3><div class="space-card-grid">${spaceCards}<button class="space-add-card" type="button" data-add-space>${icon('plus')}<span>Add Space</span></button></div><p class="space-pin-usage" data-space-pin-usage>${pinnedIds.size} of 2 sidebar pins used</p></section><section class="space-settings-section space-default-section" aria-labelledby="space-default-title"><h3 id="space-default-title">Default behavior</h3><div class="space-default-controls"><label class="space-toggle"><input id="space-schedule-enabled" type="checkbox" ${ui.launchRulesEnabled ? 'checked' : ''}><span aria-hidden="true"></span><b>Use launch rules on this device</b></label><label class="space-default-choice"><span>If no rule matches, use</span><select id="space-default" class="detail-select">${spaceOptions(ui.state.settings.defaultSpaceId)}</select></label></div><p>This preference is saved only on this device. Rules run when Objects opens or reloads; manual choices last until then.</p></section><section class="space-settings-section space-rules-section" aria-labelledby="space-rules-title"><h3 id="space-rules-title">Launch rules</h3><div class="space-rules">${rules}</div><button class="button space-add-rule" type="button" data-add-space-rule>${icon('plus')} Add launch rule</button></section></div><footer class="space-settings-footer"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save changes</button></footer></form></div>`;
-  activateModal();
-  $('[data-space-close]').addEventListener('click', closeModal);
-  $('[data-cancel]').addEventListener('click', closeModal);
-  $$('[data-rule-weekday]').forEach((button) => button.addEventListener('click', () => { button.classList.toggle('active'); button.setAttribute('aria-pressed', button.classList.contains('active')); }));
-  const updatePinLimit = () => {
-    const pins = $$('[data-space-field="pinned"]', $('#space-settings-form'));
-    const checkedCount = pins.filter((input) => input.checked).length;
-    $('[data-space-pin-usage]').textContent = `${checkedCount} of 2 sidebar pins used`;
-    pins.forEach((input) => { input.disabled = !input.checked && checkedCount >= 2; });
-  };
-  $$('[data-space-field="pinned"]').forEach((input) => input.addEventListener('change', updatePinLimit));
-  updatePinLimit();
-  $('[data-add-space]').addEventListener('click', () => {
-    applySpaceSettingsForm();
-    ui.state.spaces.push({ id: uid('space'), title: `Space ${ui.state.spaces.length + 1}`, color: ['#5ba67a', '#b06bd3', '#e49b3c', '#5b7cfa'][ui.state.spaces.length % 4], pinned: ui.state.spaces.filter((space) => space.pinned).length < 2, order: ui.state.spaces.length });
-    scheduleSave(); openSpaceSettings();
-  });
-  $('[data-add-space-rule]').addEventListener('click', () => {
-    applySpaceSettingsForm();
-    schedule.rules.push({ id: uid('space-rule'), spaceId: ui.state.spaces.find((space) => space.id !== ui.state.settings.defaultSpaceId)?.id || ui.state.spaces[0]?.id, weekdays: [1, 2, 3, 4, 5], start: '09:00', end: '17:30', order: schedule.rules.length });
-    scheduleSave(); openSpaceSettings();
-  });
-  $$('[data-delete-rule]').forEach((button) => button.addEventListener('click', () => { applySpaceSettingsForm(); schedule.rules = schedule.rules.filter((rule) => rule.id !== button.dataset.deleteRule); scheduleSave(); openSpaceSettings(); }));
-  $$('[data-delete-space]').forEach((button) => button.addEventListener('click', () => {
-    const space = spaceById(button.dataset.deleteSpace);
-    if (!space || ui.state.spaces.length < 2) return;
-    applySpaceSettingsForm();
-    confirmAction(`Delete “${space.title}”?`, 'Its areas, projects, to-dos, and calendar events will move to the default remaining Space.', 'Delete Space', () => {
-      const fallback = ui.state.spaces.find((candidate) => candidate.id !== space.id && candidate.id === ui.state.settings.defaultSpaceId) || ui.state.spaces.find((candidate) => candidate.id !== space.id);
-      [...ui.state.areas, ...ui.state.projects, ...ui.state.tasks, ...ui.state.calendarEvents].filter((item) => item.spaceId === space.id).forEach((item) => { item.spaceId = fallback.id; });
-      ui.state.spaces = ui.state.spaces.filter((candidate) => candidate.id !== space.id);
-      schedule.rules = schedule.rules.filter((rule) => rule.spaceId !== space.id);
-      if (ui.state.settings.defaultSpaceId === space.id) ui.state.settings.defaultSpaceId = fallback.id;
-      if (ui.activeSpaceId === space.id) { ui.activeSpaceId = fallback.id; rememberActiveSpace(); }
-      scheduleSave(); render(); openSpaceSettings(); showToast(`Deleted “${space.title}”`);
-    });
-  }));
-  $('#space-settings-form').addEventListener('submit', (event) => { event.preventDefault(); applySpaceSettingsForm(); scheduleSave(); closeModal(); render(); showToast('Space settings saved'); });
+  const rules = [...(ui.state.settings.spaceSchedule.rules || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(SpacesSettingsDialog, {
+    initial: { spaces, rules, enabled: ui.launchRulesEnabled, defaultId: ui.state.settings.defaultSpaceId },
+    onClose: closeModal,
+    makeSpace: (index, pinned) => ({ id: uid('space'), title: `Space ${index + 1}`, color: ['#5ba67a', '#b06bd3', '#e49b3c', '#5b7cfa'][index % 4], pinned, order: index }),
+    makeRule: (index, spaceId) => ({ id: uid('space-rule'), spaceId, weekdays: [1, 2, 3, 4, 5], start: '09:00', end: '17:30', order: index }),
+    onSave: (draft) => {
+      applySpaceSettingsDraft(draft);
+      scheduleSave(); closeModal(); render(); showToast('Space settings saved');
+    },
+    onDeleteSpace: (spaceId, draft) => {
+      const space = draft.spaces.find((candidate) => candidate.id === spaceId);
+      if (!space || draft.spaces.length < 2) return;
+      closeModal();
+      confirmAction(`Delete “${space.title}”?`, 'Its areas, projects, to-dos, and calendar events will move to the default remaining Space.', 'Delete Space', () => {
+        applySpaceSettingsDraft(draft);
+        const fallback = ui.state.spaces.find((candidate) => candidate.id !== space.id && candidate.id === ui.state.settings.defaultSpaceId) || ui.state.spaces.find((candidate) => candidate.id !== space.id);
+        if (!fallback) return;
+        [...ui.state.areas, ...ui.state.projects, ...ui.state.tasks, ...ui.state.calendarEvents].filter((item) => item.spaceId === space.id).forEach((item) => { item.spaceId = fallback.id; });
+        ui.state.spaces = ui.state.spaces.filter((candidate) => candidate.id !== space.id);
+        ui.state.settings.spaceSchedule.rules = ui.state.settings.spaceSchedule.rules.filter((rule) => rule.spaceId !== space.id);
+        if (ui.state.settings.defaultSpaceId === space.id) ui.state.settings.defaultSpaceId = fallback.id;
+        if (ui.activeSpaceId === space.id) { ui.activeSpaceId = fallback.id; rememberActiveSpace(); }
+        scheduleSave(); render(); openSpaceSettings(); showToast(`Deleted “${space.title}”`);
+      });
+    },
+  }), $('#modal-root'));
 }
 
 function openSettings() {
   const settings = ui.state.settings;
-  const managedTags = getKnownTags();
   const pwa = getPwaStatus();
   const pendingLogCount = [...ui.state.tasks, ...ui.state.projects].filter((item) => matchesActiveSpace(item) && isCompletedButVisible(item)).length;
-  const logbookHelp = settings.logCompletedItems === 'immediately' ? 'Completed items move to the Logbook as soon as they are checked.' : settings.logCompletedItems === 'manually' ? 'Completed items stay in their original lists until you log them.' : 'Completed items stay visible for the rest of the day and move to the Logbook after midnight.';
-  const installLabel = pwa.installed ? 'Installed' : pwa.canPromptInstall ? 'Install Objects' : 'Installation help';
-  const installHelp = pwa.installed ? 'Objects is running as an installed app.' : pwa.ios ? 'On iPhone or iPad, use Share → Add to Home Screen. Notifications are available only after installation.' : 'Install from this button when available, or use your browser’s Install app / Add to Home Screen menu.';
-  const notificationLabel = pwa.notificationPermission === 'unsupported' ? 'Not supported here' : pwa.notificationPermission === 'denied' ? 'Blocked in browser settings' : settings.notifications && pwa.notificationPermission === 'granted' ? 'Disable notifications' : 'Enable notifications';
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
-    <h2>Settings</h2><p>Make Objects fit your workflow and connect it to the rest of your system.</p>
-    <div class="settings-section account-section"><h3>Lakebed account</h3><div class="settings-row"><span>Signed in as <strong>${esc(ui.user?.displayName || 'Guest')}</strong></span><button class="button" type="button" data-settings-action="logout">Sign out</button></div></div>
-    <div class="settings-section"><h3>Spaces</h3><p>Separate areas of life while keeping everything searchable and editable.</p><div class="settings-row"><span>${ui.state.spaces.length} Space${ui.state.spaces.length === 1 ? '' : 's'} · ${ui.launchRulesEnabled ? 'automatic launch selection on this device' : 'manual selection on this device'}</span><button class="button" type="button" data-settings-action="spaces">Manage</button></div></div>
-    <div class="settings-section"><h3>General</h3><div class="settings-row"><label for="setting-group">Group Today by project or area</label><input id="setting-group" type="checkbox" ${settings.groupToday ? 'checked' : ''}></div><div class="settings-row"><label for="setting-calendar">Show calendar events</label><input id="setting-calendar" type="checkbox" ${settings.showCalendar ? 'checked' : ''}></div><div class="settings-row"><label for="setting-theme">Appearance</label><select id="setting-theme" class="detail-select"><option value="system" ${settings.theme === 'system' ? 'selected' : ''}>System</option><option value="light" ${settings.theme === 'light' ? 'selected' : ''}>Light</option><option value="dark" ${settings.theme === 'dark' ? 'selected' : ''}>Dark</option></select></div></div>
-    <div class="settings-section"><h3>Logbook</h3><p>${esc(logbookHelp)}</p><div class="settings-row"><label for="setting-logbook">Log completed items</label><select id="setting-logbook" class="detail-select"><option value="immediately" ${settings.logCompletedItems === 'immediately' ? 'selected' : ''}>Immediately</option><option value="daily" ${settings.logCompletedItems === 'daily' ? 'selected' : ''}>Daily</option><option value="manually" ${settings.logCompletedItems === 'manually' ? 'selected' : ''}>Manually</option></select></div>${pendingLogCount ? `<button class="button" type="button" data-settings-action="log-now">Log Completed Now (${pendingLogCount})</button>` : ''}</div>
-    <div class="settings-section"><h3>App</h3><p>${esc(installHelp)}</p><div class="settings-row"><span>Install status</span><button class="button" type="button" data-settings-action="install" ${pwa.installed ? 'disabled' : ''}>${esc(installLabel)}</button></div>${pwa.updateAvailable ? '<button class="button primary" type="button" data-settings-action="update">Update Objects</button>' : ''}</div>
-    <div class="settings-section"><h3>Reminders</h3><p>Notifications work on desktop and mobile, including notification taps that reopen the task. Scheduled reminders are reliable while Objects is open; closed-app delivery needs a server push scheduler.</p><button class="button" type="button" data-settings-action="notifications" ${pwa.notificationPermission === 'denied' ? 'disabled' : ''}>${esc(notificationLabel)}</button></div>
-    <div class="settings-section"><h3>Calendar</h3><p>Add an event manually or import a standard .ics calendar file. Events remain private in your Objects data.</p><div class="form-field"><label for="event-title">Event</label><input id="event-title" placeholder="Event title"></div><div class="repeat-grid"><div class="form-field"><label for="event-start">Starts</label><input id="event-start" type="datetime-local"></div><div class="form-field"><label for="event-end">Ends</label><input id="event-end" type="datetime-local"></div></div><div class="button-row"><button class="button" type="button" data-settings-action="add-event">Add event</button><label class="button" for="ics-import">Import .ics</label><input class="hidden-file" id="ics-import" type="file" accept=".ics,text/calendar"></div></div>
-    <div class="settings-section"><h3>Tags</h3><p>Create tags here, then choose them from the tag dropdown on a to-do. Renames and removals apply everywhere.</p><form id="new-tag-form" class="tag-add-row"><input id="new-tag" class="detail-input" maxlength="40" autocomplete="off" placeholder="New tag name" aria-label="New tag name"><button class="button primary" type="submit">Add tag</button></form><div class="tag-manager">${managedTags.length ? managedTags.map((tag) => `<div class="settings-row tag-manager-row"><input class="detail-input" value="${esc(tag)}" data-tag-original="${esc(tag)}" aria-label="Rename ${esc(tag)}"><button class="button" type="button" data-delete-tag="${esc(tag)}">Remove</button></div>`).join('') : '<p>No tags yet.</p>'}</div></div>
-    <div class="settings-section"><h3>Data</h3><p>Export a complete backup or import one from another Objects installation.</p><div class="button-row"><button class="button" type="button" data-settings-action="export">${icon('download')} Export JSON</button><label class="button" for="json-import">${icon('upload')} Import JSON</label><input class="hidden-file" id="json-import" type="file" accept="application/json,.json"></div></div>
-    <div class="settings-section"><h3>Automation</h3><p>Open <code>/?title=Call%20Maya%20tomorrow</code> while signed in, or use the authenticated <code>POST /api/tasks</code> Lakebed endpoint.</p></div><div class="form-actions"><button class="button primary" type="button" data-cancel>Done</button></div>
-  </div></div>`;
-  activateModal();
-  $('#setting-theme').closest('.settings-row').insertAdjacentHTML('beforebegin', `<div class="settings-row"><label for="setting-week-start">Week starts on</label><select id="setting-week-start" class="detail-select"><option value="1" ${Number(settings.weekStartsOn) === 1 ? 'selected' : ''}>Monday</option><option value="0" ${Number(settings.weekStartsOn) === 0 ? 'selected' : ''}>Sunday</option></select></div>`);
-  $('[data-cancel]').addEventListener('click', closeModal);
-  $('#setting-group').addEventListener('change', (event) => { settings.groupToday = event.target.checked; scheduleSave(); render(); });
-  $('#setting-calendar').addEventListener('change', (event) => { settings.showCalendar = event.target.checked; scheduleSave(); renderContent(); });
-  $('#setting-week-start').addEventListener('change', (event) => { settings.weekStartsOn = Number(event.target.value); scheduleSave(); });
-  $('#setting-theme').addEventListener('change', (event) => { settings.theme = event.target.value; applyTheme(); scheduleSave(); });
-  $$('[data-settings-action]').forEach((button) => button.addEventListener('click', () => handleSettingsAction(button.dataset.settingsAction)));
-  $('#json-import').addEventListener('change', importJsonFile);
-  $('#ics-import').addEventListener('change', importIcsFile);
-  $('#new-tag-form').addEventListener('submit', (event) => { event.preventDefault(); addTag($('#new-tag').value); });
-  $$('[data-tag-original]').forEach((input) => input.addEventListener('change', () => renameTag(input.dataset.tagOriginal, input.value.trim())));
-  $$('[data-delete-tag]').forEach((button) => button.addEventListener('click', () => removeTag(button.dataset.deleteTag)));
-  bindLogbookSettings(settings);
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(SettingsDialog, {
+    settings,
+    userName: ui.user?.displayName || 'Guest',
+    spacesCount: ui.state.spaces.length,
+    launchRulesEnabled: ui.launchRulesEnabled,
+    tags: getKnownTags(),
+    pendingLogCount,
+    pwa,
+    onClose: closeModal,
+    onSetting: (key, value) => {
+      settings[key] = value;
+      if (key === 'theme') applyTheme();
+      else if (key === 'showCalendar') renderContent();
+      else if (key === 'groupToday') render();
+      else if (key === 'logCompletedItems') {
+        const logged = applyLogbookPolicy();
+        render();
+        openSettings();
+        if (logged) showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`);
+      }
+      scheduleSave();
+    },
+    onAction: handleSettingsAction,
+    onManageSpaces: () => { closeModal(); setTimeout(openSpaceSettings, 0); },
+    onAddEvent: ({ title, start, end }) => {
+      const cleanTitle = title.trim();
+      const cleanEnd = end || start;
+      if (!cleanTitle || !start) { showToast('Add an event title and start time'); return; }
+      if (cleanEnd < start) { showToast('The event end must be after its start'); return; }
+      ui.state.calendarEvents.push({ id: uid('event'), spaceId: currentCreationSpaceId(), title: cleanTitle, start, end: cleanEnd, calendar: 'Objects', allDay: false });
+      scheduleSave(); showToast('Calendar event added'); openSettings();
+    },
+    onAddTag: addTag,
+    onRenameTag: renameTag,
+    onRemoveTag: removeTag,
+    onImportJson: importJsonFile,
+    onImportIcs: importIcsFile,
+  }), $('#modal-root'));
 }
 
 function updateTagsEverywhere(transform) {
@@ -3325,10 +3264,9 @@ function updateTagsEverywhere(transform) {
 
 function addTag(value) {
   const tag = cleanTagList([value])[0];
-  if (!tag) { showToast('Enter a tag name'); $('#new-tag')?.focus(); return; }
-  if (getKnownTags().some((existing) => existing.toLocaleLowerCase() === tag.toLocaleLowerCase())) { showToast(`“${tag}” already exists`); $('#new-tag')?.select(); return; }
+  if (!tag) { showToast('Enter a tag name'); return; }
+  if (getKnownTags().some((existing) => existing.toLocaleLowerCase() === tag.toLocaleLowerCase())) { showToast(`“${tag}” already exists`); return; }
   registerTags([tag]); scheduleSave(); openSettings(); showToast(`Added “${tag}”`);
-  setTimeout(() => $('#new-tag')?.focus(), 20);
 }
 
 function renameTag(from, to) {
@@ -3338,13 +3276,13 @@ function renameTag(from, to) {
 }
 
 function removeTag(tag) {
+  closeModal();
   confirmAction(`Remove “${tag}”?`, 'The tag will be removed from every area, project, and to-do. The items themselves will not be deleted.', 'Remove tag', () => {
     updateTagsEverywhere((value) => value === tag ? null : value); scheduleSave(); openSettings(); showToast(`Removed “${tag}”`);
   });
 }
 
 async function handleSettingsAction(action) {
-  if (action === 'spaces') { openSpaceSettings(); return; }
   if (action === 'logout') {
     closeModal(); await performSignOut();
     return;
@@ -3374,15 +3312,6 @@ async function handleSettingsAction(action) {
     scheduleSave(); render(); openSettings();
     showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`);
   }
-  if (action === 'add-event') {
-    const title = $('#event-title').value.trim();
-    const start = $('#event-start').value;
-    const end = $('#event-end').value || start;
-    if (!title || !start) { showToast('Add an event title and start time'); return; }
-    if (end < start) { showToast('The event end must be after its start'); return; }
-    ui.state.calendarEvents.push({ id: uid('event'), spaceId: currentCreationSpaceId(), title, start, end, calendar: 'Objects', allDay: false });
-    scheduleSave(); showToast('Calendar event added'); openSettings();
-  }
   if (action === 'export') {
     const blob = new Blob([JSON.stringify(ui.state, null, 2)], { type: 'application/json' });
     const anchor = document.createElement('a'); anchor.href = URL.createObjectURL(blob); anchor.download = `objects-backup-${localDay()}.json`; anchor.click(); URL.revokeObjectURL(anchor.href);
@@ -3397,6 +3326,7 @@ function importJsonFile(event) {
     try {
       const state = JSON.parse(reader.result);
       if (!state || !Array.isArray(state.tasks) || !Array.isArray(state.projects) || !Array.isArray(state.areas)) throw new Error('Invalid backup');
+      closeModal();
       confirmAction('Replace all Objects data?', 'The imported backup will replace the current Spaces, tasks, projects, areas, settings, and calendar events.', 'Import backup', () => {
         ui.state = state; normalizeState(); initializeActiveSpace(); scheduleSave(); setView('today'); showToast('Backup imported');
       });
@@ -3438,30 +3368,6 @@ function parseIcsDate(value) {
   return iso;
 }
 
-function activateModal() {
-  modalUsesPreact = false;
-  const root = $('#modal-root');
-  if (!modalReturnFocus || !modalReturnFocus.isConnected) {
-    modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  }
-  const legacyDialog = $('[role="dialog"], [role="alertdialog"]', root);
-  const backdrop = $('.modal-backdrop', root);
-  if (!legacyDialog || !backdrop) return;
-  const heading = $('h1, h2, h3', legacyDialog);
-  const dialog = document.createElement('wa-dialog');
-  dialog.className = `objects-dialog ${legacyDialog.classList.contains('quick-find') ? 'dialog-quick-find' : ''} ${legacyDialog.classList.contains('settings-modal') ? 'dialog-settings' : ''} ${legacyDialog.classList.contains('space-settings-modal') ? 'dialog-spaces' : ''}`;
-  dialog.setAttribute('label', legacyDialog.getAttribute('aria-label') || heading?.textContent?.trim() || 'Objects dialog');
-  dialog.setAttribute('without-header', '');
-  dialog.setAttribute('light-dismiss', '');
-  legacyDialog.removeAttribute('role');
-  legacyDialog.removeAttribute('aria-modal');
-  legacyDialog.removeAttribute('aria-label');
-  legacyDialog.removeAttribute('aria-labelledby');
-  root.appendChild(dialog);
-  dialog.appendChild(backdrop);
-  dialog.addEventListener('wa-after-hide', () => closeModal(), { once: true });
-  dialog.open = true;
-}
 
 function closeModal() {
   const returnFocus = modalReturnFocus;
@@ -3475,11 +3381,17 @@ function closeModal() {
 }
 
 function confirmAction(title, message, label, onConfirm) {
-  $('#modal-root').innerHTML = `<div class="modal-backdrop" data-modal-close><div class="modal form-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">${esc(title)}</h2><p>${esc(message)}</p><div class="form-actions"><button class="button" type="button" data-confirm-cancel>Cancel</button><button class="button primary" type="button" data-confirm-accept>${esc(label)}</button></div></div></div>`;
-  activateModal();
-  $('[data-confirm-cancel]').addEventListener('click', closeModal);
-  $('[data-confirm-accept]').addEventListener('click', () => { closeModal(); onConfirm(); });
-  setTimeout(() => $('[data-confirm-cancel]')?.focus(), 20);
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  $('#modal-root').innerHTML = '';
+  modalUsesPreact = true;
+  renderPreact(h(ConfirmDialog, {
+    title,
+    message,
+    label,
+    danger: /delete|remove|trash|replace/i.test(`${label} ${title}`),
+    onClose: closeModal,
+    onConfirm,
+  }), $('#modal-root'));
 }
 
 function handleGlobalKeydown(event) {

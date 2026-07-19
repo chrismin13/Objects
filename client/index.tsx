@@ -5,6 +5,7 @@ import { initializePwa } from "./pwa";
 import { objectsTheme } from "./theme";
 import { webAwesomeReady } from "./vendor/webawesome/loader";
 import { objectsRuntimeReady } from "./runtime/loader";
+import { ComponentGallery, isComponentGalleryLocation } from "./features/gallery/component-gallery";
 
 type AuthIdentity = ReturnType<typeof useAuth>;
 
@@ -163,6 +164,7 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
 
 export function App() {
   const auth = useAuth();
+  const componentGallery = isComponentGalleryLocation();
   const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [authTimedOut, setAuthTimedOut] = useState(false);
   const wasAuthenticated = useRef(false);
@@ -228,7 +230,7 @@ export function App() {
   return (
     <>
       <style>{objectsTheme}</style>
-      {auth.isLoading ? !online ? <OfflineScreen /> : authTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
+      {componentGallery ? <ComponentGallery /> : auth.isLoading ? !online ? <OfflineScreen /> : authTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
     </>
   );
 }

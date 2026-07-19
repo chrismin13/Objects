@@ -96,12 +96,6 @@ export const featureStyles = `
 .selection-toolbar .button,
 .selection-toolbar .danger-button { min-height: 34px; white-space: nowrap; }
 .selection-toolbar .icon-button { flex: none; }
-.bulk-tag-grid { display: flex; flex-wrap: wrap; gap: 7px; }
-.bulk-tag-option { position: relative; }
-.bulk-tag-option input { position: absolute; opacity: 0; pointer-events: none; }
-.bulk-tag-option span { display: block; padding: 7px 11px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--muted); cursor: pointer; }
-.bulk-tag-option input:checked + span { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
-.bulk-tag-option input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
 .detail-row:has(.inline-add) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -146,7 +140,6 @@ export const featureStyles = `
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 35%, transparent);
 }
 .task-row.canceled .task-title { text-decoration-style: wavy; opacity: .66; }
-.completion-choices { display: grid; gap: 8px; margin: 20px 0; }
 .archived-section { margin-top: 42px; opacity: .82; }
 .archived-heading-header { border-top: 1px solid var(--border); }
 .archived-heading-header .section-meta { color: var(--green); }
@@ -184,23 +177,9 @@ export const featureStyles = `
   font-size: 12px;
   font-weight: 700;
 }
-#move-destination { min-height: 180px; padding: 6px; }
-#move-destination option { padding: 7px 8px; border-radius: 5px; }
 .tag-manager { display: grid; gap: 8px; }
 .tag-manager-row { gap: 8px; }
 .tag-manager-row .detail-input { min-width: 0; }
-.form-field textarea {
-  width: 100%;
-  resize: vertical;
-  min-height: 80px;
-  border: 1px solid var(--faint);
-  border-radius: 8px;
-  padding: 10px 12px;
-  color: var(--text);
-  background: var(--surface);
-  font: inherit;
-}
-
 @media (max-width: 820px) {
   .checklist-item { grid-template-columns: 44px 24px minmax(0, 1fr) 44px; }
   .checklist-reorder { opacity: 1; }
