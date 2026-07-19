@@ -2,11 +2,15 @@ import { Component, render, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import type { ImportReport } from "../../shared/replacement/importer";
-import type { Project, Schedule, ToDo, WorkspaceDocument, WorkspaceUndo } from "../../shared/replacement/model";
+import type { EntityId, HeadingLocation, Project, ProjectLocation, Schedule, ToDo, WorkspaceDocument, WorkspaceUndo } from "../../shared/replacement/model";
 import {
+  DELETE_HEADING_CONFIRMATION,
+  DELETE_SPACE_CONFIRMATION,
+  DELETE_TAG_CONFIRMATION,
   EMPTY_TRASH_CONFIRMATION,
   FULL_IMPORT_CONFIRMATION,
   PERMANENT_DELETE_CONFIRMATION,
+  REMOVE_AREA_CONFIRMATION,
   createEmptyWorkspace,
   createWorkspace,
   type WorkspaceChange,
@@ -120,6 +124,176 @@ function Inspector({ item, document, saving, runChange, close }: {
   </aside>;
 }
 
+function tagIdsFromNames(value: string, document: WorkspaceDocument): EntityId[] | null {
+  const names = value.split(",").map((name) => name.trim()).filter(Boolean);
+  const tags = names.map((name) => document.tags.find((tag) => tag.title.toLowerCase() === name.toLowerCase()));
+  if (tags.some((tag) => !tag)) {
+    window.alert("Create new Tags first, then choose them by name.");
+    return null;
+  }
+  return [...new Set(tags.map((tag) => tag!.id))];
+}
+
+type LocationChoice<T> = { label: string; location: T };
+
+function chooseLocation<T>(label: string, choices: Array<LocationChoice<T>>, currentLabel: string | undefined): T | null {
+  const answer = window.prompt(`${label}\n${choices.map((choice) => choice.label).join("\n")}`, currentLabel);
+  const choice = choices.find((item) => item.label.toLowerCase() === answer?.trim().toLowerCase());
+  return choice?.location ?? null;
+}
+
+function EntityTools({ view, document, workspace, runChange, selectView }: {
+  view: WorkspaceView;
+  document: WorkspaceDocument;
+  workspace: ReturnType<typeof workspaceFor>;
+  runChange: (change: WorkspaceChange) => Promise<boolean>;
+  selectView: (view: WorkspaceView) => void;
+}) {
+  const askTitle = (label: string, current = "") => window.prompt(`${label} title`, current)?.trim() ?? "";
+  const createSpace = () => {
+    const title = askTitle("New Space");
+    if (!title) return;
+    const color = window.prompt("Space color", "#5577dd")?.trim() || "#5577dd";
+    void runChange({ type: "createSpace", title, color });
+  };
+  const createArea = () => {
+    const title = askTitle("New Area");
+    if (!title) return;
+    const spaceId = view.kind === "space" ? view.id : workspace.spaceIdForView(view) ?? document.settings.defaultSpaceId;
+    if (!spaceId) { window.alert("Create or select a Space first."); return; }
+    void runChange({ type: "createArea", title, spaceId });
+  };
+  const createProject = () => {
+    const title = askTitle("New Project");
+    if (!title) return;
+    const location: ProjectLocation | null = view.kind === "area"
+      ? { kind: "area", areaId: view.id }
+      : view.kind === "space"
+        ? { kind: "space", spaceId: view.id }
+        : document.settings.defaultSpaceId
+          ? { kind: "space", spaceId: document.settings.defaultSpaceId }
+          : null;
+    if (!location) { window.alert("Create or select a Space first."); return; }
+    void runChange({ type: "createProject", title, location });
+  };
+  const createHeading = () => {
+    if (view.kind !== "area" && view.kind !== "project") { window.alert("Open an Area or Project first."); return; }
+    const title = askTitle("New Heading");
+    if (!title) return;
+    const location = view.kind === "area" ? { kind: "area" as const, areaId: view.id } : { kind: "project" as const, projectId: view.id };
+    void runChange({ type: "createHeading", title, location });
+  };
+  const createTag = () => {
+    const title = askTitle("New Tag");
+    if (title) void runChange({ type: "createTag", title });
+  };
+
+  const space = view.kind === "space" ? document.spaces.find((item) => item.id === view.id) : null;
+  const area = view.kind === "area" ? document.areas.find((item) => item.id === view.id) : null;
+  const project = view.kind === "project" ? document.projects.find((item) => item.id === view.id) : null;
+  const heading = view.kind === "heading" ? document.headings.find((item) => item.id === view.id) : null;
+
+  const editSpace = () => {
+    if (!space) return;
+    const title = askTitle("Space", space.title);
+    if (!title) return;
+    const color = window.prompt("Space color", space.color)?.trim() || space.color;
+    void runChange({ type: "updateSpace", id: space.id, changes: { title, color } });
+  };
+  const deleteSpace = () => {
+    if (!space) return;
+    const remaining = document.spaces.filter((item) => item.id !== space.id);
+    if (!remaining.length) { window.alert("Create another Space before deleting this one."); return; }
+    const answer = window.prompt(`Move everything to which Space?\n${remaining.map((item) => item.title).join("\n")}`, remaining[0].title);
+    const destination = remaining.find((item) => item.title.toLowerCase() === answer?.trim().toLowerCase());
+    if (!destination) { if (answer !== null) window.alert("Choose one of the listed Spaces."); return; }
+    if (window.confirm(`Delete ${space.title} and move all of its content to ${destination.title}?`)) {
+      void runChange({ type: "deleteSpace", id: space.id, moveToSpaceId: destination.id, confirmation: DELETE_SPACE_CONFIRMATION })
+        .then((saved) => { if (saved) selectView({ kind: "space", id: destination.id, date: view.date }); });
+    }
+  };
+  const editArea = () => {
+    if (!area) return;
+    const title = askTitle("Area", area.title);
+    if (!title) return;
+    const color = window.prompt("Area color", area.color)?.trim() || area.color;
+    const spaceName = window.prompt(`Move to which Space?\n${document.spaces.map((item) => item.title).join("\n")}`, document.spaces.find((item) => item.id === area.spaceId)?.title);
+    const destination = document.spaces.find((item) => item.title.toLowerCase() === spaceName?.trim().toLowerCase());
+    if (!destination) return;
+    const tags = tagIdsFromNames(window.prompt("Inherited Tags, separated by commas", area.tags.map((id) => document.tags.find((tag) => tag.id === id)?.title).filter(Boolean).join(", ")) ?? "", document);
+    if (!tags) return;
+    void runChange({ type: "updateArea", id: area.id, changes: { title, color, spaceId: destination.id, tags } });
+  };
+  const removeArea = () => {
+    if (area && window.confirm(`Remove ${area.title}? Its Projects and to-dos will stay in ${document.spaces.find((item) => item.id === area.spaceId)?.title}.`)) {
+      void runChange({ type: "removeArea", id: area.id, confirmation: REMOVE_AREA_CONFIRMATION })
+        .then((saved) => { if (saved) selectView({ kind: "space", id: area.spaceId, date: view.date }); });
+    }
+  };
+  const editProject = () => {
+    if (!project) return;
+    const title = askTitle("Project", project.title);
+    if (!title) return;
+    const notes = window.prompt("Project notes", project.notes) ?? project.notes;
+    const deadline = window.prompt("Deadline (YYYY-MM-DD or blank)", project.deadline ?? "") ?? project.deadline;
+    const scheduleName = window.prompt("Schedule: inbox, anytime, someday, or scheduled", project.schedule.kind)?.trim().toLowerCase();
+    if (!scheduleName || !["inbox", "anytime", "someday", "scheduled"].includes(scheduleName)) return;
+    const schedule: Schedule = scheduleName === "scheduled"
+      ? { kind: "scheduled", date: window.prompt("Scheduled date (YYYY-MM-DD)", project.schedule.kind === "scheduled" ? project.schedule.date : view.date)?.trim() || view.date, evening: false }
+      : { kind: scheduleName as "inbox" | "anytime" | "someday" };
+    const targets = [
+      ...document.spaces.map((item) => ({ label: `Space: ${item.title}`, location: { kind: "space" as const, spaceId: item.id } })),
+      ...document.areas.map((item) => ({ label: `Area: ${item.title}`, location: { kind: "area" as const, areaId: item.id } })),
+    ];
+    const projectLocation = project.location;
+    const currentLabel = projectLocation.kind === "space"
+      ? targets.find((target) => target.location.kind === "space" && target.location.spaceId === projectLocation.spaceId)?.label
+      : targets.find((target) => target.location.kind === "area" && target.location.areaId === projectLocation.areaId)?.label;
+    const location = chooseLocation<ProjectLocation>("Project Location", targets, currentLabel);
+    if (!location) return;
+    const tags = tagIdsFromNames(window.prompt("Inherited Tags, separated by commas", project.tags.map((id) => document.tags.find((tag) => tag.id === id)?.title).filter(Boolean).join(", ")) ?? "", document);
+    if (!tags) return;
+    void runChange({ type: "updateProject", id: project.id, changes: { title, notes, deadline: deadline || null, schedule, location, tags } });
+  };
+  const closeProject = (outcome: "completed" | "canceled") => {
+    if (!project) return;
+    const openToDos = document.toDos.filter((toDo) => workspace.locationOfToDo(toDo.id)?.projectId === project.id && toDo.outcome === "open" && !toDo.trashedAt);
+    const toDoOutcomes: Array<{ id: EntityId; outcome: "completed" | "canceled" }> = [];
+    for (const toDo of openToDos) {
+      const answer = window.prompt(`Outcome for “${toDo.title}”: type completed or canceled`, outcome);
+      if (answer === null) return;
+      const choice = answer.trim().toLowerCase();
+      if (choice !== "completed" && choice !== "canceled") { window.alert("Each remaining open to-do needs completed or canceled."); return; }
+      toDoOutcomes.push({ id: toDo.id, outcome: choice });
+    }
+    void runChange({ type: "closeProject", id: project.id, outcome, toDoOutcomes });
+  };
+  const editHeading = () => {
+    if (!heading) return;
+    const title = askTitle("Heading", heading.title);
+    if (!title) return;
+    const targets = [
+      ...document.areas.map((item) => ({ label: `Area: ${item.title}`, location: { kind: "area" as const, areaId: item.id } })),
+      ...document.projects.map((item) => ({ label: `Project: ${item.title}`, location: { kind: "project" as const, projectId: item.id } })),
+    ];
+    const headingLocation = heading.location;
+    const currentLabel = headingLocation.kind === "area"
+      ? targets.find((target) => target.location.kind === "area" && target.location.areaId === headingLocation.areaId)?.label
+      : targets.find((target) => target.location.kind === "project" && target.location.projectId === headingLocation.projectId)?.label;
+    const location = chooseLocation<HeadingLocation>("Heading Location", targets, currentLabel);
+    if (location) void runChange({ type: "updateHeading", id: heading.id, changes: { title, location } });
+  };
+
+  return <section className="replacement-entity-tools" aria-label="Organization actions">
+    <div className="replacement-tool-row"><button type="button" onClick={createSpace}>New Space</button><button type="button" onClick={createArea}>New Area</button><button type="button" onClick={createProject}>New Project</button><button type="button" onClick={createHeading}>New Heading</button><button type="button" onClick={createTag}>New Tag</button></div>
+    {space ? <div className="replacement-tool-row"><strong>{space.title}</strong><button type="button" onClick={editSpace}>Edit</button><button type="button" onClick={() => void runChange({ type: "updateSpace", id: space.id, changes: { pinned: !space.pinned } })}>{space.pinned ? "Unpin" : "Pin"}</button><button type="button" disabled={space.order === 0} onClick={() => void runChange({ type: "reorderSpace", id: space.id, toIndex: space.order - 1 })}>Move up</button><button type="button" disabled={space.order === document.spaces.length - 1} onClick={() => void runChange({ type: "reorderSpace", id: space.id, toIndex: space.order + 1 })}>Move down</button><button className="danger" type="button" onClick={deleteSpace}>Delete</button></div> : null}
+    {area ? <div className="replacement-tool-row"><strong>{area.title}</strong><button type="button" onClick={editArea}>Edit or move</button><button className="danger" type="button" onClick={removeArea}>Remove</button></div> : null}
+    {project ? <div className="replacement-tool-row"><strong>{workspace.projectProgress(project.id)?.percent ?? 0}% complete</strong><button type="button" onClick={editProject}>Edit or move</button><button type="button" onClick={() => void runChange({ type: "duplicateProject", id: project.id })}>Duplicate</button>{project.outcome === "open" ? <><button type="button" onClick={() => closeProject("completed")}>Complete</button><button type="button" onClick={() => closeProject("canceled")}>Cancel</button></> : <button type="button" onClick={() => void runChange({ type: "restoreProject", id: project.id })}>Restore Outcome</button>}{project.trashedAt ? <><button type="button" onClick={() => void runChange({ type: "restoreProjectFromTrash", id: project.id })}>Restore from Trash</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete this Project and all of its contents?")) void runChange({ type: "permanentlyDeleteProject", id: project.id, confirmation: PERMANENT_DELETE_CONFIRMATION }); }}>Delete forever</button></> : <button className="danger" type="button" onClick={() => void runChange({ type: "trashProject", id: project.id })}>Move to Trash</button>}</div> : null}
+    {heading ? <div className="replacement-tool-row"><strong>{heading.title}</strong><button type="button" onClick={editHeading}>Edit or move</button><button type="button" onClick={() => void runChange({ type: "duplicateHeading", id: heading.id })}>Duplicate</button><button type="button" onClick={() => void runChange(heading.archivedAt ? { type: "restoreHeading", id: heading.id } : { type: "archiveHeading", id: heading.id })}>{heading.archivedAt ? "Restore" : "Archive"}</button><button type="button" onClick={() => void runChange({ type: "convertHeadingToProject", id: heading.id })}>Convert to Project</button><button className="danger" type="button" onClick={() => { if (window.confirm("Delete this Heading and keep its to-dos in the parent?")) void runChange({ type: "deleteHeading", id: heading.id, confirmation: DELETE_HEADING_CONFIRMATION }); }}>Delete</button></div> : null}
+    {document.tags.length ? <details><summary>Manage Tags</summary><div className="replacement-tool-list">{document.tags.map((tag) => <div key={tag.id}><span>{tag.title}</span><button type="button" onClick={() => { const title = askTitle("Tag", tag.title); if (title) void runChange({ type: "updateTag", id: tag.id, title }); }}>Rename</button><button className="danger" type="button" onClick={() => { if (window.confirm(`Delete ${tag.title} from every item?`)) void runChange({ type: "deleteTag", id: tag.id, confirmation: DELETE_TAG_CONFIRMATION }); }}>Delete</button></div>)}</div></details> : null}
+  </section>;
+}
+
 function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyncAdapter; showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean> }) {
   const [snapshot, setSnapshot] = useState<{ revision: number; document: WorkspaceDocument } | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -127,6 +301,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const [selectedView, setSelectedView] = useState<WorkspaceView>(() => ({ kind: "today", date: new Date().toISOString().slice(0, 10) }));
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(location.search).get("todo"));
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
+  const [activeTagIds, setActiveTagIds] = useState<EntityId[]>([]);
   const [draft, setDraft] = useState(() => localStorage.getItem(QUICK_DRAFT_KEY) ?? "");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [saving, setSaving] = useState(false);
@@ -239,7 +414,8 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   };
 
   const today = new Date().toISOString().slice(0, 10);
-  const normalizedView: WorkspaceView = selectedView.kind === "tomorrow" ? { ...selectedView, date: datePlus(today, 1) } : { ...selectedView, date: today } as WorkspaceView;
+  const datedView: WorkspaceView = selectedView.kind === "tomorrow" ? { ...selectedView, date: datePlus(today, 1) } : { ...selectedView, date: today } as WorkspaceView;
+  const normalizedView: WorkspaceView = { ...datedView, tagIds: activeTagIds } as WorkspaceView;
   const workspace = useMemo(() => snapshot ? workspaceFor(snapshot.document) : null, [snapshot]);
 
   if (loadError) return <ReplacementState title="The replacement data is unavailable" copy="Your saved Workspace has not been changed."><button className="replacement-button" type="button" onClick={() => window.location.reload()}>Retry loading</button></ReplacementState>;
@@ -274,17 +450,20 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
       <nav className="replacement-nav">
         {nav({ kind: "inbox", date: today }, "Inbox")}{nav({ kind: "today", date: today }, "Today")}{nav({ kind: "thisEvening", date: today }, "This Evening")}{nav({ kind: "tomorrow", date: datePlus(today, 1) }, "Tomorrow")}{nav({ kind: "upcoming", date: today }, "Upcoming")}{nav({ kind: "anytime", date: today }, "Anytime")}{nav({ kind: "someday", date: today }, "Someday")}{nav({ kind: "deadlines", date: today }, "Deadlines")}{nav({ kind: "logbook", date: today }, "Logbook")}{nav({ kind: "trash", date: today }, "Trash")}
       </nav>
-      {document.spaces.length ? <div className="replacement-nav-group"><h2>Spaces</h2>{document.spaces.map((space) => nav({ kind: "space", id: space.id, date: today }, space.title))}</div> : null}
+      {document.spaces.some((space) => space.pinned) ? <div className="replacement-nav-group"><h2>Pinned Spaces</h2>{document.spaces.filter((space) => space.pinned).map((space) => nav({ kind: "space", id: space.id, date: today }, space.title))}</div> : null}
+      {document.spaces.some((space) => !space.pinned) ? <div className="replacement-nav-group"><h2>Other Spaces</h2>{document.spaces.filter((space) => !space.pinned).map((space) => nav({ kind: "space", id: space.id, date: today }, space.title))}</div> : null}
       {document.areas.length ? <div className="replacement-nav-group"><h2>Areas</h2>{document.areas.map((area) => nav({ kind: "area", id: area.id, date: today }, area.title))}</div> : null}
       {document.projects.length ? <div className="replacement-nav-group"><h2>Projects</h2>{document.projects.map((project) => nav({ kind: "project", id: project.id, date: today }, project.title))}</div> : null}
-      {document.headings.length ? <div className="replacement-nav-group"><h2>Headings</h2>{document.headings.map((heading) => nav({ kind: "heading", id: heading.id, date: today }, heading.title))}</div> : null}
+      {document.headings.some((heading) => !heading.archivedAt) ? <div className="replacement-nav-group"><h2>Headings</h2>{document.headings.filter((heading) => !heading.archivedAt).map((heading) => nav({ kind: "heading", id: heading.id, date: today }, heading.title))}</div> : null}
+      {document.headings.some((heading) => heading.archivedAt) ? <div className="replacement-nav-group"><h2>Archived Headings</h2>{document.headings.filter((heading) => heading.archivedAt).map((heading) => nav({ kind: "heading", id: heading.id, date: today }, heading.title))}</div> : null}
       <label className="replacement-policy">Logbook policy<select value={document.settings.logCompletedItems} onChange={(event) => void runChange({ type: "setLogbookPolicy", policy: event.currentTarget.value as WorkspaceDocument["settings"]["logCompletedItems"] })}><option value="immediately">Immediately</option><option value="daily">Daily</option><option value="manually">Manually</option></select></label>
       <button className="replacement-sidebar-action" type="button" onClick={() => setBackupOpen((open) => !open)}>Import backup</button>
     </aside>
 
     <main className="replacement-main">
       <div className="replacement-main-inner">
-        <header><p className="replacement-kicker">{saving ? "Saving…" : "Workspace"}</p><h1>{viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{items.length ? `${items.length} item${items.length === 1 ? "" : "s"}` : "Nothing here yet"}</p></header>
+        <header><p className="replacement-kicker">{saving ? "Saving…" : "Workspace"}</p><h1>{viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{items.length ? `${items.length} item${items.length === 1 ? "" : "s"}` : "Nothing here yet"}</p>{document.tags.length ? <div className="replacement-tag-filters" aria-label="Filter by effective Tags"><button type="button" className={!activeTagIds.length ? "active" : ""} onClick={() => setActiveTagIds([])}>All Tags</button>{document.tags.map((tag) => <button key={tag.id} type="button" className={activeTagIds.includes(tag.id) ? "active" : ""} aria-pressed={activeTagIds.includes(tag.id)} onClick={(event) => setActiveTagIds((current) => event.metaKey || event.ctrlKey ? current.includes(tag.id) ? current.filter((id) => id !== tag.id) : [...current, tag.id] : current.length === 1 && current[0] === tag.id ? [] : [tag.id])}>{tag.title}</button>)}</div> : null}</header>
+        <EntityTools view={normalizedView} document={document} workspace={workspace} runChange={runChange} selectView={(view) => { setSelectedView(view); setSelectedId(null); }} />
         {backupOpen ? <section className="replacement-import" aria-labelledby="replacement-import-title"><h2 id="replacement-import-title">Import the current portable backup</h2><p>Type <strong>{FULL_IMPORT_CONFIRMATION}</strong> before replacing this replacement Workspace.</p><div className="replacement-import-controls"><input className="replacement-file" type="file" accept="application/json,.json" aria-label="Choose Objects JSON backup" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void file.text().then(setBackup); }} /><input className="replacement-confirmation" value={confirmation} onInput={(event) => setConfirmation(event.currentTarget.value)} placeholder={FULL_IMPORT_CONFIRMATION} aria-label="Full import confirmation" /><button className="replacement-button" type="button" disabled={!backup || saving} onClick={() => void importBackup()}>Import backup</button></div></section> : null}
 
         {normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(QUICK_DRAFT_KEY, value); }} onBlur={() => { if (draft) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim() || saving}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
@@ -294,7 +473,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
           const toDoItem = item as ToDo;
           return <article className={`replacement-row${selectedId === item.id ? " selected" : ""}`} key={item.id}>
             {isToDo && item.outcome === "open" && !item.trashedAt ? <button className="replacement-complete" type="button" aria-label={`Complete ${item.title}`} onClick={() => void runChange({ type: "completeToDo", id: item.id })} /> : <span className={`replacement-outcome ${item.outcome}`} aria-label={item.outcome} />}
-            <button className="replacement-row-body" type="button" onClick={() => isToDo && setSelectedId(item.id)}><strong>{item.title}</strong><span>{isToDo ? toDoItem.schedule.kind === "scheduled" ? `${toDoItem.schedule.date}${toDoItem.schedule.evening ? " · This Evening" : ""}` : toDoItem.schedule.kind : "Project"}{item.deadline ? ` · Deadline ${item.deadline}` : ""}</span></button>
+            <button className="replacement-row-body" type="button" onClick={() => isToDo ? setSelectedId(item.id) : setSelectedView({ kind: "project", id: item.id, date: today })}><strong>{item.title}</strong><span>{isToDo ? toDoItem.schedule.kind === "scheduled" ? `${toDoItem.schedule.date}${toDoItem.schedule.evening ? " · This Evening" : ""}` : toDoItem.schedule.kind : "Project"}{item.deadline ? ` · Deadline ${item.deadline}` : ""}</span></button>
             {isToDo && item.trashedAt ? <button type="button" onClick={() => void runChange({ type: "restoreToDo", id: item.id })}>Restore</button> : null}
           </article>;
         })}</section> : <section className="replacement-empty"><div aria-hidden="true">✓</div><h2>{normalizedView.kind === "trash" ? "Trash is empty" : normalizedView.kind === "logbook" ? "No history yet" : "All clear"}</h2><p>{normalizedView.kind === "trash" ? "Removed to-dos will wait here until you restore or permanently delete them." : "Use inline entry or Magic Plus to add a to-do."}</p></section>}

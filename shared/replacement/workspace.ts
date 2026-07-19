@@ -1,11 +1,19 @@
 import type {
   AffectedEntity,
+  Area,
   ChecklistItem,
   EntityId,
+  Heading,
+  HeadingLocation,
   IsoDateTime,
   LogbookPolicy,
+  Outcome,
   Project,
+  ProjectLocation,
+  RepeatingProjectContents,
   Schedule,
+  Space,
+  Tag,
   ToDo,
   ToDoLocation,
   WorkspaceChangeResult,
@@ -17,15 +25,48 @@ import { createEmptyImportReport, parsePortableBackup, type ImportReport } from 
 export const FULL_IMPORT_CONFIRMATION = "REPLACE WORKSPACE";
 export const PERMANENT_DELETE_CONFIRMATION = "DELETE FOREVER";
 export const EMPTY_TRASH_CONFIRMATION = "EMPTY TRASH";
+export const DELETE_SPACE_CONFIRMATION = "DELETE SPACE";
+export const REMOVE_AREA_CONFIRMATION = "REMOVE AREA";
+export const DELETE_HEADING_CONFIRMATION = "DELETE HEADING";
+export const DELETE_TAG_CONFIRMATION = "DELETE TAG";
 
 export type WorkspaceDependencies = {
   now: () => IsoDateTime;
-  createId: (kind: WorkspaceEntityKind | "undo") => string;
+  createId: (kind: WorkspaceEntityKind | "projectClosure" | "undo") => string;
 };
 
 export type ToDoChanges = Partial<Pick<ToDo, "title" | "notes" | "location" | "schedule" | "reminder" | "deadline" | "tags">>;
+export type ProjectChanges = Partial<Pick<Project, "title" | "notes" | "location" | "schedule" | "deadline" | "tags">>;
+export type AreaChanges = Partial<Pick<Area, "title" | "spaceId" | "color" | "tags">>;
+export type HeadingChanges = Partial<Pick<Heading, "title" | "location">>;
+export type SpaceChanges = Partial<Pick<Space, "title" | "color" | "pinned">>;
 
 export type WorkspaceChange =
+  | { type: "createSpace"; title: string; color: string; pinned?: boolean }
+  | { type: "updateSpace"; id: EntityId; changes: SpaceChanges }
+  | { type: "reorderSpace"; id: EntityId; toIndex: number }
+  | { type: "deleteSpace"; id: EntityId; moveToSpaceId: EntityId; confirmation: string }
+  | { type: "createArea"; title: string; spaceId: EntityId; color?: string; tags?: EntityId[] }
+  | { type: "updateArea"; id: EntityId; changes: AreaChanges }
+  | { type: "removeArea"; id: EntityId; confirmation: string }
+  | { type: "createProject"; title: string; location: ProjectLocation; notes?: string; schedule?: Schedule; deadline?: string | null; tags?: EntityId[] }
+  | { type: "updateProject"; id: EntityId; changes: ProjectChanges }
+  | { type: "duplicateProject"; id: EntityId }
+  | { type: "closeProject"; id: EntityId; outcome: Exclude<Outcome, "open">; toDoOutcomes: Array<{ id: EntityId; outcome: Exclude<Outcome, "open"> }> }
+  | { type: "restoreProject"; id: EntityId }
+  | { type: "trashProject"; id: EntityId }
+  | { type: "restoreProjectFromTrash"; id: EntityId }
+  | { type: "permanentlyDeleteProject"; id: EntityId; confirmation: string }
+  | { type: "createHeading"; title: string; location: HeadingLocation }
+  | { type: "updateHeading"; id: EntityId; changes: HeadingChanges }
+  | { type: "duplicateHeading"; id: EntityId }
+  | { type: "archiveHeading"; id: EntityId }
+  | { type: "restoreHeading"; id: EntityId }
+  | { type: "deleteHeading"; id: EntityId; confirmation: string }
+  | { type: "convertHeadingToProject"; id: EntityId }
+  | { type: "createTag"; title: string }
+  | { type: "updateTag"; id: EntityId; title: string }
+  | { type: "deleteTag"; id: EntityId; confirmation: string }
   | { type: "createToDo"; title: string; notes?: string; location?: ToDoLocation; schedule?: Schedule; reminderAt?: string | null; deadline?: string | null; tags?: EntityId[]; checklist?: string[]; quickEntry?: { referenceDate: string } }
   | { type: "updateToDo"; id: EntityId; changes: ToDoChanges }
   | { type: "setToDoTags"; id: EntityId; titles: string[] }
@@ -54,6 +95,9 @@ export type Workspace = {
   view(view: WorkspaceView): Array<ToDo | Project>;
   spaceIdForView(view: WorkspaceView): EntityId | null;
   locationOfToDo(id: EntityId): EffectiveToDoLocation | null;
+  effectiveTagIdsForToDo(id: EntityId): EntityId[];
+  effectiveTagIdsForProject(id: EntityId): EntityId[];
+  projectProgress(id: EntityId): ProjectProgress | null;
   validate(): string[];
   importPortableBackup(serialized: string, confirmation: string): WorkspaceImportResult;
 };
@@ -75,9 +119,10 @@ export type WorkspaceImportResult =
       report: ImportReport;
     };
 
-export type WorkspaceView =
+export type WorkspaceView = (
   | { kind: "today" | "thisEvening" | "tomorrow" | "upcoming" | "inbox" | "anytime" | "someday" | "deadlines" | "trash" | "logbook"; date: string }
-  | { kind: "space" | "area" | "project" | "heading"; id: EntityId; date: string };
+  | { kind: "space" | "area" | "project" | "heading"; id: EntityId; date: string }
+) & { tagIds?: EntityId[] };
 
 export type EffectiveToDoLocation = {
   headingId?: EntityId;
@@ -86,13 +131,21 @@ export type EffectiveToDoLocation = {
   spaceId: EntityId;
 };
 
+export type ProjectProgress = {
+  total: number;
+  open: number;
+  completed: number;
+  canceled: number;
+  percent: number;
+};
+
 type UndoEntry = {
   affected: AffectedEntity[];
   run: () => void;
 };
 
-function copyDocument(document: WorkspaceDocument): WorkspaceDocument {
-  return JSON.parse(JSON.stringify(document)) as WorkspaceDocument;
+function copyDocument<T>(document: T): T {
+  return JSON.parse(JSON.stringify(document)) as T;
 }
 
 function isIsoDate(value: string): boolean {
@@ -272,6 +325,39 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     return document.toDos.find((item) => item.id === id) ?? null;
   }
 
+  function duplicateToDoRecord(toDo: ToDo, location: ToDoLocation, order: number, title = toDo.title): ToDo {
+    return {
+      ...copyDocument(toDo),
+      id: dependencies.createId("toDo"),
+      title,
+      location,
+      checklist: toDo.checklist.map((item, itemOrder) => ({
+        ...item,
+        id: dependencies.createId("checklistItem"),
+        order: itemOrder,
+      })),
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      occurrence: null,
+      createdAt: dependencies.now(),
+      completedAt: null,
+      order,
+    };
+  }
+
+  function projectLocationExists(location: ProjectLocation): boolean {
+    return location.kind === "space"
+      ? document.spaces.some((space) => space.id === location.spaceId)
+      : document.areas.some((area) => area.id === location.areaId);
+  }
+
+  function headingLocationExists(location: HeadingLocation): boolean {
+    return location.kind === "project"
+      ? document.projects.some((project) => project.id === location.projectId)
+      : document.areas.some((area) => area.id === location.areaId);
+  }
+
   function locationExists(location: ToDoLocation): boolean {
     if (location.kind === "unfiled") return document.spaces.some((space) => space.id === location.spaceId);
     if (location.kind === "area") return document.areas.some((area) => area.id === location.areaId);
@@ -323,18 +409,53 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     if (view.kind === "project") {
       const project = document.projects.find((item) => item.id === view.id);
       if (!project) return null;
-      return project.location.kind === "space"
-        ? project.location.spaceId
-        : document.areas.find((area) => area.id === project.location.areaId)?.spaceId ?? null;
+      const location = project.location;
+      return location.kind === "space"
+        ? location.spaceId
+        : document.areas.find((area) => area.id === location.areaId)?.spaceId ?? null;
     }
     if (view.kind === "heading") {
       const heading = document.headings.find((item) => item.id === view.id);
       if (!heading) return null;
-      return heading.location.kind === "area"
-        ? document.areas.find((area) => area.id === heading.location.areaId)?.spaceId ?? null
-        : spaceIdForView({ kind: "project", id: heading.location.projectId, date: view.date });
+      const location = heading.location;
+      return location.kind === "area"
+        ? document.areas.find((area) => area.id === location.areaId)?.spaceId ?? null
+        : spaceIdForView({ kind: "project", id: location.projectId, date: view.date });
     }
     return null;
+  }
+
+  function projectToDos(projectId: EntityId): ToDo[] {
+    return document.toDos.filter((toDo) => locationOfToDo(toDo.id)?.projectId === projectId);
+  }
+
+  function effectiveTagIdsForProject(id: EntityId): EntityId[] {
+    const project = document.projects.find((item) => item.id === id);
+    if (!project) return [];
+    const location = project.location;
+    const areaTags = location.kind === "area"
+      ? document.areas.find((area) => area.id === location.areaId)?.tags ?? []
+      : [];
+    return [...new Set([...areaTags, ...project.tags])];
+  }
+
+  function effectiveTagIdsForToDo(id: EntityId): EntityId[] {
+    const toDo = document.toDos.find((item) => item.id === id);
+    const location = locationOfToDo(id);
+    if (!toDo || !location) return [];
+    const areaTags = location.areaId ? document.areas.find((area) => area.id === location.areaId)?.tags ?? [] : [];
+    const projectTags = location.projectId ? document.projects.find((project) => project.id === location.projectId)?.tags ?? [] : [];
+    return [...new Set([...areaTags, ...projectTags, ...toDo.tags])];
+  }
+
+  function projectProgress(id: EntityId): ProjectProgress | null {
+    if (!document.projects.some((project) => project.id === id)) return null;
+    const children = projectToDos(id).filter((toDo) => !toDo.trashedAt);
+    const open = children.filter((toDo) => toDo.outcome === "open").length;
+    const completed = children.filter((toDo) => toDo.outcome === "completed").length;
+    const canceled = children.filter((toDo) => toDo.outcome === "canceled").length;
+    const total = open + completed;
+    return { total, open, completed, canceled, percent: total ? Math.round((completed / total) * 100) : 0 };
   }
 
   function validate(): string[] {
@@ -371,10 +492,11 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       if (schedule.kind === "scheduled" && !isIsoDate(schedule.date)) errors.push(`${label} has an invalid scheduled date.`);
     };
     for (const project of document.projects) {
-      if (project.location.kind === "space" && !document.spaces.some((space) => space.id === project.location.spaceId)) {
+      const location = project.location;
+      if (location.kind === "space" && !document.spaces.some((space) => space.id === location.spaceId)) {
         errors.push(`Project “${project.id}” has no valid Space.`);
       }
-      if (project.location.kind === "area" && !document.areas.some((area) => area.id === project.location.areaId)) {
+      if (location.kind === "area" && !document.areas.some((area) => area.id === location.areaId)) {
         errors.push(`Project “${project.id}” has no valid Area.`);
       }
       validateSchedule(project.schedule, `Project “${project.id}”`);
@@ -385,10 +507,11 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       for (const tagId of project.tags) if (!document.tags.some((tag) => tag.id === tagId)) errors.push(`Project “${project.id}” has an unknown Tag.`);
     }
     for (const heading of document.headings) {
-      if (heading.location.kind === "project" && !document.projects.some((project) => project.id === heading.location.projectId)) {
+      const location = heading.location;
+      if (location.kind === "project" && !document.projects.some((project) => project.id === location.projectId)) {
         errors.push(`Heading “${heading.id}” has no valid Project.`);
       }
-      if (heading.location.kind === "area" && !document.areas.some((area) => area.id === heading.location.areaId)) {
+      if (location.kind === "area" && !document.areas.some((area) => area.id === location.areaId)) {
         errors.push(`Heading “${heading.id}” has no valid Area.`);
       }
       if (heading.archivedAt && !isIsoDateTime(heading.archivedAt)) errors.push(`Heading “${heading.id}” has an invalid archive date.`);
@@ -407,13 +530,14 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       for (const tagId of toDo.tags) if (!document.tags.some((tag) => tag.id === tagId)) errors.push(`To-do “${toDo.id}” has an unknown Tag.`);
     }
     for (const template of document.repeatingTemplates) {
-      const hasValidLocation = template.itemKind === "toDo"
-        ? locationExists(template.location)
-        : template.location.kind === "space"
-          ? document.spaces.some((space) => space.id === template.location.spaceId)
-          : template.location.kind === "area"
-            ? document.areas.some((area) => area.id === template.location.areaId)
-            : false;
+      let hasValidLocation = false;
+      if (template.itemKind === "toDo") hasValidLocation = locationExists(template.location);
+      else {
+        const location = template.location;
+        hasValidLocation = location.kind === "space"
+          ? document.spaces.some((space) => space.id === location.spaceId)
+          : document.areas.some((area) => area.id === location.areaId);
+      }
       if (!hasValidLocation) errors.push(`Repeating Template “${template.id}” has no valid Location.`);
       if (!isIsoDate(template.nextDate)) errors.push(`Repeating Template “${template.id}” has an invalid next date.`);
       if (!isIsoDateTime(template.createdAt)) errors.push(`Repeating Template “${template.id}” has an invalid creation date.`);
@@ -421,11 +545,12 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       if (template.pattern.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) errors.push(`Repeating Template “${template.id}” has an invalid weekday.`);
       if (template.reminderTime && !isTime(template.reminderTime)) errors.push(`Repeating Template “${template.id}” has an invalid reminder time.`);
       for (const tagId of template.tags) if (!document.tags.some((tag) => tag.id === tagId)) errors.push(`Repeating Template “${template.id}” has an unknown Tag.`);
-      if (template.itemKind === "project" && !template.projectContents) errors.push(`Repeating Project Template “${template.id}” has no Project contents.`);
-      if (template.itemKind === "toDo" && template.projectContents) errors.push(`Repeating to-do Template “${template.id}” cannot contain Project contents.`);
-      if (template.projectContents) {
-        const headingKeys = new Set(template.projectContents.headings.map((heading) => heading.key));
-        for (const toDo of template.projectContents.toDos) {
+      const projectContents = template.projectContents as RepeatingProjectContents | null;
+      if (template.itemKind === "project" && !projectContents) errors.push(`Repeating Project Template “${template.id}” has no Project contents.`);
+      if (template.itemKind === "toDo" && projectContents) errors.push(`Repeating to-do Template “${template.id}” cannot contain Project contents.`);
+      if (projectContents) {
+        const headingKeys = new Set(projectContents.headings.map((heading) => heading.key));
+        for (const toDo of projectContents.toDos) {
           if (toDo.headingKey && !headingKeys.has(toDo.headingKey)) errors.push(`Repeating Project Template “${template.id}” has a to-do with an unknown Heading.`);
           if (toDo.reminder?.kind === "at-time" && !isTime(toDo.reminder.time)) errors.push(`Repeating Project Template “${template.id}” has an invalid child Reminder.`);
           if (toDo.reminder?.kind === "fixed" && !isIsoDateTime(toDo.reminder.at)) errors.push(`Repeating Project Template “${template.id}” has an invalid child Reminder.`);
@@ -470,15 +595,37 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     },
 
     view(view) {
+      const matchesTagFilter = (item: ToDo | Project): boolean => {
+        if (!view.tagIds?.length) return true;
+        const effectiveTags = "checklist" in item ? effectiveTagIdsForToDo(item.id) : effectiveTagIdsForProject(item.id);
+        return view.tagIds.every((tagId) => effectiveTags.includes(tagId));
+      };
       if (view.kind === "deadlines") {
         return [...document.toDos, ...document.projects]
-          .filter((item) => item.outcome === "open" && !item.trashedAt && !item.logbookAt && item.deadline)
+          .filter((item) => item.outcome === "open" && !item.trashedAt && !item.logbookAt && item.deadline && matchesTagFilter(item))
           .sort((left, right) => left.deadline!.localeCompare(right.deadline!) || left.order - right.order)
           .map((item) => JSON.parse(JSON.stringify(item)) as ToDo | Project);
       }
+      if (view.kind === "trash") {
+        const projects = document.projects.filter((project) => project.trashedAt !== null);
+        const toDos = document.toDos.filter((toDo) => {
+          if (!toDo.trashedAt) return false;
+          const projectId = locationOfToDo(toDo.id)?.projectId;
+          return !projectId || !projects.some((project) => project.id === projectId);
+        });
+        return [...projects, ...toDos].filter(matchesTagFilter).sort((left, right) => left.order - right.order).map((item) => copyDocument(item));
+      }
+      if (view.kind === "logbook") {
+        return [...document.projects, ...document.toDos]
+          .filter((item) => item.logbookAt !== null && item.trashedAt === null && matchesTagFilter(item))
+          .sort((left, right) => left.logbookAt!.localeCompare(right.logbookAt!) || left.order - right.order)
+          .map((item) => copyDocument(item));
+      }
       return document.toDos.filter((toDo) => {
-        if (view.kind === "trash") return toDo.trashedAt !== null;
-        if (view.kind === "logbook") return toDo.logbookAt !== null && toDo.trashedAt === null;
+        if (!matchesTagFilter(toDo)) return false;
+        const parentProjectId = locationOfToDo(toDo.id)?.projectId;
+        const parentProject = parentProjectId ? document.projects.find((project) => project.id === parentProjectId) : null;
+        if (parentProject?.trashedAt || parentProject?.logbookAt) return false;
         if (toDo.trashedAt || toDo.logbookAt) return false;
         if (view.kind === "today") return toDo.schedule.kind === "scheduled" && toDo.schedule.date <= view.date;
         if (view.kind === "thisEvening") return toDo.schedule.kind === "scheduled" && toDo.schedule.date === view.date && toDo.schedule.evening;
@@ -497,6 +644,12 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     },
 
     locationOfToDo,
+
+    effectiveTagIdsForToDo,
+
+    effectiveTagIdsForProject,
+
+    projectProgress,
 
     spaceIdForView,
 
@@ -577,10 +730,10 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       }
       if (change.type === "runDailyLogbook") {
         const affected: AffectedEntity[] = [];
-        for (const item of document.toDos) {
+        for (const item of [...document.toDos, ...document.projects]) {
           if (item.outcome === "open" || item.logbookAt || item.trashedAt) continue;
           item.logbookAt = dependencies.now();
-          affected.push({ kind: "toDo", id: item.id });
+          affected.push({ kind: "checklist" in item ? "toDo" : "project", id: item.id });
         }
         return finishChange(previous, "daily-logbook-updated", affected);
       }
@@ -594,6 +747,454 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         const deletedAt = dependencies.now();
         for (const item of removed) document.permanentDeletions.push({ entityKind: "toDo", entityId: item.id, deletedAt });
         return finishChange(previous, "trash-emptied", removed.map((item) => ({ kind: "toDo", id: item.id })));
+      }
+
+      if (change.type === "createSpace") {
+        const title = change.title.trim();
+        if (!title || title.length > 500) return fail(["Enter a Space title between 1 and 500 characters."]);
+        const space: Space = {
+          id: dependencies.createId("space"), title, color: change.color,
+          pinned: change.pinned ?? true, order: document.spaces.length,
+        };
+        document.spaces.push(space);
+        if (!document.settings.defaultSpaceId) document.settings.defaultSpaceId = space.id;
+        return finishChange(previous, "space-created", [{ kind: "space", id: space.id }], `Delete “${space.title}”`);
+      }
+      if (change.type === "updateSpace") {
+        const space = document.spaces.find((item) => item.id === change.id);
+        if (!space) return failAs("not-found", ["The Space no longer exists."]);
+        if (change.changes.title !== undefined) {
+          const title = change.changes.title.trim();
+          if (!title || title.length > 500) return fail(["Enter a Space title between 1 and 500 characters."]);
+          space.title = title;
+        }
+        if (change.changes.color !== undefined) space.color = change.changes.color;
+        if (change.changes.pinned !== undefined) space.pinned = change.changes.pinned;
+        return finishChange(previous, "space-updated", [{ kind: "space", id: space.id }], `Undo changes to “${space.title}”`);
+      }
+      if (change.type === "reorderSpace") {
+        const currentIndex = document.spaces.findIndex((item) => item.id === change.id);
+        if (currentIndex < 0) return failAs("not-found", ["The Space no longer exists."]);
+        if (!Number.isInteger(change.toIndex) || change.toIndex < 0 || change.toIndex >= document.spaces.length) return fail(["Choose a valid Space position."]);
+        const [space] = document.spaces.splice(currentIndex, 1);
+        document.spaces.splice(change.toIndex, 0, space);
+        document.spaces.forEach((item, order) => { item.order = order; });
+        return finishChange(previous, "space-reordered", [{ kind: "space", id: space.id }], `Undo moving “${space.title}”`);
+      }
+      if (change.type === "deleteSpace") {
+        if (change.confirmation !== DELETE_SPACE_CONFIRMATION) return failAs("confirmation-required", [`Type ${DELETE_SPACE_CONFIRMATION} to delete this Space.`]);
+        const space = document.spaces.find((item) => item.id === change.id);
+        if (!space) return failAs("not-found", ["The Space no longer exists."]);
+        if (change.moveToSpaceId === space.id) return fail(["Choose a different Space for the content."]);
+        if (!document.spaces.some((item) => item.id === change.moveToSpaceId)) return fail(["The destination Space no longer exists."]);
+        const affected: AffectedEntity[] = [{ kind: "space", id: space.id }];
+        for (const area of document.areas) {
+          if (area.spaceId !== space.id) continue;
+          area.spaceId = change.moveToSpaceId;
+          affected.push({ kind: "area", id: area.id });
+        }
+        for (const project of document.projects) {
+          if (project.location.kind !== "space" || project.location.spaceId !== space.id) continue;
+          project.location = { kind: "space", spaceId: change.moveToSpaceId };
+          affected.push({ kind: "project", id: project.id });
+        }
+        for (const toDo of document.toDos) {
+          if (toDo.location.kind !== "unfiled" || toDo.location.spaceId !== space.id) continue;
+          toDo.location = { kind: "unfiled", spaceId: change.moveToSpaceId };
+          affected.push({ kind: "toDo", id: toDo.id });
+        }
+        for (const template of document.repeatingTemplates) {
+          if (template.location.kind === "unfiled" && template.location.spaceId === space.id) template.location = { kind: "unfiled", spaceId: change.moveToSpaceId };
+          if (template.location.kind === "space" && template.location.spaceId === space.id) template.location = { kind: "space", spaceId: change.moveToSpaceId };
+        }
+        for (const event of document.calendarEvents) if (event.spaceId === space.id) event.spaceId = change.moveToSpaceId;
+        for (const rule of document.settings.launchRules) if (rule.spaceId === space.id) rule.spaceId = change.moveToSpaceId;
+        if (document.settings.defaultSpaceId === space.id) document.settings.defaultSpaceId = change.moveToSpaceId;
+        document.spaces = document.spaces.filter((item) => item.id !== space.id);
+        document.spaces.forEach((item, order) => { item.order = order; });
+        document.permanentDeletions.push({ entityKind: "space", entityId: space.id, deletedAt: dependencies.now() });
+        return finishChange(previous, "space-deleted", affected);
+      }
+
+      if (change.type === "createArea") {
+        const title = change.title.trim();
+        if (!title || title.length > 500) return fail(["Enter an Area title between 1 and 500 characters."]);
+        if (!document.spaces.some((space) => space.id === change.spaceId)) return fail(["The selected Space no longer exists."]);
+        const tags = [...new Set(change.tags ?? [])];
+        if (tags.some((tagId) => !document.tags.some((tag) => tag.id === tagId))) return fail(["A selected Tag no longer exists."]);
+        const area: Area = {
+          id: dependencies.createId("area"), title, spaceId: change.spaceId,
+          color: change.color ?? "#808080", tags, order: document.areas.length,
+        };
+        document.areas.push(area);
+        return finishChange(previous, "area-created", [{ kind: "area", id: area.id }], `Delete “${area.title}”`);
+      }
+      if (change.type === "updateArea") {
+        const area = document.areas.find((item) => item.id === change.id);
+        if (!area) return failAs("not-found", ["The Area no longer exists."]);
+        if (change.changes.title !== undefined) {
+          const title = change.changes.title.trim();
+          if (!title || title.length > 500) return fail(["Enter an Area title between 1 and 500 characters."]);
+          area.title = title;
+        }
+        if (change.changes.spaceId !== undefined) {
+          if (!document.spaces.some((space) => space.id === change.changes.spaceId)) return fail(["The selected Space no longer exists."]);
+          area.spaceId = change.changes.spaceId;
+        }
+        if (change.changes.color !== undefined) area.color = change.changes.color;
+        if (change.changes.tags !== undefined) {
+          if (change.changes.tags.some((tagId) => !document.tags.some((tag) => tag.id === tagId))) return fail(["A selected Tag no longer exists."]);
+          area.tags = [...new Set(change.changes.tags)];
+        }
+        return finishChange(previous, "area-updated", [{ kind: "area", id: area.id }], `Undo changes to “${area.title}”`);
+      }
+      if (change.type === "removeArea") {
+        if (change.confirmation !== REMOVE_AREA_CONFIRMATION) return failAs("confirmation-required", [`Type ${REMOVE_AREA_CONFIRMATION} to remove this Area.`]);
+        const area = document.areas.find((item) => item.id === change.id);
+        if (!area) return failAs("not-found", ["The Area no longer exists."]);
+        const directHeadingIds = new Set(document.headings
+          .filter((heading) => heading.location.kind === "area" && heading.location.areaId === area.id)
+          .map((heading) => heading.id));
+        const affected: AffectedEntity[] = [{ kind: "area", id: area.id }];
+        for (const project of document.projects) {
+          if (project.location.kind !== "area" || project.location.areaId !== area.id) continue;
+          project.location = { kind: "space", spaceId: area.spaceId };
+          affected.push({ kind: "project", id: project.id });
+        }
+        for (const toDo of document.toDos) {
+          const directlyInArea = toDo.location.kind === "area" && toDo.location.areaId === area.id;
+          const inRemovedHeading = toDo.location.kind === "heading" && directHeadingIds.has(toDo.location.headingId);
+          if (!directlyInArea && !inRemovedHeading) continue;
+          toDo.location = { kind: "unfiled", spaceId: area.spaceId };
+          affected.push({ kind: "toDo", id: toDo.id });
+        }
+        for (const template of document.repeatingTemplates) {
+          if (template.location.kind === "area" && template.location.areaId === area.id) {
+            template.location = template.itemKind === "project"
+              ? { kind: "space", spaceId: area.spaceId }
+              : { kind: "unfiled", spaceId: area.spaceId };
+          }
+          if (template.itemKind === "toDo" && template.location.kind === "heading" && directHeadingIds.has(template.location.headingId)) {
+            template.location = { kind: "unfiled", spaceId: area.spaceId };
+          }
+        }
+        for (const headingId of directHeadingIds) affected.push({ kind: "heading", id: headingId });
+        document.headings = document.headings.filter((heading) => !directHeadingIds.has(heading.id));
+        document.areas = document.areas.filter((item) => item.id !== area.id);
+        document.permanentDeletions.push({ entityKind: "area", entityId: area.id, deletedAt: dependencies.now() });
+        return finishChange(previous, "area-removed", affected);
+      }
+      if (change.type === "createProject") {
+        const title = change.title.trim();
+        if (!title || title.length > 500) return fail(["Enter a Project title between 1 and 500 characters."]);
+        if (!projectLocationExists(change.location)) return fail(["The selected Project Location no longer exists."]);
+        const schedule = change.schedule ?? { kind: "anytime" as const };
+        if (schedule.kind === "scheduled" && !isIsoDate(schedule.date)) return fail(["Choose a valid Schedule date."]);
+        if (change.deadline && !isIsoDate(change.deadline)) return fail(["Choose a valid Deadline."]);
+        const tags = [...new Set(change.tags ?? [])];
+        if (tags.some((tagId) => !document.tags.some((tag) => tag.id === tagId))) return fail(["A selected Tag no longer exists."]);
+        const project: Project = {
+          id: dependencies.createId("project"), title, notes: change.notes?.trim() ?? "", location: change.location,
+          schedule, deadline: change.deadline ?? null, outcome: "open", trashedAt: null, logbookAt: null,
+          tags, occurrence: null, completedAt: null, order: document.projects.length,
+        };
+        document.projects.push(project);
+        return finishChange(previous, "project-created", [{ kind: "project", id: project.id }], `Delete “${project.title}”`);
+      }
+      if (change.type === "updateProject") {
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        if (change.changes.title !== undefined) {
+          const title = change.changes.title.trim();
+          if (!title || title.length > 500) return fail(["Enter a Project title between 1 and 500 characters."]);
+          project.title = title;
+        }
+        if (change.changes.notes !== undefined) project.notes = change.changes.notes;
+        if (change.changes.location !== undefined) {
+          if (!projectLocationExists(change.changes.location)) return fail(["The selected Project Location no longer exists."]);
+          project.location = change.changes.location;
+        }
+        if (change.changes.schedule !== undefined) {
+          if (change.changes.schedule.kind === "scheduled" && !isIsoDate(change.changes.schedule.date)) return fail(["Choose a valid Schedule date."]);
+          project.schedule = change.changes.schedule;
+        }
+        if (change.changes.deadline !== undefined) {
+          if (change.changes.deadline && !isIsoDate(change.changes.deadline)) return fail(["Choose a valid Deadline."]);
+          project.deadline = change.changes.deadline;
+        }
+        if (change.changes.tags !== undefined) {
+          if (change.changes.tags.some((tagId) => !document.tags.some((tag) => tag.id === tagId))) return fail(["A selected Tag no longer exists."]);
+          project.tags = [...new Set(change.changes.tags)];
+        }
+        return finishChange(previous, "project-updated", [{ kind: "project", id: project.id }], `Undo changes to “${project.title}”`);
+      }
+      if (change.type === "duplicateProject") {
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        const copy: Project = {
+          ...copyDocument(project), id: dependencies.createId("project"), title: `${project.title} copy`,
+          outcome: "open", trashedAt: null, logbookAt: null, completedAt: null, occurrence: null,
+          order: document.projects.length,
+        };
+        document.projects.push(copy);
+        const headingIds = new Map<EntityId, EntityId>();
+        const copiedHeadings = document.headings
+          .filter((heading) => heading.location.kind === "project" && heading.location.projectId === project.id)
+          .map((heading): Heading => {
+            const id = dependencies.createId("heading");
+            headingIds.set(heading.id, id);
+            return { ...copyDocument(heading), id, location: { kind: "project", projectId: copy.id }, archivedAt: null, order: document.headings.length + headingIds.size - 1 };
+          });
+        document.headings.push(...copiedHeadings);
+        const copiedToDos = projectToDos(project.id).map((toDo, index): ToDo => {
+          const location: ToDoLocation = toDo.location.kind === "heading"
+            ? { kind: "heading", headingId: headingIds.get(toDo.location.headingId)! }
+            : { kind: "project", projectId: copy.id };
+          return duplicateToDoRecord(toDo, location, document.toDos.length + index);
+        });
+        document.toDos.push(...copiedToDos);
+        return finishChange(previous, "project-duplicated", [
+          { kind: "project", id: copy.id },
+          ...copiedHeadings.map((heading) => ({ kind: "heading" as const, id: heading.id })),
+          ...copiedToDos.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+        ], `Delete “${copy.title}”`);
+      }
+      if (change.type === "closeProject") {
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        if (project.trashedAt) return fail(["Restore this Project before closing it."]);
+        if (project.outcome !== "open") return fail(["Only an open Project can be closed."]);
+        const openToDos = projectToDos(project.id).filter((toDo) => toDo.outcome === "open" && !toDo.trashedAt);
+        const supplied = new Map(change.toDoOutcomes.map((choice) => [choice.id, choice.outcome]));
+        if (supplied.size !== change.toDoOutcomes.length) return fail(["Choose one Outcome for each remaining open to-do."]);
+        if (openToDos.length !== supplied.size || openToDos.some((toDo) => !supplied.has(toDo.id))) {
+          return fail(["Choose an explicit Outcome for every remaining open to-do."]);
+        }
+        const now = dependencies.now();
+        for (const toDo of openToDos) {
+          toDo.outcome = supplied.get(toDo.id)!;
+          toDo.completedAt = now;
+          if (document.settings.logCompletedItems === "immediately") toDo.logbookAt = now;
+        }
+        project.outcome = change.outcome;
+        project.completedAt = now;
+        if (document.settings.logCompletedItems === "immediately") project.logbookAt = now;
+        document.projectClosures.push({
+          id: dependencies.createId("projectClosure"), projectId: project.id,
+          projectOutcome: change.outcome, changedToDoIds: openToDos.map((toDo) => toDo.id), closedAt: now,
+        });
+        return finishChange(previous, change.outcome === "completed" ? "project-completed" : "project-canceled", [
+          { kind: "project", id: project.id },
+          ...openToDos.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+        ], `Restore “${project.title}”`);
+      }
+      if (change.type === "restoreProject") {
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        if (project.trashedAt) return fail(["Restore this Project from Trash first."]);
+        if (project.outcome === "open") return fail(["This Project is already open."]);
+        const closure = [...document.projectClosures].reverse().find((item) => item.projectId === project.id);
+        if (!closure) return fail(["This Project has no Closure record to restore."]);
+        const changedIds = new Set(closure.changedToDoIds);
+        const changedToDos = document.toDos.filter((toDo) => changedIds.has(toDo.id));
+        for (const toDo of changedToDos) {
+          toDo.outcome = "open";
+          toDo.completedAt = null;
+          toDo.logbookAt = null;
+        }
+        project.outcome = "open";
+        project.completedAt = null;
+        project.logbookAt = null;
+        return finishChange(previous, "project-restored", [
+          { kind: "project", id: project.id },
+          ...changedToDos.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+        ], `Close “${project.title}” again`);
+      }
+      if (change.type === "trashProject") {
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        if (project.trashedAt) return fail(["This Project is already in Trash."]);
+        project.trashedAt = dependencies.now();
+        return finishChange(previous, "project-trashed", [{ kind: "project", id: project.id }], `Restore “${project.title}”`);
+      }
+      if (change.type === "restoreProjectFromTrash") {
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        if (!project.trashedAt) return fail(["This Project is not in Trash."]);
+        project.trashedAt = null;
+        return finishChange(previous, "project-restored-from-trash", [{ kind: "project", id: project.id }], `Move “${project.title}” back to Trash`);
+      }
+      if (change.type === "permanentlyDeleteProject") {
+        if (change.confirmation !== PERMANENT_DELETE_CONFIRMATION) return failAs("confirmation-required", [`Type ${PERMANENT_DELETE_CONFIRMATION} to delete this Project.`]);
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        if (!project.trashedAt) return fail(["Only a Project in Trash can be permanently deleted."]);
+        const headings = document.headings.filter((heading) => heading.location.kind === "project" && heading.location.projectId === project.id);
+        const headingIds = new Set(headings.map((heading) => heading.id));
+        const toDos = document.toDos.filter((toDo) => toDo.location.kind === "project" && toDo.location.projectId === project.id
+          || toDo.location.kind === "heading" && headingIds.has(toDo.location.headingId));
+        const deletedAt = dependencies.now();
+        document.projects = document.projects.filter((item) => item.id !== project.id);
+        document.headings = document.headings.filter((heading) => !headingIds.has(heading.id));
+        const toDoIds = new Set(toDos.map((toDo) => toDo.id));
+        document.toDos = document.toDos.filter((toDo) => !toDoIds.has(toDo.id));
+        document.projectClosures = document.projectClosures.filter((closure) => closure.projectId !== project.id);
+        document.permanentDeletions.push(
+          { entityKind: "project", entityId: project.id, deletedAt },
+          ...headings.map((heading) => ({ entityKind: "heading" as const, entityId: heading.id, deletedAt })),
+          ...toDos.map((toDo) => ({ entityKind: "toDo" as const, entityId: toDo.id, deletedAt })),
+        );
+        return finishChange(previous, "project-permanently-deleted", [
+          { kind: "project", id: project.id },
+          ...headings.map((heading) => ({ kind: "heading" as const, id: heading.id })),
+          ...toDos.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+        ]);
+      }
+      if (change.type === "createHeading") {
+        const title = change.title.trim();
+        if (!title || title.length > 500) return fail(["Enter a Heading title between 1 and 500 characters."]);
+        if (!headingLocationExists(change.location)) return fail(["The selected Heading Location no longer exists."]);
+        const heading: Heading = {
+          id: dependencies.createId("heading"), title, location: change.location,
+          archivedAt: null, order: document.headings.length,
+        };
+        document.headings.push(heading);
+        return finishChange(previous, "heading-created", [{ kind: "heading", id: heading.id }], `Delete “${heading.title}”`);
+      }
+      if (change.type === "updateHeading") {
+        const heading = document.headings.find((item) => item.id === change.id);
+        if (!heading) return failAs("not-found", ["The Heading no longer exists."]);
+        if (change.changes.title !== undefined) {
+          const title = change.changes.title.trim();
+          if (!title || title.length > 500) return fail(["Enter a Heading title between 1 and 500 characters."]);
+          heading.title = title;
+        }
+        if (change.changes.location !== undefined) {
+          if (!headingLocationExists(change.changes.location)) return fail(["The selected Heading Location no longer exists."]);
+          heading.location = change.changes.location;
+        }
+        return finishChange(previous, "heading-updated", [{ kind: "heading", id: heading.id }], `Undo changes to “${heading.title}”`);
+      }
+      if (change.type === "duplicateHeading") {
+        const heading = document.headings.find((item) => item.id === change.id);
+        if (!heading) return failAs("not-found", ["The Heading no longer exists."]);
+        const copy: Heading = {
+          ...copyDocument(heading), id: dependencies.createId("heading"), title: `${heading.title} copy`,
+          archivedAt: null, order: document.headings.length,
+        };
+        document.headings.push(copy);
+        const copiedToDos = document.toDos
+          .filter((toDo) => toDo.location.kind === "heading" && toDo.location.headingId === heading.id)
+          .map((toDo, index) => duplicateToDoRecord(
+            toDo,
+            { kind: "heading", headingId: copy.id },
+            document.toDos.length + index,
+          ));
+        document.toDos.push(...copiedToDos);
+        return finishChange(previous, "heading-duplicated", [
+          { kind: "heading", id: copy.id },
+          ...copiedToDos.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+        ], `Delete “${copy.title}”`);
+      }
+      if (change.type === "archiveHeading") {
+        const heading = document.headings.find((item) => item.id === change.id);
+        if (!heading) return failAs("not-found", ["The Heading no longer exists."]);
+        if (heading.archivedAt) return fail(["This Heading is already archived."]);
+        heading.archivedAt = dependencies.now();
+        return finishChange(previous, "heading-archived", [{ kind: "heading", id: heading.id }], `Restore “${heading.title}”`);
+      }
+      if (change.type === "restoreHeading") {
+        const heading = document.headings.find((item) => item.id === change.id);
+        if (!heading) return failAs("not-found", ["The Heading no longer exists."]);
+        if (!heading.archivedAt) return fail(["This Heading is not archived."]);
+        heading.archivedAt = null;
+        return finishChange(previous, "heading-restored", [{ kind: "heading", id: heading.id }], `Archive “${heading.title}”`);
+      }
+      if (change.type === "deleteHeading") {
+        if (change.confirmation !== DELETE_HEADING_CONFIRMATION) return failAs("confirmation-required", [`Type ${DELETE_HEADING_CONFIRMATION} to delete this Heading.`]);
+        const heading = document.headings.find((item) => item.id === change.id);
+        if (!heading) return failAs("not-found", ["The Heading no longer exists."]);
+        const parentLocation: ToDoLocation = heading.location.kind === "project"
+          ? { kind: "project", projectId: heading.location.projectId }
+          : { kind: "area", areaId: heading.location.areaId };
+        const children = document.toDos.filter((toDo) => toDo.location.kind === "heading" && toDo.location.headingId === heading.id);
+        for (const toDo of children) toDo.location = parentLocation;
+        for (const template of document.repeatingTemplates) {
+          if (template.itemKind === "toDo" && template.location.kind === "heading" && template.location.headingId === heading.id) template.location = parentLocation;
+        }
+        document.headings = document.headings.filter((item) => item.id !== heading.id);
+        document.permanentDeletions.push({ entityKind: "heading", entityId: heading.id, deletedAt: dependencies.now() });
+        return finishChange(previous, "heading-deleted", [
+          { kind: "heading", id: heading.id },
+          ...children.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+        ]);
+      }
+      if (change.type === "convertHeadingToProject") {
+        const heading = document.headings.find((item) => item.id === change.id);
+        if (!heading) return failAs("not-found", ["The Heading no longer exists."]);
+        let location: ProjectLocation;
+        if (heading.location.kind === "area") location = { kind: "area", areaId: heading.location.areaId };
+        else {
+          const parentProjectId = heading.location.projectId;
+          const parent = document.projects.find((project) => project.id === parentProjectId);
+          if (!parent) return fail(["The Heading's parent Project no longer exists."]);
+          location = copyDocument(parent.location);
+        }
+        const project: Project = {
+          id: dependencies.createId("project"), title: heading.title, notes: "", location,
+          schedule: { kind: "anytime" }, deadline: null, outcome: "open", trashedAt: null,
+          logbookAt: null, tags: [], occurrence: null, completedAt: null, order: document.projects.length,
+        };
+        document.projects.push(project);
+        const children = document.toDos.filter((toDo) => toDo.location.kind === "heading" && toDo.location.headingId === heading.id);
+        for (const toDo of children) toDo.location = { kind: "project", projectId: project.id };
+        for (const template of document.repeatingTemplates) {
+          if (template.itemKind === "toDo" && template.location.kind === "heading" && template.location.headingId === heading.id) {
+            template.location = { kind: "project", projectId: project.id };
+          }
+        }
+        document.headings = document.headings.filter((item) => item.id !== heading.id);
+        document.permanentDeletions.push({ entityKind: "heading", entityId: heading.id, deletedAt: dependencies.now() });
+        return finishChange(previous, "heading-converted-to-project", [
+          { kind: "project", id: project.id },
+          { kind: "heading", id: heading.id },
+          ...children.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+        ], `Undo converting “${heading.title}”`);
+      }
+      if (change.type === "createTag") {
+        const title = change.title.trim();
+        if (!title || title.length > 100) return fail(["Enter a Tag name between 1 and 100 characters."]);
+        if (document.tags.some((tag) => tag.title.toLowerCase() === title.toLowerCase())) return fail(["A Tag with this name already exists."]);
+        const tag: Tag = { id: dependencies.createId("tag"), title, order: document.tags.length };
+        document.tags.push(tag);
+        return finishChange(previous, "tag-created", [{ kind: "tag", id: tag.id }], `Delete “${tag.title}”`);
+      }
+      if (change.type === "updateTag") {
+        const tag = document.tags.find((item) => item.id === change.id);
+        if (!tag) return failAs("not-found", ["The Tag no longer exists."]);
+        const title = change.title.trim();
+        if (!title || title.length > 100) return fail(["Enter a Tag name between 1 and 100 characters."]);
+        if (document.tags.some((item) => item.id !== tag.id && item.title.toLowerCase() === title.toLowerCase())) return fail(["A Tag with this name already exists."]);
+        tag.title = title;
+        return finishChange(previous, "tag-updated", [{ kind: "tag", id: tag.id }], `Undo renaming “${tag.title}”`);
+      }
+      if (change.type === "deleteTag") {
+        if (change.confirmation !== DELETE_TAG_CONFIRMATION) return failAs("confirmation-required", [`Type ${DELETE_TAG_CONFIRMATION} to delete this Tag.`]);
+        const tag = document.tags.find((item) => item.id === change.id);
+        if (!tag) return failAs("not-found", ["The Tag no longer exists."]);
+        for (const area of document.areas) area.tags = area.tags.filter((id) => id !== tag.id);
+        for (const project of document.projects) project.tags = project.tags.filter((id) => id !== tag.id);
+        for (const toDo of document.toDos) toDo.tags = toDo.tags.filter((id) => id !== tag.id);
+        for (const template of document.repeatingTemplates) {
+          template.tags = template.tags.filter((id) => id !== tag.id);
+          if (template.projectContents) {
+            for (const toDo of template.projectContents.toDos) toDo.tags = toDo.tags.filter((id) => id !== tag.id);
+          }
+        }
+        document.tags = document.tags.filter((item) => item.id !== tag.id);
+        document.tags.forEach((item, order) => { item.order = order; });
+        document.permanentDeletions.push({ entityKind: "tag", entityId: tag.id, deletedAt: dependencies.now() });
+        return finishChange(previous, "tag-deleted", [{ kind: "tag", id: tag.id }]);
       }
 
       if (change.type === "createToDo") {
@@ -765,14 +1366,7 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         return finishChange(previous, "to-do-permanently-deleted", [{ kind: "toDo", id: toDo.id }]);
       }
       if (change.type === "duplicateToDo") {
-        const copy: ToDo = {
-          ...copyDocument(toDo),
-          id: dependencies.createId("toDo"),
-          title: `${toDo.title} copy`,
-          checklist: toDo.checklist.map((item, order) => ({ ...item, id: dependencies.createId("checklistItem"), order })),
-          outcome: "open", trashedAt: null, logbookAt: null, completedAt: null, occurrence: null,
-          createdAt: dependencies.now(), order: document.toDos.length,
-        };
+        const copy = duplicateToDoRecord(toDo, copyDocument(toDo.location), document.toDos.length, `${toDo.title} copy`);
         document.toDos.push(copy);
         return finishChange(previous, "to-do-duplicated", [{ kind: "toDo", id: copy.id }], `Delete “${copy.title}”`);
       }
