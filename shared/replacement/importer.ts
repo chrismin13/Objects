@@ -221,6 +221,30 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
     return reject(report, "The backup is not valid JSON.");
   }
   if (!source) return reject(report, "The backup must contain one JSON object.");
+  if (source.format === "objects-workspace") {
+    const requiredCollections = [
+      "spaces", "areas", "projects", "headings", "tags", "toDos", "repeatingTemplates",
+      "projectClosures", "calendarEvents", "permanentDeletions",
+    ];
+    const settings = record(source.settings);
+    if (source.version !== 1 || !settings || requiredCollections.some((name) => !Array.isArray(source![name]))) {
+      return reject(report, "The current Objects backup is incomplete or uses an unsupported version.");
+    }
+    if (!Array.isArray(source.captureReceipts)) source.captureReceipts = [];
+    const document = source as unknown as WorkspaceDocument;
+    document.sync = { revision: 0, lastMutationId: null, updatedAt: dependencies.now() };
+    report.imported = {
+      spaces: document.spaces.length,
+      areas: document.areas.length,
+      projects: document.projects.length,
+      headings: document.headings.length,
+      tags: document.tags.length,
+      toDos: document.toDos.length,
+      repeatingTemplates: document.repeatingTemplates.length,
+      calendarEvents: document.calendarEvents.length,
+    };
+    return { ok: true, document, report };
+  }
   if (!Array.isArray(source.tasks) || !Array.isArray(source.projects) || !Array.isArray(source.areas)) {
     return reject(report, "The backup does not match the current Objects portable format.");
   }
@@ -545,7 +569,7 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
       value: quickDraftSource.value,
       ...(optionalText(quickDraftSource.updatedAt) ? { updatedAt: String(quickDraftSource.updatedAt) } : {}),
       ...(optionalText(quickDraftSource.viewType) ? { viewType: String(quickDraftSource.viewType) } : {}),
-      ...(typeof quickDraftSource.viewId === "string" || quickDraftSource.viewId === null ? { viewId: quickDraftSource.viewId } : {}),
+      ...(typeof quickDraftSource.viewId === "string" || quickDraftSource.viewId === null ? { viewId: quickDraftSource.viewId as string | null } : {}),
       ...(optionalText(quickDraftSource.sectionKey) ? { sectionKey: String(quickDraftSource.sectionKey) } : {}),
     };
   } else if (settingsSource.quickDraft !== undefined && settingsSource.quickDraft !== null) {
@@ -570,7 +594,7 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
         quickDraft,
       },
       spaces, areas, projects, headings, tags, toDos, repeatingTemplates,
-      projectClosures: [], calendarEvents, permanentDeletions: [],
+      projectClosures: [], calendarEvents, permanentDeletions: [], captureReceipts: [],
       sync: { revision: 0, lastMutationId: null, updatedAt: now },
     },
   };

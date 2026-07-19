@@ -1,24 +1,15 @@
 import { capsule, endpoint, json, mutation, query, string, table, text } from "lakebed/server";
-import { addCapturedTask, createSeed, isObjectsState } from "../shared/state";
 import {
   resolveSyncCommand,
   type WorkspaceSyncCommand,
   type WorkspaceSyncSnapshot,
 } from "../shared/replacement/sync";
+import { dateInTimeZone } from "../shared/replacement/dates";
+import { captureIntoSnapshot } from "../shared/replacement/http-capture";
+import { createEmptyWorkspace } from "../shared/replacement/workspace";
 
-const MAX_STATE_SIZE = 750_000;
-const MAX_ROW_SIZE = 60_000;
 const MAX_REPLACEMENT_WORKSPACE_SIZE = 2_000_000;
 const REPLACEMENT_CHUNK_SIZE = 50_000;
-const ENTITY_KINDS = ["spaces", "areas", "projects", "headings", "calendarEvents", "tasks"] as const;
-type EntityKind = typeof ENTITY_KINDS[number];
-type JsonRecord = Record<string, unknown>;
-type ChangeSet = {
-  mutationId: string;
-  settings?: JsonRecord;
-  entities?: Partial<Record<EntityKind, Array<{ id: string; patch: JsonRecord }>>>;
-  deletes?: Partial<Record<EntityKind, string[]>>;
-};
 const PWA_MANIFEST = JSON.stringify({
   id: "/",
   name: "Objects",
@@ -149,22 +140,6 @@ self.addEventListener("notificationclick", (event) => {
 });
 `;
 
-function parseState(serialized: string, refreshUpdatedAt = true) {
-  if (typeof serialized !== "string" || serialized.length > MAX_STATE_SIZE) throw new Error("Objects data is too large");
-  const state: unknown = JSON.parse(serialized);
-  if (!isObjectsState(state)) throw new Error("Invalid Objects data");
-  if (!Array.isArray(state.spaces)) state.spaces = [];
-  state.version = 7;
-  if (refreshUpdatedAt || !state.updatedAt) state.updatedAt = new Date().toISOString();
-  return state;
-}
-
-function parseRecord(serialized: string): JsonRecord {
-  const value: unknown = JSON.parse(serialized);
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Objects row");
-  return value as JsonRecord;
-}
-
 function replacementOwner(ctx: any): string {
   if (!ctx.auth.userId) throw new Error("Authentication required");
   return ctx.auth.userId;
@@ -195,242 +170,42 @@ async function replacementSnapshot(ctx: any, ownerId: string): Promise<Workspace
   return { revision: Number(meta.revision), document: JSON.parse(document) } as WorkspaceSyncSnapshot;
 }
 
-function serializeRecord(value: JsonRecord): string {
-  const serialized = JSON.stringify(value);
-  if (serialized.length > MAX_ROW_SIZE) throw new Error("An Objects item is too large");
-  return serialized;
-}
-
-function entityId(value: JsonRecord): string {
-  if (typeof value.id !== "string" || !value.id || value.id.length > 500) throw new Error("Invalid Objects item id");
-  return value.id;
-}
-
-function entityTable(ctx: any, kind: EntityKind) {
-  return ctx.db[kind];
-}
-
-async function findOwned(tableRef: any, ownerId: string, id: string) {
-  return tableRef
-    .withIndex("by_owner_entity", (range: any) => range.eq("ownerId", ownerId).eq("entityId", id))
+async function writeReplacementSnapshot(ctx: any, ownerId: string, snapshot: WorkspaceSyncSnapshot): Promise<void> {
+  const existingMeta = await ctx.db.replacementWorkspaceMeta
+    .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
     .first();
-}
-
-async function collectOwned(tableRef: any, ownerId: string) {
-  return tableRef
-    .withIndex("by_owner_entity", (range: any) => range.eq("ownerId", ownerId))
-    .order("asc")
-    .collect();
-}
-
-function sortEntities(items: JsonRecord[]) {
-  return items.sort((a, b) => {
-    const order = Number(a.order ?? 0) - Number(b.order ?? 0);
-    return order || String(a.id).localeCompare(String(b.id));
-  });
-}
-
-async function legacyState(ctx: any, ownerId: string) {
-  const chunks = await ctx.db.workspaceChunks
+  const existingChunks = await ctx.db.replacementWorkspaceChunks
     .withIndex("by_owner_part", (range: any) => range.eq("ownerId", ownerId))
     .order("asc")
     .collect();
-  if (!chunks.length) return JSON.stringify(createSeed());
-  const latestByPart = new Map<string, any>();
-  for (const chunk of chunks) {
-    const current = latestByPart.get(chunk.part);
-    if (!current || chunk.updatedAt > current.updatedAt) latestByPart.set(chunk.part, chunk);
+  const document = JSON.stringify(snapshot.document);
+  if (document.length > MAX_REPLACEMENT_WORKSPACE_SIZE) throw new Error("Replacement Workspace data is too large");
+  const chunks: string[] = [];
+  for (let start = 0; start < document.length; start += REPLACEMENT_CHUNK_SIZE) chunks.push(document.slice(start, start + REPLACEMENT_CHUNK_SIZE));
+  for (let index = 0; index < chunks.length; index += 1) {
+    const part = String(index).padStart(6, "0");
+    const existing = existingChunks.find((chunk: any) => chunk.part === part);
+    if (existing) await ctx.db.replacementWorkspaceChunks.update(existing.id, { data: chunks[index] });
+    else await ctx.db.replacementWorkspaceChunks.insert({ ownerId, part, data: chunks[index] });
   }
-  return [...latestByPart.values()]
-    .sort((left, right) => left.part.localeCompare(right.part))
-    .map((chunk) => chunk.data)
-    .join("");
-}
-
-async function normalizedState(ctx: any, ownerId: string, meta?: any) {
-  const workspace = meta ?? await ctx.db.workspaceMeta
-    .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
-    .first();
-  if (!workspace) return legacyState(ctx, ownerId);
-
-  const [spaces, areas, projects, headings, calendarEvents, tasks, checklistItems] = await Promise["al" + "l"]([
-    collectOwned(ctx.db.spaces, ownerId),
-    collectOwned(ctx.db.areas, ownerId),
-    collectOwned(ctx.db.projects, ownerId),
-    collectOwned(ctx.db.headings, ownerId),
-    collectOwned(ctx.db.calendarEvents, ownerId),
-    collectOwned(ctx.db.tasks, ownerId),
-    collectOwned(ctx.db.checklistItems, ownerId)
-  ]);
-  const checklistByTask = new Map<string, JsonRecord[]>();
-  for (const row of checklistItems) {
-    const list = checklistByTask.get(row.taskId) ?? [];
-    list.push({ id: row.entityId, ...parseRecord(row.data), __position: row.position });
-    checklistByTask.set(row.taskId, list);
-  }
-  const inflate = (rows: any[]) => sortEntities(rows.map((row) => ({ id: row.entityId, ...parseRecord(row.data) })));
-  const taskRecords = inflate(tasks).map((task) => ({
-    ...task,
-    checklist: (checklistByTask.get(String(task.id)) ?? [])
-      .sort((a, b) => String(a.__position).localeCompare(String(b.__position)))
-      .map(({ __position: _position, ...item }) => item)
-  }));
-  return JSON.stringify({
-    version: Number(workspace.version) || 7,
-    updatedAt: workspace.stateUpdatedAt,
-    syncMutationId: workspace.lastMutationId,
-    settings: parseRecord(workspace.settingsData),
-    spaces: inflate(spaces),
-    areas: inflate(areas),
-    projects: inflate(projects),
-    headings: inflate(headings),
-    calendarEvents: inflate(calendarEvents),
-    tasks: taskRecords
-  });
-}
-
-async function replaceChecklist(ctx: any, ownerId: string, taskId: string, checklist: unknown) {
-  if (!Array.isArray(checklist) || checklist.length > 200) throw new Error("Invalid checklist");
-  const existing = await ctx.db.checklistItems
-    .withIndex("by_owner_task", (range: any) => range.eq("ownerId", ownerId).eq("taskId", taskId))
-    .collect();
-  const byId = new Map(existing.map((row: any) => [row.entityId, row]));
-  const nextIds = new Set<string>();
-  for (let index = 0; index < checklist.length; index += 1) {
-    const rawItem = checklist[index];
-    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) throw new Error("Invalid checklist item");
-    const item = rawItem as JsonRecord;
-    const id = entityId(item);
-    nextIds.add(id);
-    const data = { ...item };
-    delete data.id;
-    const row = byId.get(id) as any;
-    const position = String(index).padStart(6, "0");
-    if (row) await ctx.db.checklistItems.update(row.id, { data: serializeRecord(data), position });
-    else await ctx.db.checklistItems.insert({ ownerId, entityId: id, taskId, position, data: serializeRecord(data) });
-  }
-  for (const row of existing) if (!nextIds.has(row.entityId)) await ctx.db.checklistItems.delete(row.id);
-}
-
-async function putEntity(ctx: any, ownerId: string, kind: EntityKind, id: string, patch: JsonRecord) {
-  if (!id || id.length > 500 || !patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid Objects change");
-  const tombstone = await ctx.db.tombstones
-    .withIndex("by_owner_kind_entity", (range: any) => range.eq("ownerId", ownerId).eq("kind", kind).eq("entityId", id))
-    .first();
-  if (tombstone) throw new Error("This item was permanently deleted");
-
-  const tableRef = entityTable(ctx, kind);
-  const existing = await findOwned(tableRef, ownerId, id);
-  const current = existing ? parseRecord(existing.data) : {};
-  const next = { ...current, ...patch };
-  delete next.id;
-  if (kind === "tasks" && Object.prototype.hasOwnProperty.call(next, "checklist")) {
-    await replaceChecklist(ctx, ownerId, id, next.checklist);
-    delete next.checklist;
-  }
-  const data = serializeRecord(next);
-  if (existing) await tableRef.update(existing.id, { data });
-  else await tableRef.insert({ ownerId, entityId: id, data });
-}
-
-async function deleteEntity(ctx: any, ownerId: string, kind: EntityKind, id: string) {
-  if (!id || id.length > 500) throw new Error("Invalid Objects item id");
-  const tableRef = entityTable(ctx, kind);
-  const existing = await findOwned(tableRef, ownerId, id);
-  if (existing) await tableRef.delete(existing.id);
-  if (kind === "tasks") {
-    const checklist = await ctx.db.checklistItems
-      .withIndex("by_owner_task", (range: any) => range.eq("ownerId", ownerId).eq("taskId", id))
-      .collect();
-    for (const row of checklist) await ctx.db.checklistItems.delete(row.id);
-  }
-  const tombstone = await ctx.db.tombstones
-    .withIndex("by_owner_kind_entity", (range: any) => range.eq("ownerId", ownerId).eq("kind", kind).eq("entityId", id))
-    .first();
-  const deletedAt = new Date().toISOString();
-  if (tombstone) await ctx.db.tombstones.update(tombstone.id, { deletedAt });
-  else await ctx.db.tombstones.insert({ ownerId, kind, entityId: id, deletedAt });
-}
-
-async function initializeState(ctx: any, ownerId: string, serialized: string) {
-  const existingMeta = await ctx.db.workspaceMeta
-    .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
-    .first();
-  if (existingMeta) return existingMeta;
-  const state = parseState(serialized, false);
-  for (const kind of ENTITY_KINDS) {
-    const items = state[kind] as JsonRecord[];
-    for (const item of items) {
-      const id = entityId(item);
-      const data = { ...item };
-      delete data.id;
-      if (kind === "tasks") {
-        const checklist = Array.isArray(data.checklist) ? data.checklist : [];
-        delete data.checklist;
-        for (let index = 0; index < checklist.length; index += 1) {
-          const checklistItem = checklist[index] as JsonRecord;
-          const checklistId = entityId(checklistItem);
-          const checklistData = { ...checklistItem };
-          delete checklistData.id;
-          await ctx.db.checklistItems.insert({
-            ownerId,
-            entityId: checklistId,
-            taskId: id,
-            position: String(index).padStart(6, "0"),
-            data: serializeRecord(checklistData)
-          });
-        }
-      }
-      await entityTable(ctx, kind).insert({ ownerId, entityId: id, data: serializeRecord(data) });
-    }
-  }
-  const updatedAt = new Date().toISOString();
-  const id = await ctx.db.workspaceMeta.insert({
+  for (const existing of existingChunks) if (Number(existing.part) >= chunks.length) await ctx.db.replacementWorkspaceChunks.delete(existing.id);
+  const meta = {
     ownerId,
-    version: "7",
-    settingsData: serializeRecord(state.settings),
-    stateUpdatedAt: updatedAt,
-    lastMutationId: "migration"
-  });
-  return ctx.db.workspaceMeta.get(id);
+    revision: String(snapshot.revision),
+    mutationId: snapshot.document.sync.lastMutationId ?? "",
+    syncUpdatedAt: snapshot.document.sync.updatedAt,
+    partCount: String(chunks.length),
+  };
+  if (existingMeta) await ctx.db.replacementWorkspaceMeta.update(existingMeta.id, meta);
+  else await ctx.db.replacementWorkspaceMeta.insert(meta);
 }
 
-function parseChanges(serialized: string): ChangeSet {
-  if (typeof serialized !== "string" || serialized.length > MAX_STATE_SIZE) throw new Error("Objects changes are too large");
-  const value: unknown = JSON.parse(serialized);
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Objects changes");
-  const changes = value as ChangeSet;
-  if (typeof changes.mutationId !== "string" || !changes.mutationId || changes.mutationId.length > 200) throw new Error("Invalid mutation id");
-  return changes;
-}
-
-async function applyChangeSet(ctx: any, ownerId: string, changes: ChangeSet) {
-  let meta = await ctx.db.workspaceMeta
-    .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
-    .first();
-  if (!meta) meta = await initializeState(ctx, ownerId, await legacyState(ctx, ownerId));
-
-  for (const kind of ENTITY_KINDS) {
-    const deletedIds = changes.deletes?.[kind] ?? [];
-    if (!Array.isArray(deletedIds) || deletedIds.length > 10_000) throw new Error("Invalid Objects deletions");
-    for (const id of deletedIds) await deleteEntity(ctx, ownerId, kind, id);
-    const patches = changes.entities?.[kind] ?? [];
-    if (!Array.isArray(patches) || patches.length > 10_000) throw new Error("Invalid Objects changes");
-    for (const change of patches) await putEntity(ctx, ownerId, kind, change.id, change.patch);
-  }
-
-  const currentSettings = parseRecord(meta.settingsData);
-  const settings = changes.settings && typeof changes.settings === "object" && !Array.isArray(changes.settings)
-    ? { ...currentSettings, ...changes.settings }
-    : currentSettings;
-  const updatedAt = new Date().toISOString();
-  await ctx.db.workspaceMeta.update(meta.id, {
-    version: "7",
-    settingsData: serializeRecord(settings),
-    stateUpdatedAt: updatedAt,
-    lastMutationId: changes.mutationId
-  });
-  return JSON.stringify({ updatedAt, mutationId: changes.mutationId });
+function newServerWorkspace(now: string) {
+  const document = createEmptyWorkspace(now);
+  const spaceId = `space-${now}-${Math.random().toString(36).slice(2, 10)}`;
+  document.spaces.push({ id: spaceId, title: "Personal", color: "#e49b3c", pinned: true, order: 0 });
+  document.settings.defaultSpaceId = spaceId;
+  return document;
 }
 
 export default capsule({
@@ -486,61 +261,20 @@ export default capsule({
   },
 
   queries: {
-    state: query(async (ctx) => {
-      return normalizedState(ctx, ctx.auth.userId);
-    }),
     replacementWorkspace: query(async (ctx) => {
       const ownerId = replacementOwner(ctx);
       const snapshot = await replacementSnapshot(ctx, ownerId);
       return snapshot ? JSON.stringify(snapshot) : null;
-    })
+    }),
+    replacementOwnerIdentity: query((ctx) => replacementOwner(ctx))
   },
 
   mutations: {
-    initializeNormalized: mutation(async (ctx, serialized: string) => {
-      const meta = await initializeState(ctx, ctx.auth.userId, serialized);
-      return normalizedState(ctx, ctx.auth.userId, meta);
-    }),
-    applyChanges: mutation(async (ctx, serialized: string) =>
-      applyChangeSet(ctx, ctx.auth.userId, parseChanges(serialized))
-    ),
     saveReplacementWorkspace: mutation(async (ctx, serialized: string) => {
       const ownerId = replacementOwner(ctx);
       const current = await replacementSnapshot(ctx, ownerId);
       const resolved = resolveSyncCommand(current, parseReplacementCommand(serialized), new Date().toISOString());
-      if (resolved.next) {
-        const existingMeta = await ctx.db.replacementWorkspaceMeta
-          .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
-          .first();
-        const existingChunks = await ctx.db.replacementWorkspaceChunks
-          .withIndex("by_owner_part", (range: any) => range.eq("ownerId", ownerId))
-          .order("asc")
-          .collect();
-        const document = JSON.stringify(resolved.next.document);
-        if (document.length > MAX_REPLACEMENT_WORKSPACE_SIZE) throw new Error("Replacement Workspace data is too large");
-        const chunks = [] as string[];
-        for (let start = 0; start < document.length; start += REPLACEMENT_CHUNK_SIZE) {
-          chunks.push(document.slice(start, start + REPLACEMENT_CHUNK_SIZE));
-        }
-        for (let index = 0; index < chunks.length; index += 1) {
-          const part = String(index).padStart(6, "0");
-          const existing = existingChunks.find((chunk: any) => chunk.part === part);
-          if (existing) await ctx.db.replacementWorkspaceChunks.update(existing.id, { data: chunks[index] });
-          else await ctx.db.replacementWorkspaceChunks.insert({ ownerId, part, data: chunks[index] });
-        }
-        for (const existing of existingChunks) {
-          if (Number(existing.part) >= chunks.length) await ctx.db.replacementWorkspaceChunks.delete(existing.id);
-        }
-        const meta = {
-          ownerId,
-          revision: String(resolved.next.revision),
-          mutationId: resolved.next.document.sync.lastMutationId ?? "",
-          syncUpdatedAt: resolved.next.document.sync.updatedAt,
-          partCount: String(chunks.length)
-        };
-        if (existingMeta) await ctx.db.replacementWorkspaceMeta.update(existingMeta.id, meta);
-        else await ctx.db.replacementWorkspaceMeta.insert(meta);
-      }
+      if (resolved.next) await writeReplacementSnapshot(ctx, ownerId, resolved.next);
       return JSON.stringify(resolved.result);
     })
   },
@@ -555,17 +289,31 @@ export default capsule({
     captureTask: endpoint({ method: "POST", path: "/api/tasks" }, async (ctx, req) => {
       if (!ctx.auth.isAuthenticated) return json({ ok: false, error: "Authentication required" }, { status: 401 });
       try {
+        const ownerId = replacementOwner(ctx);
         const input = await req.json<Record<string, unknown>>();
-        let meta = await ctx.db.workspaceMeta
-          .withIndex("by_owner", (range) => range.eq("ownerId", ctx.auth.userId))
-          .first();
-        if (!meta) meta = await initializeState(ctx, ctx.auth.userId, await legacyState(ctx, ctx.auth.userId));
-        const state = parseState(await normalizedState(ctx, ctx.auth.userId, meta), false);
-        const task = addCapturedTask(state, input);
-        await putEntity(ctx, ctx.auth.userId, "tasks", entityId(task), task);
-        const updatedAt = new Date().toISOString();
-        await ctx.db.workspaceMeta.update(meta.id, { stateUpdatedAt: updatedAt, lastMutationId: `api-${entityId(task)}` });
-        return json({ ok: true, task }, { status: 201 });
+        const headerIdentity = req.headers.get("idempotency-key");
+        if (!input.submissionId && headerIdentity) input.submissionId = headerIdentity;
+        const now = new Date().toISOString();
+        const requestedTimeZone = input.timeZone ?? req.headers.get("x-time-zone") ?? "UTC";
+        if (typeof requestedTimeZone !== "string") return json({ ok: false, errors: ["timeZone must be an IANA time-zone name."] }, { status: 400 });
+        let today: string;
+        try {
+          today = dateInTimeZone(new Date(now), requestedTimeZone);
+        } catch {
+          return json({ ok: false, errors: ["timeZone must be an IANA time-zone name such as Europe/Athens."] }, { status: 400 });
+        }
+        const current = await replacementSnapshot(ctx, ownerId);
+        const initial = current?.document ?? newServerWorkspace(now);
+        let sequence = 0;
+        const captured = captureIntoSnapshot(current, initial, input, {
+          now,
+          today,
+          createId: (kind) => `${kind}-${Date.now().toString(36)}-${++sequence}-${Math.random().toString(36).slice(2, 8)}`,
+        });
+        if (captured.status === "conflict") return json({ ok: false, error: "The Workspace changed. Retry this same submission." }, { status: 409 });
+        if (captured.status === "invalid") return json({ ok: false, errors: captured.errors }, { status: 400 });
+        if (captured.next) await writeReplacementSnapshot(ctx, ownerId, captured.next);
+        return json({ ok: true, duplicate: captured.status === "duplicate", toDo: captured.toDo }, { status: captured.status === "duplicate" ? 200 : 201 });
       } catch (error) {
         return json({ ok: false, error: error instanceof Error ? error.message : "Invalid request" }, { status: 400 });
       }

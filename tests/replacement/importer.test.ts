@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createEmptyWorkspace, createWorkspace, FULL_IMPORT_CONFIRMATION } from "../../shared/replacement/workspace.ts";
+import { createEmptyWorkspace, createWorkspace, exportPortableBackup, FULL_IMPORT_CONFIRMATION } from "../../shared/replacement/workspace.ts";
 
 function deterministicWorkspace() {
   const counters = new Map<string, number>();
@@ -14,6 +14,30 @@ function deterministicWorkspace() {
     },
   });
 }
+
+test("a current portable backup round trip preserves all supported Workspace data and relationships", () => {
+  const source = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
+  source.spaces.push({ id: "space-work", title: "Work", color: "#5577dd", pinned: true, order: 0 });
+  source.settings.defaultSpaceId = "space-work";
+  source.settings.theme = "dark";
+  source.settings.launchRules.push({ id: "rule-work", spaceId: "space-work", weekdays: [1, 2, 3, 4, 5], start: "09:00", end: "17:30", order: 0 });
+  source.tags.push({ id: "tag-focus", title: "Focus", order: 0 });
+  source.toDos.push({
+    id: "todo-review", title: "Review", notes: "Keep the history", checklist: [],
+    location: { kind: "unfiled", spaceId: "space-work" }, schedule: { kind: "scheduled", date: "2026-07-20", evening: false },
+    reminder: { at: "2026-07-20T08:30:00.000Z", sentAt: null }, deadline: "2026-07-21", outcome: "completed",
+    trashedAt: "2026-07-21T12:00:00.000Z", logbookAt: "2026-07-20T12:00:00.000Z", tags: ["tag-focus"], occurrence: null,
+    createdAt: "2026-07-19T08:00:00.000Z", completedAt: "2026-07-20T11:00:00.000Z", order: 0,
+  });
+  source.permanentDeletions.push({ entityKind: "toDo", entityId: "todo-deleted", deletedAt: "2026-07-18T08:00:00.000Z" });
+
+  const target = deterministicWorkspace();
+  const result = target.importPortableBackup(exportPortableBackup(source), FULL_IMPORT_CONFIRMATION);
+
+  assert.equal(result.status, "changed");
+  const imported = target.read();
+  assert.deepEqual({ ...imported, sync: source.sync }, source);
+});
 
 test("full import requires exact confirmation and malformed JSON leaves the Workspace unchanged", () => {
   const workspace = deterministicWorkspace();
@@ -28,6 +52,49 @@ test("full import requires exact confirmation and malformed JSON leaves the Work
   assert.equal(malformed.status, "rejected");
   assert.equal(malformed.outcome, "import-rejected");
   assert.equal(malformed.report.rejected, 1);
+  assert.deepEqual(workspace.read(), before);
+});
+
+test("a structurally malformed current backup is rejected without throwing or replacing data", () => {
+  const workspace = deterministicWorkspace();
+  const before = workspace.read();
+  const malformedCurrent = JSON.stringify({
+    format: "objects-workspace",
+    version: 1,
+    settings: {},
+    spaces: [], areas: [], projects: [], headings: [], tags: [], toDos: [{}], repeatingTemplates: [],
+    projectClosures: [], calendarEvents: [], permanentDeletions: [], captureReceipts: [],
+  });
+
+  const result = workspace.importPortableBackup(malformedCurrent, FULL_IMPORT_CONFIRMATION);
+
+  assert.equal(result.status, "rejected");
+  assert.deepEqual(workspace.read(), before);
+});
+
+test("a current backup with invalid settings and entity enums is rejected atomically", () => {
+  const workspace = deterministicWorkspace();
+  const before = workspace.read();
+  const malformed = createEmptyWorkspace("2026-07-19T08:00:00.000Z") as unknown as Record<string, unknown>;
+  const settings = malformed.settings as Record<string, unknown>;
+  settings.theme = "purple";
+  settings.weekStartsOn = 9;
+  settings.groupToday = "yes";
+  malformed.toDos = [{
+    id: "todo-bad", title: "Bad", notes: "", checklist: [],
+    location: { kind: "unfiled", spaceId: "space-1" }, schedule: { kind: "later" },
+    reminder: null, deadline: null, outcome: "maybe", trashedAt: null, logbookAt: null,
+    tags: [], occurrence: null, createdAt: "2026-07-19T08:00:00.000Z", completedAt: null, order: 0,
+  }];
+  (malformed.spaces as unknown[]).push({ id: "space-1", title: "Personal", color: "#000000", pinned: true, order: 0 });
+  settings.defaultSpaceId = "space-1";
+
+  const result = workspace.importPortableBackup(JSON.stringify(malformed), FULL_IMPORT_CONFIRMATION);
+
+  assert.equal(result.status, "rejected");
+  assert.ok(result.errors.some((error) => error.includes("appearance")));
+  assert.ok(result.errors.some((error) => error.includes("weekday")));
+  assert.ok(result.errors.some((error) => error.includes("Outcome")));
   assert.deepEqual(workspace.read(), before);
 });
 

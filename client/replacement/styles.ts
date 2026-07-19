@@ -165,7 +165,7 @@ export const replacementStyles = `
   .replacement-search { width: min(270px, 45%); display: flex; align-items: center; gap: 8px; border: 1px solid #d1d1cc; border-radius: 10px; padding: 9px 11px; color: #676863; background: white; text-align: left; cursor: pointer; }
   .replacement-search span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .replacement-search kbd { border-radius: 5px; padding: 2px 5px; color: #858680; background: #efefec; font-size: 10px; }
-  .replacement-quick-find-dialog::part(dialog) { width: min(calc(100vw - 24px), 680px); }
+  .replacement-quick-find-dialog { width: min(calc(100vw - 24px), 680px); }
   .replacement-quick-find { width: min(100%, 680px); max-height: min(760px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
   .replacement-quick-find > header { margin: 0; padding: 18px 18px 10px; }
   .replacement-quick-find-input { display: grid; gap: 6px; padding: 0 18px 14px; color: #686964; font-size: 12px; font-weight: 650; }
@@ -215,8 +215,8 @@ export const replacementStyles = `
   .replacement-context-menu button:hover, .replacement-context-menu button:focus-visible { background: #eaf2fc; outline: none; }
   .replacement-context-menu button.danger { color: #a23535; }
   .replacement-overlay { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; background: rgba(25,26,24,.35); backdrop-filter: blur(4px); }
-  .replacement-wa-dialog::part(dialog) { width: min(calc(100vw - 24px), 470px); padding: 0; border: 0; background: transparent; box-shadow: none; }
-  .replacement-wa-dialog::part(body) { padding: 0; }
+  .replacement-wa-dialog { width: min(calc(100vw - 24px), 470px); max-width: none; max-height: calc(100dvh - 24px); padding: 0; border: 0; border-radius: 20px; background: transparent; box-shadow: none; overflow: visible; }
+  .replacement-wa-dialog::backdrop { background: rgba(22, 24, 22, .48); backdrop-filter: blur(3px); }
   .replacement-dialog { width: min(100%, 470px); max-height: min(680px, calc(100dvh - 40px)); overflow: auto; border: 1px solid #d8d8d3; border-radius: 18px; padding: 18px; color: #292a27; background: #fafaf8; box-shadow: 0 24px 70px rgba(0,0,0,.28); }
   .replacement-dialog > header { display: flex; align-items: start; justify-content: space-between; margin-bottom: 14px; }
   .replacement-dialog h2 { margin: 0; font-size: 24px; }
@@ -228,7 +228,39 @@ export const replacementStyles = `
   .replacement-choice-list input, .replacement-tag-form input { width: 100%; border: 1px solid #d1d1cc; border-radius: 9px; padding: 10px; color: #242522; background: white; }
   .replacement-setting-row { display: grid; gap: 7px; margin-top: 14px; color: #686964; font-size: 12px; font-weight: 650; }
   .replacement-setting-row select { width: 100%; border: 1px solid #d1d1cc; border-radius: 9px; padding: 10px; color: #242522; background: white; }
-  .replacement-repeat-dialog::part(dialog) { width: min(calc(100vw - 24px), 640px); }
+  .replacement-settings-dialog { width: min(100%, 760px); max-height: min(820px, calc(100dvh - 32px)); }
+  .replacement-settings-modal { width: min(calc(100vw - 24px), 760px); }
+  .replacement-settings-tabs { display: flex; gap: 5px; margin-bottom: 16px; padding: 4px; border-radius: 11px; background: #e9e9e5; overflow-x: auto; }
+  .replacement-settings-tabs button { min-height: 38px; flex: 1; border: 0; border-radius: 8px; padding: 7px 10px; background: transparent; white-space: nowrap; cursor: pointer; }
+  .replacement-settings-tabs button.active { background: white; box-shadow: 0 1px 4px rgba(0,0,0,.09); font-weight: 700; }
+  .replacement-settings-panel { display: grid; gap: 12px; }
+  .replacement-settings-card { border: 1px solid #deded9; border-radius: 13px; padding: 14px; background: white; }
+  .replacement-settings-card h3 { margin: 0 0 5px; font-size: 15px; }
+  .replacement-settings-card > p { margin: 0 0 12px; color: #686964; font-size: 12px; line-height: 1.5; }
+  .replacement-settings-card button:not(.replacement-button):not(.replacement-danger-button), .replacement-file-button { border: 1px solid #d2d2cd; border-radius: 8px; padding: 7px 9px; color: inherit; background: #f7f7f4; cursor: pointer; }
+  .replacement-settings-card button.danger { color: #a23535 !important; }
+  .replacement-settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+  .replacement-file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .replacement-import-box { margin-top: 12px; border: 1px solid #e4bcbc; border-radius: 11px; padding: 12px; background: #fff7f7; }
+  .replacement-import-box p { margin: 0 0 9px; color: #703c3c; font-size: 12px; line-height: 1.5; }
+  .replacement-import-box > input { width: 100%; border: 1px solid #d1a8a8; border-radius: 9px; padding: 9px; color: #242522; background: white; }
+  .replacement-space-editors, .replacement-launch-rules, .replacement-tag-editors { display: grid; gap: 8px; margin-bottom: 10px; }
+  .replacement-space-editor { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
+  .replacement-space-editor > input[type="color"] { width: 38px; height: 38px; border: 0; padding: 2px; background: transparent; }
+  .replacement-space-editor > input:not([type="color"]), .replacement-settings-card form input, .replacement-tag-editors input { min-width: 0; border: 1px solid #d1d1cc; border-radius: 8px; padding: 8px 9px; color: #242522; background: white; }
+  .replacement-space-editor > label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+  .replacement-launch-rule { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(210px, 1.5fr) 105px 105px auto; align-items: end; gap: 8px; border-top: 1px solid #e4e4df; padding-top: 10px; }
+  .replacement-launch-rule > label { display: grid; gap: 5px; color: #686964; font-size: 11px; font-weight: 650; }
+  .replacement-launch-rule select, .replacement-launch-rule input[type="time"] { width: 100%; min-width: 0; border: 1px solid #d1d1cc; border-radius: 8px; padding: 8px; color: #242522; background: white; }
+  .replacement-launch-rule fieldset { display: flex; gap: 3px; margin: 0; border: 0; padding: 0; }
+  .replacement-launch-rule legend { color: #686964; font-size: 11px; font-weight: 650; }
+  .replacement-launch-rule fieldset label { display: grid; place-items: center; gap: 2px; font-size: 10px; }
+  .replacement-settings-card form { display: flex; gap: 8px; }
+  .replacement-settings-card form input { flex: 1; }
+  .replacement-tag-editors { margin-top: 10px; }
+  .replacement-tag-editors > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+  .replacement-settings-card code { overflow-wrap: anywhere; border-radius: 4px; padding: 1px 4px; background: #eeeeea; }
+  .replacement-repeat-dialog { width: min(calc(100vw - 24px), 640px); }
   .replacement-repeat-editor { width: min(100%, 640px); }
   .replacement-repeat-editor > label, .replacement-repeat-grid label { display: grid; gap: 6px; margin-bottom: 12px; color: #686964; font-size: 12px; font-weight: 650; }
   .replacement-repeat-editor input:not([type="checkbox"]), .replacement-repeat-editor select, .replacement-repeat-editor textarea { width: 100%; border: 1px solid #d1d1cc; border-radius: 9px; padding: 9px 10px; color: #242522; background: white; font: inherit; }
@@ -295,6 +327,12 @@ export const replacementStyles = `
     .replacement-selection-toolbar button { min-height: 44px; }
     .replacement-dialog { align-self: end; width: 100%; max-height: min(78dvh, 680px); border-radius: 20px 20px 8px 8px; padding-bottom: max(18px, env(safe-area-inset-bottom)); }
     .replacement-repeat-grid { grid-template-columns: 1fr; }
+    .replacement-settings-dialog { max-height: 88dvh; }
+    .replacement-settings-tabs button { flex: none; }
+    .replacement-space-editor { grid-template-columns: 38px minmax(0, 1fr); }
+    .replacement-space-editor > label, .replacement-space-editor > button { grid-column: auto; }
+    .replacement-launch-rule { grid-template-columns: 1fr 1fr; }
+    .replacement-launch-rule > label:first-child, .replacement-launch-rule fieldset { grid-column: 1 / -1; }
     .replacement-repeat-row { grid-template-columns: 1fr; }
     .replacement-repeat-row > div { justify-content: start; }
     .replacement-blueprint-card { grid-template-columns: 1fr; }
@@ -313,6 +351,13 @@ export const replacementStyles = `
   .replacement-dark .replacement-tabs { background: #343531; }
   .replacement-dark .replacement-tag-filters button, .replacement-dark .replacement-entity-tools button { color: #ecece8; background: #1c1d1b; border-color: #454641; }
   .replacement-dark .replacement-search, .replacement-dark .replacement-choice-list > button, .replacement-dark .replacement-choice-list input, .replacement-dark .replacement-tag-form input, .replacement-dark .replacement-setting-row select { color: #ecece8; background: #1c1d1b; border-color: #454641; }
+  .replacement-dark .replacement-settings-tabs { background: #343531; }
+  .replacement-dark .replacement-settings-tabs button.active, .replacement-dark .replacement-settings-card { color: #ecece8; background: #242522; border-color: #454641; }
+  .replacement-dark .replacement-space-editor > input:not([type="color"]), .replacement-dark .replacement-settings-card form input, .replacement-dark .replacement-tag-editors input, .replacement-dark .replacement-launch-rule select, .replacement-dark .replacement-launch-rule input[type="time"], .replacement-dark .replacement-import-box > input { color: #ecece8; background: #1c1d1b; border-color: #454641; }
+  .replacement-dark .replacement-settings-card button:not(.replacement-button):not(.replacement-danger-button), .replacement-dark .replacement-file-button { color: #ecece8; background: #343531; border-color: #454641; }
+  .replacement-dark .replacement-import-box { background: #332525; border-color: #754c4c; }
+  .replacement-dark .replacement-import-box p { color: #e1b8b8; }
+  .replacement-dark .replacement-settings-card code { background: #343531; }
   .replacement-dark .replacement-search kbd, .replacement-dark .replacement-ics-import { color: #d8d9d3; background: #343531; }
   .replacement-dark .replacement-quick-find-input input, .replacement-dark .replacement-calendar-form input:not([type="checkbox"]), .replacement-dark .replacement-calendar-form select, .replacement-dark .replacement-calendar-editor input:not([type="checkbox"]), .replacement-dark .replacement-calendar-editor select, .replacement-dark .replacement-calendar-actions button { color: #ecece8; background: #1c1d1b; border-color: #454641; }
   .replacement-dark .replacement-quick-find-results button.active { background: #26384e; }

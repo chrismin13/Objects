@@ -11,10 +11,12 @@ import type {
 export type LakebedAdapterState = {
   adapter: WorkspaceSyncAdapter;
   loading: boolean;
+  ownerIdentity: string;
 };
 
 export function useLakebedWorkspaceAdapter(): LakebedAdapterState {
   const serializedSnapshot = useQuery<string | null>("replacementWorkspace");
+  const ownerIdentity = useQuery<string>("replacementOwnerIdentity");
   const saveWorkspace = useMutation<[serialized: string], string>("saveReplacementWorkspace");
 
   const adapter = useMemo<WorkspaceSyncAdapter>(() => ({
@@ -29,5 +31,5 @@ export function useLakebedWorkspaceAdapter(): LakebedAdapterState {
     },
   }), [serializedSnapshot, saveWorkspace]);
 
-  return { adapter, loading: serializedSnapshot === undefined };
+  return { adapter, loading: serializedSnapshot === undefined || ownerIdentity === undefined, ownerIdentity: ownerIdentity ?? "guest" };
 }

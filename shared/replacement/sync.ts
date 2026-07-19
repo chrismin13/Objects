@@ -95,6 +95,7 @@ export function resolveSyncCommand(
   }
 
   const nextDocument = copy(command.document);
+  nextDocument.captureReceipts = Array.isArray(nextDocument.captureReceipts) ? nextDocument.captureReceipts : [];
   nextDocument.permanentDeletions = mergeDeletionMarkers(current?.document ?? null, nextDocument);
   const recreated = nextDocument.permanentDeletions.filter((marker) => entityExists(nextDocument, marker));
   if (recreated.length) {

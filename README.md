@@ -26,8 +26,8 @@ Live app: [objects.lakebed.app](https://objects.lakebed.app)
 - Responsive desktop/mobile layouts and light, dark, and system themes
 - Installable PWA with standalone display and an offline application shell
 - JSON backup and guarded import
-- URL automation for add/show/search flows through parameters such as `title`, `notes`, `when`, `deadline`, `tags`, `checklist`, `list`, `status`, `view`, and `search`
-- An authenticated `POST /api/tasks` Lakebed endpoint
+- Stable URL capture and deep links for personal automation
+- An authenticated, retry-safe `POST /api/tasks` Lakebed endpoint
 
 ## Authentication and privacy
 
@@ -92,6 +92,31 @@ npx lakebed domains add objects.lakebed.app
 Open the hosted app and use **Settings → App**, the browser’s **Install app** command, or **Share → Add to Home Screen** on iPhone and iPad. The PWA opens in a standalone window, exposes Today/Inbox/New to-do shortcuts where supported, accepts shared text and links on supporting mobile platforms, and caches its application shell for offline startup. Authentication, live sync, and uncached account data still require a network connection; private Lakebed API, auth, and storage responses are deliberately excluded from the service-worker cache.
 
 Notification permission is requested only from the Settings button. Reminders use persistent service-worker notifications so they work on mobile browsers as well as desktop browsers, and tapping a notification opens its task. The reminder timer itself runs while Objects is open. Reliable delivery after the app is fully closed would require a hosted Web Push scheduler, which Lakebed capsules do not currently provide; browsers do not offer a portable, reliable local background timer.
+
+## Automation links and HTTP capture
+
+Open a capture link while signed in:
+
+```text
+/?capture=1&title=Call%20Maya&notes=Ask%20about%20the%20plan&when=tomorrow&tags=People,Focused
+```
+
+Capture links accept `title`, shared `text`, `url`, `notes`, `space`, `area`, `project`, `heading`, `tags`, `checklist`, `when`, `scheduledFor`, `evening`, `reminder`, and `deadline`. Location values are stable item IDs. `when` accepts `inbox`, `anytime`, `someday`, `today`, `tomorrow`, `this evening`, or a date in `YYYY-MM-DD` form. Objects adds a `submission` ID to browser capture links so a reload or temporary save failure does not create the same to-do twice.
+
+Direct links use these stable shapes:
+
+```text
+/?open=view&view=today
+/?open=space&id=SPACE_ID
+/?open=area&id=AREA_ID
+/?open=project&id=PROJECT_ID
+/?open=heading&id=HEADING_ID
+/?open=tag&id=TAG_ID
+/?open=toDo&id=TODO_ID
+/?open=repeatingTemplate&id=TEMPLATE_ID
+```
+
+Authenticated tools can send the same capture fields as JSON to `POST /api/tasks`. Send either an `Idempotency-Key` header or a `submissionId` JSON field. For relative dates such as `today` or `tomorrow`, also send an IANA `timeZone` field such as `Europe/Athens`, or the same value in an `X-Time-Zone` header. UTC is used when no time zone is supplied. Retry with the same idempotency value after a timeout or `409` response. The endpoint returns the existing to-do instead of creating a duplicate.
 
 ## Data model
 

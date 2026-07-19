@@ -235,6 +235,12 @@ export type SyncMetadata = {
   updatedAt: IsoDateTime;
 };
 
+export type CaptureReceipt = {
+  submissionId: string;
+  toDoId: EntityId;
+  createdAt: IsoDateTime;
+};
+
 export type WorkspaceDocument = {
   format: "objects-workspace";
   version: 1;
@@ -249,6 +255,7 @@ export type WorkspaceDocument = {
   projectClosures: ProjectClosure[];
   calendarEvents: CalendarEvent[];
   permanentDeletions: PermanentDeletion[];
+  captureReceipts: CaptureReceipt[];
   sync: SyncMetadata;
 };
 

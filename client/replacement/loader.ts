@@ -3,7 +3,28 @@ import { replacementRuntimeCompressed } from "./packed";
 import type { WorkspaceSyncAdapter } from "../../shared/replacement/sync";
 
 export type ReplacementRuntime = {
-  mountReplacement(root: Element, adapter: WorkspaceSyncAdapter, showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean>): () => void;
+  mountReplacement(
+    root: Element,
+    adapter: WorkspaceSyncAdapter,
+    showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean>,
+    deviceIdentity: string,
+    appControls: ReplacementAppControls,
+  ): () => void;
+};
+
+export type ReplacementPwaStatus = {
+  canPromptInstall: boolean;
+  installed: boolean;
+  ios: boolean;
+  updateAvailable: boolean;
+};
+
+export type ReplacementAppControls = {
+  accountName: string;
+  signOut: () => void;
+  getPwaStatus: () => ReplacementPwaStatus;
+  requestInstall: () => Promise<"accepted" | "dismissed" | "instructions" | "installed">;
+  applyUpdate: () => boolean;
 };
 
 function decodeBase64(value: string): Uint8Array {

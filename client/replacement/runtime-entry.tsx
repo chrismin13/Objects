@@ -6,6 +6,8 @@ import type { CalendarEvent, EntityId, HeadingLocation, Project, ProjectLocation
 import { agendaForView } from "../../shared/replacement/calendar";
 import { addDaysToDate as datePlus, dateInTimeZone } from "../../shared/replacement/dates";
 import { effectiveTagIdsForRepeatingTemplate, spaceIdForRepeatingTemplate } from "../../shared/replacement/location";
+import { captureInputFromUrl, type CapturedToDoInput } from "../../shared/replacement/capture";
+import { resolveAppearance, selectLaunchSpace, shouldRememberManualSpace, type DeviceSpacePreferences } from "../../shared/replacement/settings";
 import {
   directTargetUrl,
   moveQuickFindSelection,
@@ -28,6 +30,7 @@ import {
   DELETE_REPEATING_TEMPLATE_CONFIRMATION,
   createEmptyWorkspace,
   createWorkspace,
+  exportPortableBackup,
   repeatingRuleSummary,
   type WorkspaceChange,
   type WorkspaceView,
@@ -37,12 +40,58 @@ import type { WorkspaceSyncAdapter } from "../../shared/replacement/sync";
 import { changesForIntent, toDoActionForShortcut, touchActionForDistance, updateSelection, type InteractionSource, type SelectionState, type ToDoAction } from "./interactions";
 import { replacementStyles } from "./styles";
 import { destroyWorkspaceToDoSortable, mountWorkspaceToDoSortable } from "../ui/sortable";
-import { type OverlayElement, useWebAwesomeOverlay, WaDialog } from "../ui/webawesome";
 
 type BoundaryState = { failed: boolean };
 type Feedback = { text: string; error: boolean; undo?: WorkspaceUndo; undoDocument?: WorkspaceDocument };
+type ReplacementPwaStatus = { canPromptInstall: boolean; installed: boolean; ios: boolean; updateAvailable: boolean };
+type ReplacementAppControls = {
+  accountName: string;
+  signOut: () => void;
+  getPwaStatus: () => ReplacementPwaStatus;
+  requestInstall: () => Promise<"accepted" | "dismissed" | "instructions" | "installed">;
+  applyUpdate: () => boolean;
+};
 
-const QUICK_DRAFT_KEY = "objects-replacement-quick-draft";
+function useNativeDialog(ref: { current: HTMLDialogElement | null }, onClose: () => void, onOpen?: () => void): void {
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    const cancel = (event: Event) => { event.preventDefault(); onClose(); };
+    dialog.addEventListener("cancel", cancel);
+    dialog.showModal();
+    onOpen?.();
+    return () => {
+      dialog.removeEventListener("cancel", cancel);
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+}
+
+function deviceStorageKey(kind: "quick-draft" | "space-preferences" | "pending-capture", identity: string): string {
+  return `objects-replacement-${kind}:${identity}`;
+}
+
+function readDeviceSpacePreferences(identity: string): DeviceSpacePreferences {
+  try {
+    const value = JSON.parse(localStorage.getItem(deviceStorageKey("space-preferences", identity)) ?? "null") as Partial<DeviceSpacePreferences> | null;
+    return { launchRulesEnabled: Boolean(value?.launchRulesEnabled), manualSpaceId: typeof value?.manualSpaceId === "string" ? value.manualSpaceId : null };
+  } catch {
+    return { launchRulesEnabled: false, manualSpaceId: null };
+  }
+}
+
+function writeDeviceSpacePreferences(identity: string, preferences: DeviceSpacePreferences): void {
+  try { localStorage.setItem(deviceStorageKey("space-preferences", identity), JSON.stringify(preferences)); } catch { /* Storage can be unavailable in private browsing. */ }
+}
+
+function downloadPortableBackup(document: WorkspaceDocument, today: string): void {
+  const url = URL.createObjectURL(new Blob([exportPortableBackup(document)], { type: "application/json" }));
+  const anchor = globalThis.document.createElement("a");
+  anchor.href = url;
+  anchor.download = `objects-workspace-${today}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 
 class ReplacementLoadBoundary extends Component<{ children: ComponentChildren }, BoundaryState> {
   state: BoundaryState = { failed: false };
@@ -154,7 +203,7 @@ function groupWorkspaceItems(
   workspace: ReturnType<typeof workspaceFor>,
 ): Map<string, { title: string | null; items: Array<ToDo | Project> }> {
   const sections = new Map<string, { title: string | null; items: Array<ToDo | Project> }>();
-  const usesOrganizationSections = ["space", "area", "project"].includes(view.kind);
+  const usesOrganizationSections = ["space", "area", "project"].includes(view.kind) || (view.kind === "today" && document.settings.groupToday);
   for (const item of items) {
     let key = "view";
     let title: string | null = null;
@@ -307,8 +356,8 @@ function RepeatEditor({ target, document, today, runChange, close }: {
   const [projectContents, setProjectContents] = useState<RepeatingProjectContents>(() => template?.itemKind === "project"
     ? JSON.parse(JSON.stringify(template.projectContents)) as RepeatingProjectContents
     : { headings: [], toDos: [] });
-  const dialog = useRef<OverlayElement>(null);
-  useWebAwesomeOverlay(dialog, close);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useNativeDialog(dialog, close);
   const pattern: RepeatingPattern = { frequency, interval: Math.max(1, interval), weekdays: frequency === "weekly" ? weekdays : [] };
   const summary = repeatingRuleSummary(pattern, mode);
 
@@ -357,7 +406,7 @@ function RepeatEditor({ target, document, today, runChange, close }: {
   };
 
   const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  return <WaDialog ref={dialog} class="replacement-wa-dialog replacement-repeat-dialog" label="Repeat editor" without-header light-dismiss>
+  return <dialog ref={dialog} className="replacement-wa-dialog replacement-repeat-dialog" aria-label="Repeat editor" onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
     <form className="replacement-dialog replacement-repeat-editor" onSubmit={(event) => void save(event)}>
       <header><div><p className="replacement-kicker">Repeating Template</p><h2>{template ? "Edit future Occurrences" : source ? `Repeat this ${target.kind === "toDo" ? "to-do" : "Project"}` : "New repeating item"}</h2></div><button type="button" aria-label="Close repeat editor" onClick={close}>×</button></header>
       {target.kind === "direct" ? <label>Item type<select value={itemKind} onChange={(event) => { const kind = event.currentTarget.value as "toDo" | "project"; setItemKind(kind); setLocation(defaultRepeatLocation(document, kind)); }}><option value="toDo">To-do</option><option value="project">Project</option></select></label> : null}
@@ -374,7 +423,7 @@ function RepeatEditor({ target, document, today, runChange, close }: {
       <p className="replacement-muted">Changes here apply only to future Occurrences. Existing Occurrences keep their own content.</p>
       <button className="replacement-button" type="submit">{template ? "Save future defaults" : "Start repeating"}</button>
     </form>
-  </WaDialog>;
+  </dialog>;
 }
 
 function templateLocation(template: RepeatingTemplate, document: WorkspaceDocument): { space: string; parent: string } {
@@ -792,11 +841,11 @@ function ToDoActionDialog({ kind, count, ids, today, moveChoices, runIntent, clo
   runIntent: (source: InteractionSource, action: ToDoAction, ids: string[]) => Promise<boolean>;
   close: () => void;
 }) {
-  const dialog = useRef<OverlayElement>(null);
-  useWebAwesomeOverlay(dialog, close);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useNativeDialog(dialog, close);
   const run = (action: ToDoAction) => void runIntent("bulk", action, ids).then((saved) => { if (saved) close(); });
 
-  return <WaDialog ref={dialog} class="replacement-wa-dialog" label={kind === "move" ? "Move to" : kind === "schedule" ? "Schedule" : "Set Tags"} without-header light-dismiss>
+  return <dialog ref={dialog} className="replacement-wa-dialog" aria-label={kind === "move" ? "Move to" : kind === "schedule" ? "Schedule" : "Set Tags"} onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
     <section className="replacement-dialog" aria-labelledby="replacement-action-title">
       <header>
         <div><p className="replacement-kicker">{count} to-do{count === 1 ? "" : "s"}</p><h2 id="replacement-action-title">{kind === "move" ? "Move to" : kind === "schedule" ? "Schedule" : "Set Tags"}</h2></div>
@@ -817,7 +866,7 @@ function ToDoActionDialog({ kind, count, ids, today, moveChoices, runIntent, clo
         <label>Tag names, separated by commas<input name="tags" autoFocus placeholder="Home, Important" /></label><button className="replacement-button" type="submit">Apply Tags</button>
       </form>}
     </section>
-  </WaDialog>;
+  </dialog>;
 }
 
 function QuickFindDialog({ document, today, query, setQuery, choose, close }: {
@@ -828,19 +877,19 @@ function QuickFindDialog({ document, today, query, setQuery, choose, close }: {
   choose: (result: SearchResult) => void;
   close: () => void;
 }) {
-  const dialog = useRef<OverlayElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const results = useMemo(() => searchWorkspace(document, query, today), [document, query, today]);
   const activeIndex = Math.min(selectedIndex, Math.max(0, results.length - 1));
-  useWebAwesomeOverlay(dialog, close, () => input.current?.focus());
+  useNativeDialog(dialog, close, () => input.current?.focus());
   const grouped = new Map<string, Array<{ result: SearchResult; index: number }>>();
   results.forEach((result, index) => {
     const group = grouped.get(result.group) ?? [];
     group.push({ result, index });
     grouped.set(result.group, group);
   });
-  return <WaDialog ref={dialog} class="replacement-wa-dialog replacement-quick-find-dialog" label="Quick Find" without-header light-dismiss>
+  return <dialog ref={dialog} className="replacement-wa-dialog replacement-quick-find-dialog" aria-label="Quick Find" onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
     <section className="replacement-dialog replacement-quick-find" aria-labelledby="replacement-quick-find-title">
       <header><div><p className="replacement-kicker">Jump anywhere</p><h2 id="replacement-quick-find-title">Quick Find</h2></div><button type="button" aria-label="Close Quick Find" onClick={close}>×</button></header>
       <label className="replacement-quick-find-input">Search your whole Workspace
@@ -878,7 +927,7 @@ function QuickFindDialog({ document, today, query, setQuery, choose, close }: {
         {!results.length ? <div className="replacement-quick-find-empty"><strong>No results</strong><span>Try a title, note, checklist item, Tag, or list name.</span></div> : null}
       </div>
     </section>
-  </WaDialog>;
+  </dialog>;
 }
 
 type CalendarDraft = { title: string; spaceId: string; allDay: boolean; start: string; end: string };
@@ -928,13 +977,28 @@ function CalendarEventEditor({ event, spaces, runChange }: {
   </article>;
 }
 
-function WorkspaceSettingsDialog({ document, today, runChange, close }: {
+function WorkspaceSettingsDialog({
+  document, today, runChange, devicePreferences, setDevicePreferences,
+  backup, setBackup, confirmation, setConfirmation, importBackup, appControls, close,
+}: {
   document: WorkspaceDocument;
   today: string;
   runChange: (change: WorkspaceChange) => Promise<boolean>;
+  devicePreferences: DeviceSpacePreferences;
+  setDevicePreferences: (preferences: DeviceSpacePreferences) => void;
+  backup: string;
+  setBackup: (value: string) => void;
+  confirmation: string;
+  setConfirmation: (value: string) => void;
+  importBackup: () => Promise<{ ok: boolean; summary: string }>;
+  appControls: ReplacementAppControls;
   close: () => void;
 }) {
-  const dialog = useRef<OverlayElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [tab, setTab] = useState<"application" | "spaces" | "data">("application");
+  const [launchRules, setLaunchRules] = useState(() => document.settings.launchRules.map((rule) => ({ ...rule, weekdays: [...rule.weekdays] })));
+  const [importSummary, setImportSummary] = useState<{ ok: boolean; summary: string } | null>(null);
+  const [pwa, setPwa] = useState(() => appControls.getPwaStatus());
   const [draft, setDraft] = useState<CalendarDraft>({
     title: "",
     spaceId: document.settings.defaultSpaceId ?? document.spaces[0]?.id ?? "",
@@ -942,22 +1006,70 @@ function WorkspaceSettingsDialog({ document, today, runChange, close }: {
     start: `${today}T09:00`,
     end: `${today}T10:00`,
   });
-  useWebAwesomeOverlay(dialog, close);
-  return <WaDialog ref={dialog} class="replacement-wa-dialog" label="Settings" without-header light-dismiss>
-    <section className="replacement-dialog" aria-labelledby="replacement-settings-title">
+  useNativeDialog(dialog, close);
+  useEffect(() => {
+    const update = () => setPwa(appControls.getPwaStatus());
+    window.addEventListener("objects:pwa-status", update);
+    return () => window.removeEventListener("objects:pwa-status", update);
+  }, [appControls]);
+  const updateRule = (id: string, changes: Partial<WorkspaceDocument["settings"]["launchRules"][number]>) => {
+    setLaunchRules((current) => current.map((rule) => rule.id === id ? { ...rule, ...changes } : rule));
+  };
+  const requestNotifications = async () => {
+    if (document.settings.notifications) {
+      await runChange({ type: "updateSettings", changes: { notifications: false } });
+      return;
+    }
+    if (!("Notification" in window)) return;
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") await runChange({ type: "updateSettings", changes: { notifications: true } });
+  };
+  const pendingLogCount = [...document.toDos, ...document.projects]
+    .filter((item) => item.outcome !== "open" && !item.logbookAt && !item.trashedAt).length;
+  return <dialog ref={dialog} className="replacement-wa-dialog replacement-settings-modal" aria-label="Settings" onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
+    <section className="replacement-dialog replacement-settings-dialog" aria-labelledby="replacement-settings-title">
       <header><div><p className="replacement-kicker">Objects</p><h2 id="replacement-settings-title">Settings</h2></div><button type="button" aria-label="Close settings" onClick={close}>×</button></header>
-      <label className="replacement-setting-row">Appearance
-        <select autoFocus value={document.settings.theme} onChange={(event) => void runChange({ type: "setTheme", theme: event.currentTarget.value as WorkspaceDocument["settings"]["theme"] })}>
-          <option value="system">Follow this device</option><option value="light">Light</option><option value="dark">Dark</option>
-        </select>
-      </label>
-      <label className="replacement-setting-row">Log completed items
-        <select value={document.settings.logCompletedItems} onChange={(event) => void runChange({ type: "setLogbookPolicy", policy: event.currentTarget.value as WorkspaceDocument["settings"]["logCompletedItems"] })}>
-          <option value="immediately">Immediately</option><option value="daily">Daily</option><option value="manually">Manually</option>
-        </select>
-      </label>
-      <label className="replacement-setting-check"><input type="checkbox" checked={document.settings.showCalendar} onChange={(event) => void runChange({ type: "setShowCalendar", show: event.currentTarget.checked })} />Show calendar events in agenda views</label>
-      <section className="replacement-calendar-settings" aria-labelledby="replacement-calendar-title">
+      <nav className="replacement-settings-tabs" aria-label="Settings sections">
+        {(["application", "spaces", "data"] as const).map((name) => <button autoFocus={name === "application"} key={name} type="button" className={tab === name ? "active" : ""} aria-current={tab === name ? "page" : undefined} onClick={() => setTab(name)}>{name === "application" ? "Application" : name === "spaces" ? "Spaces" : "Data & automation"}</button>)}
+      </nav>
+
+      {tab === "application" ? <div className="replacement-settings-panel">
+        <section className="replacement-settings-card"><h3>Lakebed account</h3><p>Signed in as <strong>{appControls.accountName}</strong>.</p><button type="button" onClick={appControls.signOut}>Sign out</button></section>
+        <section className="replacement-settings-card"><h3>Appearance</h3><p>System changes with this device. Light and Dark stay fixed.</p><label className="replacement-setting-row">Color mode<select value={document.settings.theme} onChange={(event) => void runChange({ type: "setTheme", theme: event.currentTarget.value as WorkspaceDocument["settings"]["theme"] })}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></section>
+        <section className="replacement-settings-card"><h3>Preferences</h3>
+          <label className="replacement-setting-check"><input type="checkbox" checked={document.settings.groupToday} onChange={(event) => void runChange({ type: "updateSettings", changes: { groupToday: event.currentTarget.checked } })} />Group Today by Project or Area</label>
+          <label className="replacement-setting-check"><input type="checkbox" checked={document.settings.showCalendar} onChange={(event) => void runChange({ type: "setShowCalendar", show: event.currentTarget.checked })} />Show calendar events in agenda views</label>
+          <label className="replacement-setting-row">Week starts on<select value={document.settings.weekStartsOn} onChange={(event) => void runChange({ type: "updateSettings", changes: { weekStartsOn: Number(event.currentTarget.value) as 0 | 1 } })}><option value="1">Monday</option><option value="0">Sunday</option></select></label>
+          <label className="replacement-setting-row">Log completed items<select value={document.settings.logCompletedItems} onChange={(event) => void runChange({ type: "setLogbookPolicy", policy: event.currentTarget.value as WorkspaceDocument["settings"]["logCompletedItems"] })}><option value="immediately">Immediately</option><option value="daily">Daily</option><option value="manually">Manually</option></select></label>
+          {pendingLogCount ? <button type="button" onClick={() => void runChange({ type: "runDailyLogbook" })}>Log Completed Now ({pendingLogCount})</button> : null}
+        </section>
+        <section className="replacement-settings-card"><h3>Application</h3><p>{pwa.installed ? "Objects is installed on this device." : pwa.ios ? "Use Share → Add to Home Screen on iPhone and iPad." : "Install Objects from this button when the browser allows it, or use the browser menu."}</p><div className="replacement-settings-actions"><button type="button" disabled={pwa.installed} onClick={() => void appControls.requestInstall().then((result) => { if (result === "instructions") window.alert(pwa.ios ? "Use Share → Add to Home Screen." : "Use your browser menu → Install app."); })}>{pwa.installed ? "Installed" : pwa.canPromptInstall ? "Install Objects" : "Installation help"}</button>{pwa.updateAvailable ? <button className="replacement-button" type="button" onClick={() => { if (!appControls.applyUpdate()) window.location.reload(); }}>Update Objects</button> : null}<button className="replacement-button" type="button" onClick={() => void requestNotifications()}>{document.settings.notifications ? "Disable notifications" : "Enable notifications"}</button></div></section>
+      </div> : null}
+
+      {tab === "spaces" ? <div className="replacement-settings-panel">
+        <section className="replacement-settings-card"><h3>Default Space</h3><p>New unfiled work goes here when capture does not name a more specific Location.</p><label className="replacement-setting-row">Default Space<select value={document.settings.defaultSpaceId ?? ""} onChange={(event) => void runChange({ type: "setDefaultSpace", spaceId: event.currentTarget.value })}>{document.spaces.map((space) => <option value={space.id} key={space.id}>{space.title}</option>)}</select></label></section>
+        <section className="replacement-settings-card"><h3>Spaces</h3><div className="replacement-space-editors">{document.spaces.map((space) => <article className="replacement-space-editor" key={space.id}>
+          <input type="color" value={space.color} aria-label={`${space.title} color`} onInput={(event) => void runChange({ type: "updateSpace", id: space.id, changes: { color: event.currentTarget.value } })} />
+          <input value={space.title} aria-label="Space name" onChange={(event) => void runChange({ type: "updateSpace", id: space.id, changes: { title: event.currentTarget.value } })} />
+          <label><input type="checkbox" checked={space.pinned} onChange={(event) => void runChange({ type: "updateSpace", id: space.id, changes: { pinned: event.currentTarget.checked } })} />Sidebar</label>
+          {document.spaces.length > 1 ? <button className="danger" type="button" onClick={() => { const destination = document.spaces.find((item) => item.id !== space.id); if (destination && window.confirm(`Delete “${space.title}” and move its contents to “${destination.title}”?`)) void runChange({ type: "deleteSpace", id: space.id, moveToSpaceId: destination.id, confirmation: DELETE_SPACE_CONFIRMATION }); }}>Delete</button> : null}
+        </article>)}</div><button type="button" onClick={() => void runChange({ type: "createSpace", title: `Space ${document.spaces.length + 1}`, color: ["#5ba67a", "#b06bd3", "#e49b3c", "#5b7cfa"][document.spaces.length % 4] })}>Add Space</button></section>
+        <section className="replacement-settings-card"><h3>Opening Space on this device</h3><label className="replacement-setting-check"><input type="checkbox" checked={devicePreferences.launchRulesEnabled} onChange={(event) => setDevicePreferences({ ...devicePreferences, launchRulesEnabled: event.currentTarget.checked })} />Use launch rules on this device</label><label className="replacement-setting-row">Manual Space<select value={devicePreferences.manualSpaceId ?? document.settings.defaultSpaceId ?? document.spaces[0]?.id ?? ""} disabled={devicePreferences.launchRulesEnabled} onChange={(event) => setDevicePreferences({ ...devicePreferences, manualSpaceId: event.currentTarget.value })}>{document.spaces.map((space) => <option value={space.id} key={space.id}>{space.title}</option>)}</select></label><p>When rules are off, this choice is remembered only on this device.</p></section>
+        <section className="replacement-settings-card"><h3>Launch rules</h3><div className="replacement-launch-rules">{launchRules.map((rule) => <article key={rule.id} className="replacement-launch-rule">
+          <label>Space<select value={rule.spaceId} onChange={(event) => updateRule(rule.id, { spaceId: event.currentTarget.value })}>{document.spaces.map((space) => <option value={space.id} key={space.id}>{space.title}</option>)}</select></label>
+          <fieldset><legend>Weekdays</legend>{["S", "M", "T", "W", "T", "F", "S"].map((label, day) => <label key={day} title={["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day]}><input type="checkbox" checked={rule.weekdays.includes(day)} onChange={(event) => updateRule(rule.id, { weekdays: event.currentTarget.checked ? [...rule.weekdays, day].sort() : rule.weekdays.filter((item) => item !== day) })} />{label}</label>)}</fieldset>
+          <label>From<input type="time" value={rule.start} onInput={(event) => updateRule(rule.id, { start: event.currentTarget.value })} /></label><label>To<input type="time" value={rule.end} onInput={(event) => updateRule(rule.id, { end: event.currentTarget.value })} /></label>
+          <button className="danger" type="button" onClick={() => setLaunchRules((current) => current.filter((item) => item.id !== rule.id))}>Delete rule</button>
+        </article>)}</div><div className="replacement-settings-actions"><button type="button" onClick={() => setLaunchRules((current) => [...current, { id: `launchRule-${crypto.randomUUID()}`, spaceId: document.settings.defaultSpaceId ?? document.spaces[0]?.id ?? "", weekdays: [1, 2, 3, 4, 5], start: "09:00", end: "17:30", order: current.length }])}>Add rule</button><button className="replacement-button" type="button" onClick={() => void runChange({ type: "replaceLaunchRules", rules: launchRules })}>Save launch rules</button></div></section>
+      </div> : null}
+
+      {tab === "data" ? <div className="replacement-settings-panel">
+        <section className="replacement-settings-card"><h3>Portable backup</h3><p>Export includes repetition, history, Trash, settings, calendars, relationships, identities, and deletion markers.</p><div className="replacement-settings-actions"><button type="button" onClick={() => downloadPortableBackup(document, today)}>Export JSON</button><label className="replacement-file-button">Choose JSON<input type="file" accept="application/json,.json" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void file.text().then(setBackup); }} /></label></div>{backup ? <div className="replacement-import-box"><p>This full replacement cannot be merged. Type <strong>{FULL_IMPORT_CONFIRMATION}</strong> to deliberately replace the current Workspace.</p><input value={confirmation} onInput={(event) => setConfirmation(event.currentTarget.value)} placeholder={FULL_IMPORT_CONFIRMATION} aria-label="Full import confirmation" /><button className="replacement-danger-button" type="button" disabled={confirmation !== FULL_IMPORT_CONFIRMATION} onClick={() => void importBackup().then(setImportSummary)}>Replace Workspace</button></div> : null}{importSummary ? <div className={`replacement-report${importSummary.ok ? "" : " error"}`} role="status">{importSummary.summary}</div> : null}</section>
+        <section className="replacement-settings-card"><h3>Tags</h3><form onSubmit={(event) => { event.preventDefault(); const input = event.currentTarget.elements.namedItem("tag") as HTMLInputElement; void runChange({ type: "createTag", title: input.value }).then((saved) => { if (saved) input.value = ""; }); }}><input name="tag" placeholder="New Tag" aria-label="New Tag" /><button type="submit">Add</button></form><div className="replacement-tag-editors">{document.tags.map((tag) => <div key={tag.id}><input defaultValue={tag.title} aria-label={`Rename ${tag.title}`} onChange={(event) => void runChange({ type: "updateTag", id: tag.id, title: event.currentTarget.value })} /><button className="danger" type="button" onClick={() => { if (window.confirm(`Remove “${tag.title}” from every item?`)) void runChange({ type: "deleteTag", id: tag.id, confirmation: DELETE_TAG_CONFIRMATION }); }}>Remove</button></div>)}</div></section>
+        <section className="replacement-settings-card"><h3>Automation</h3><p>Capture link: <code>/?capture=1&amp;title=Call%20Maya&amp;when=tomorrow&amp;tags=People</code></p><p>Deep link: <code>/?open=toDo&amp;id=YOUR_ID</code></p><p>HTTP: authenticated <code>POST /api/tasks</code> with an <code>Idempotency-Key</code> header or <code>submissionId</code> field.</p></section>
+      </div> : null}
+
+      {tab === "application" ? <section className="replacement-calendar-settings" aria-labelledby="replacement-calendar-title">
         <h3 id="replacement-calendar-title">Calendar</h3><p>Events appear beside scheduled work, but they cannot be completed like to-dos.</p>
         <form className="replacement-calendar-form" onSubmit={(event) => {
           event.preventDefault();
@@ -972,9 +1084,9 @@ function WorkspaceSettingsDialog({ document, today, runChange, close }: {
           event.currentTarget.value = "";
         }} /></label>
         {document.calendarEvents.length ? <div className="replacement-calendar-editors"><h3>Saved events</h3>{document.calendarEvents.map((event) => <CalendarEventEditor key={event.id} event={event} spaces={document.spaces} runChange={runChange} />)}</div> : null}
-      </section>
+      </section> : null}
     </section>
-  </WaDialog>;
+  </dialog>;
 }
 
 type WorkspaceKeyboardOptions = {
@@ -1188,16 +1300,19 @@ function useWorkspaceDocument(adapter: WorkspaceSyncAdapter, onLoad: (document: 
   return { snapshot, setSnapshot, loaded, loadError, feedback, setFeedback, saving, pending, saveDocument, retrySave, runChanges, runChange, undo };
 }
 
-function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyncAdapter; showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean> }) {
+function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appControls }: { adapter: WorkspaceSyncAdapter; showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean>; deviceIdentity: string; appControls: ReplacementAppControls }) {
   const localToday = () => dateInTimeZone(new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const quickDraftKey = deviceStorageKey("quick-draft", deviceIdentity);
+  const pendingCaptureKey = deviceStorageKey("pending-capture", deviceIdentity);
+  const [devicePreferences, setDevicePreferencesState] = useState(() => readDeviceSpacePreferences(deviceIdentity));
   const [selectedView, setSelectedView] = useState<WorkspaceView>(() => ({ kind: "today", date: localToday() }));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [activeTagIds, setActiveTagIds] = useState<EntityId[]>([]);
-  const [draft, setDraft] = useState(() => localStorage.getItem(QUICK_DRAFT_KEY) ?? "");
+  const [draft, setDraft] = useState(() => localStorage.getItem(quickDraftKey) ?? "");
   const { snapshot, setSnapshot, loaded, loadError, feedback, setFeedback, saving, pending, saveDocument, retrySave, runChanges, runChange, undo } = useWorkspaceDocument(adapter, (document) => {
-    setActiveSpaceId((current) => current ?? document.settings.defaultSpaceId);
-    if (!localStorage.getItem(QUICK_DRAFT_KEY) && document.settings.quickDraft?.value) setDraft(document.settings.quickDraft.value);
+    setActiveSpaceId((current) => current ?? selectLaunchSpace(document, devicePreferences, new Date()));
+    if (!localStorage.getItem(quickDraftKey) && document.settings.quickDraft?.value) setDraft(document.settings.quickDraft.value);
   });
   const [backupOpen, setBackupOpen] = useState(false);
   const [backup, setBackup] = useState("");
@@ -1222,6 +1337,12 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const repeatingGenerationDate = useRef<string | null>(null);
   const notificationSnoozeHandled = useRef(false);
   const initialRouteHandled = useRef(false);
+  const captureHandled = useRef(false);
+
+  const setDevicePreferences = (preferences: DeviceSpacePreferences) => {
+    setDevicePreferencesState(preferences);
+    writeDeviceSpacePreferences(deviceIdentity, preferences);
+  };
 
   const restoreFocus = () => {
     const target = returnFocus.current;
@@ -1229,7 +1350,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     window.setTimeout(() => target?.focus(), 0);
   };
 
-  const applyResolvedTarget = (resolved: ResolvedDirectTarget) => {
+  const applyResolvedTarget = (resolved: ResolvedDirectTarget, rememberSpace = false) => {
     setSelectedView(resolved.view);
     setSelectedId(resolved.selectedToDoId);
     setActiveTagIds(resolved.tagIds);
@@ -1237,7 +1358,10 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     setContextMenu(null);
     setSidebarOpen(false);
     setMissingTarget(null);
-    if (resolved.activeSpaceId) setActiveSpaceId(resolved.activeSpaceId);
+    if (resolved.activeSpaceId) {
+      setActiveSpaceId(resolved.activeSpaceId);
+      if (rememberSpace) setDevicePreferences({ ...devicePreferences, manualSpaceId: resolved.activeSpaceId });
+    }
     if (resolved.repeatingTemplateId && snapshot) {
       const template = snapshot.document.repeatingTemplates.find((item) => item.id === resolved.repeatingTemplateId);
       if (template) setRepeatTarget({ kind: "template", template });
@@ -1251,7 +1375,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
       setMissingTarget(resolved.message);
       setSelectedId(null);
       setRepeatTarget(null);
-    } else applyResolvedTarget(resolved);
+    } else applyResolvedTarget(resolved, shouldRememberManualSpace(target.kind, pushHistory));
     if (pushHistory) history.pushState(null, "", directTargetUrl(target, `${location.origin}${location.pathname}`));
   };
 
@@ -1271,6 +1395,37 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
       else applyResolvedTarget(recovered.resolved);
     }
   }, [loaded, snapshot?.revision]);
+
+  useEffect(() => {
+    if (!loaded || !snapshot || saving || captureHandled.current) return;
+    const params = new URLSearchParams(location.search);
+    const hasCapture = params.get("capture") === "1" || ["title", "text", "url"].some((name) => params.has(name));
+    let capture: CapturedToDoInput | null = null;
+    try { capture = JSON.parse(localStorage.getItem(pendingCaptureKey) ?? "null") as CapturedToDoInput | null; } catch { capture = null; }
+    if (!capture && hasCapture) {
+      if (!params.get("submission")) {
+        params.set("submission", `link-${crypto.randomUUID()}`);
+        history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+      }
+      const parsed = captureInputFromUrl(snapshot.document, `?${params.toString()}`, localToday());
+      if ("errors" in parsed) {
+        captureHandled.current = true;
+        setFeedback({ text: parsed.errors.join(" "), error: true });
+        return;
+      }
+      capture = parsed.input;
+      try { localStorage.setItem(pendingCaptureKey, JSON.stringify(capture)); } catch { /* The URL still keeps the shared data recoverable. */ }
+    }
+    if (!capture) return;
+    captureHandled.current = true;
+    void runChange({ type: "captureToDo", capture }).then((saved) => {
+      if (!saved) return;
+      localStorage.removeItem(pendingCaptureKey);
+      setSelectedView({ kind: "inbox", date: localToday() });
+      history.replaceState(null, "", `${location.pathname}?open=view&view=inbox`);
+      setFeedback({ text: "Captured the shared to-do.", error: false });
+    });
+  }, [loaded, snapshot?.revision, saving]);
 
   useEffect(() => {
     if (!loaded || !snapshot) return;
@@ -1410,7 +1565,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const visibleToDoIds = items.filter((item): item is ToDo => "checklist" in item).map((item) => item.id);
   const selected = selectedId ? document.toDos.find((item) => item.id === selectedId) ?? null : null;
   const activeSpace = document.spaces.find((space) => space.id === activeSpaceId) ?? document.spaces.find((space) => space.id === document.settings.defaultSpaceId) ?? null;
-  const darkAppearance = document.settings.theme === "dark" || (document.settings.theme === "system" && systemDark);
+  const darkAppearance = resolveAppearance(document.settings.theme, systemDark) === "dark";
   const nav = (view: WorkspaceView, label: string) => <button type="button" className={`replacement-nav-row${selectedView.kind === view.kind && (!("id" in view) || ("id" in selectedView && selectedView.id === view.id)) ? " active" : ""}`} onClick={() => openDirectTarget(directTargetForView(view), true)} onDragOver={(event) => { if (moveActionForView(view)) event.preventDefault(); }} onDrop={(event) => { const ids = event.dataTransfer?.getData("application/x-objects-todos").split(",").filter(Boolean) ?? []; const action = moveActionForView(view); if (ids.length && action) { event.preventDefault(); void runIntent("drag", action, ids); } }}><span>{label}</span><span>{view.kind === "repeating" ? document.repeatingTemplates.length : workspace.view(view).length}</span></button>;
 
   const submitQuickEntry = async () => {
@@ -1418,17 +1573,23 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     if (!value) return;
     const defaults = createDefaults(normalizedView);
     const saved = await runChange({ type: "createToDo", title: value, ...defaults, quickEntry: { referenceDate: today } });
-    if (saved) { setDraft(""); localStorage.removeItem(QUICK_DRAFT_KEY); }
+    if (saved) { setDraft(""); localStorage.removeItem(quickDraftKey); }
   };
 
-  const importBackup = async () => {
+  const importBackup = async (): Promise<{ ok: boolean; summary: string }> => {
     const staged = workspaceFor(document);
     const result = staged.importPortableBackup(backup, confirmation);
-    if (result.status === "rejected") { setFeedback({ text: `${result.errors.join(" ")} ${reportText(result.report)}`, error: true }); return; }
+    if (result.status === "rejected") {
+      const summary = `${result.errors.join(" ")} ${reportText(result.report)}`;
+      setFeedback({ text: summary, error: true });
+      return { ok: false, summary };
+    }
     const next = staged.read();
     setSnapshot({ revision: snapshot.revision, document: next });
     const saved = await saveDocument({ expectedRevision: snapshot.revision, mutationId: `import-${crypto.randomUUID()}`, document: next }, next);
-    if (saved) { setFeedback({ text: reportText(result.report), error: false }); setBackup(""); setConfirmation(""); setBackupOpen(false); }
+    const summary = reportText(result.report);
+    if (saved) { setFeedback({ text: summary, error: false }); setBackup(""); setConfirmation(""); setBackupOpen(false); }
+    return { ok: saved, summary: saved ? summary : "The import is ready but could not be saved. Retry without choosing the file again." };
   };
 
   const idsForAction = (id?: string): string[] => id && !selection.ids.includes(id) ? [id] : selection.ids.length ? selection.ids : id ? [id] : selectedId ? [selectedId] : [];
@@ -1524,14 +1685,6 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
       {document.headings.some((heading) => !heading.archivedAt) ? <div className="replacement-nav-group"><h2>Headings</h2>{document.headings.filter((heading) => !heading.archivedAt).map((heading) => nav({ kind: "heading", id: heading.id, date: today }, heading.title))}</div> : null}
       {document.headings.some((heading) => heading.archivedAt) ? <div className="replacement-nav-group"><h2>Archived Headings</h2>{document.headings.filter((heading) => heading.archivedAt).map((heading) => nav({ kind: "heading", id: heading.id, date: today }, heading.title))}</div> : null}
       <label className="replacement-policy">Logbook policy<select value={document.settings.logCompletedItems} onChange={(event) => void runChange({ type: "setLogbookPolicy", policy: event.currentTarget.value as WorkspaceDocument["settings"]["logCompletedItems"] })}><option value="immediately">Immediately</option><option value="daily">Daily</option><option value="manually">Manually</option></select></label>
-      <button className="replacement-sidebar-action" type="button" onClick={(event) => {
-        returnFocus.current = mobile ? shellRef.current?.querySelector<HTMLElement>("[aria-label='Open sidebar']") ?? null : event.currentTarget;
-        setBackupOpen((open) => !open);
-        if (mobile) {
-          setSidebarOpen(false);
-          window.setTimeout(() => shellRef.current?.querySelector<HTMLInputElement>(".replacement-file")?.focus(), 0);
-        }
-      }}>Import backup</button>
       <div className="replacement-sidebar-footer"><button className="replacement-sidebar-action" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setSettingsOpen(true); if (mobile) setSidebarOpen(false); }}>Settings</button><button className="replacement-sidebar-action replacement-repeating-icon" type="button" aria-label="Open Repeating" title="Repeating" onClick={() => openDirectTarget({ kind: "view", viewKind: "repeating" }, true)}>↻</button></div>
     </aside>
 
@@ -1540,9 +1693,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
       <div className="replacement-main-inner">
         <header><p className="replacement-kicker">{saving ? "Saving…" : "Workspace"}</p><div className="replacement-title-row"><div><h1>{missingTarget ? "Link unavailable" : viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{missingTarget ?? (normalizedView.kind === "repeating" ? `${document.repeatingTemplates.length} Template${document.repeatingTemplates.length === 1 ? "" : "s"}` : (usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length ? `${(usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length} item${(usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length === 1 ? "" : "s"}` : "Nothing here yet")}</p></div><button className="replacement-search" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setQuickFindOpen(true); }}><span>⌕</span><span>{search || "Quick Find"}</span><kbd>⌘K</kbd></button></div>{document.tags.length && normalizedView.kind !== "repeating" && !missingTarget ? <div className="replacement-tag-filters" aria-label="Filter by effective Tags"><button type="button" className={!activeTagIds.length ? "active" : ""} onClick={() => setActiveTagIds([])}>All Tags</button>{document.tags.map((tag) => <button key={tag.id} type="button" className={activeTagIds.includes(tag.id) ? "active" : ""} aria-pressed={activeTagIds.includes(tag.id)} onClick={(event) => setActiveTagIds((current) => event.metaKey || event.ctrlKey ? current.includes(tag.id) ? current.filter((id) => id !== tag.id) : [...current, tag.id] : current.length === 1 && current[0] === tag.id ? [] : [tag.id])}>{tag.title}</button>)}</div> : null}</header>
         {!missingTarget && normalizedView.kind !== "repeating" ? <EntityTools view={normalizedView} document={document} workspace={workspace} runChange={runChange} selectView={(view) => openDirectTarget(directTargetForView(view), true)} openProjectRepeatEditor={(project) => setRepeatTarget({ kind: "project", project })} openTemplate={(id) => openDirectTarget({ kind: "repeatingTemplate", id }, true)} /> : null}
-        {backupOpen ? <section className="replacement-import" aria-labelledby="replacement-import-title"><h2 id="replacement-import-title">Import the current portable backup</h2><p>Type <strong>{FULL_IMPORT_CONFIRMATION}</strong> before replacing this Workspace.</p><div className="replacement-import-controls"><input className="replacement-file" type="file" accept="application/json,.json" aria-label="Choose Objects JSON backup" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void file.text().then(setBackup); }} /><input className="replacement-confirmation" value={confirmation} onInput={(event) => setConfirmation(event.currentTarget.value)} placeholder={FULL_IMPORT_CONFIRMATION} aria-label="Full import confirmation" /><button className="replacement-button" type="button" disabled={!backup || saving} onClick={() => void importBackup()}>Import backup</button></div></section> : null}
-
-        {!missingTarget && normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" && normalizedView.kind !== "repeating" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(QUICK_DRAFT_KEY, value); }} onBlur={(event) => { const next = event.relatedTarget; if (draft && (!(next instanceof Node) || !event.currentTarget.form?.contains(next))) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim() || saving}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
+        {!missingTarget && normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" && normalizedView.kind !== "repeating" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(quickDraftKey, value); }} onBlur={(event) => { const next = event.relatedTarget; if (draft && (!(next instanceof Node) || !event.currentTarget.form?.contains(next))) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim() || saving}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
 
         {missingTarget ? <section className="replacement-missing"><div aria-hidden="true">?</div><h2>We could not open this link</h2><p>{missingTarget}</p><button className="replacement-button" type="button" onClick={() => openDirectTarget({ kind: "view", viewKind: "today" }, true)}>Open Today</button></section> : normalizedView.kind === "repeating" ? <RepeatingView document={document} search="" edit={(template) => setRepeatTarget({ kind: "template", template })} create={() => setRepeatTarget({ kind: "direct" })} runChange={runChange} /> : usesAgenda && agendaItems.length ? <section className="replacement-agenda" aria-label={`${viewTitle(normalizedView, document)} agenda`}>
           {agendaItems.map((agendaItem) => agendaItem.kind === "calendarEvent" ? <article className="replacement-calendar-row" key={agendaItem.id}><span className="replacement-calendar-time">{agendaItem.item.allDay ? "All day" : new Date(agendaItem.item.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span><span className="replacement-calendar-line" aria-hidden="true" /><span><strong>{agendaItem.title}</strong><small>{agendaItem.item.calendar} · Calendar event</small></span><button type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setSettingsOpen(true); }}>Edit</button></article> : workspaceRow(agendaItem.item))}
@@ -1590,7 +1741,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
       runIntent={runIntent}
       close={closeActionDialog}
     /> : null}
-    {settingsOpen ? <WorkspaceSettingsDialog document={document} today={today} runChange={runChange} close={() => { setSettingsOpen(false); restoreFocus(); }} /> : null}
+    {settingsOpen ? <WorkspaceSettingsDialog document={document} today={today} runChange={runChange} devicePreferences={devicePreferences} setDevicePreferences={setDevicePreferences} backup={backup} setBackup={setBackup} confirmation={confirmation} setConfirmation={setConfirmation} importBackup={importBackup} appControls={appControls} close={() => { setSettingsOpen(false); restoreFocus(); }} /> : null}
     {quickFindOpen ? <QuickFindDialog document={document} today={today} query={search} setQuery={setSearch} choose={(result) => { setQuickFindOpen(false); openDirectTarget(result.target, true); }} close={() => { setQuickFindOpen(false); restoreFocus(); }} /> : null}
     {repeatTarget ? <RepeatEditor target={repeatTarget} document={document} today={today} runChange={runChange} close={() => setRepeatTarget(null)} /> : null}
     {!missingTarget ? <button className="replacement-magic-plus" type="button" inert={actionDialog !== null || settingsOpen || quickFindOpen || repeatTarget !== null ? true : undefined} aria-label={normalizedView.kind === "repeating" ? "Add Repeating Template" : "Magic Plus: add to-do"} onClick={() => { if (normalizedView.kind === "repeating") setRepeatTarget({ kind: "direct" }); else { quickInput.current?.focus(); quickInput.current?.scrollIntoView({ behavior: "smooth", block: "center" }); } }}>+</button> : null}
@@ -1599,8 +1750,8 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   </div>;
 }
 
-export function mountReplacement(root: Element, adapter: WorkspaceSyncAdapter, showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean>): () => void {
+export function mountReplacement(root: Element, adapter: WorkspaceSyncAdapter, showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean>, deviceIdentity: string, appControls: ReplacementAppControls): () => void {
   document.title = "Objects";
-  render(<ReplacementLoadBoundary><style>{replacementStyles}</style><ReplacementWorkspace adapter={adapter} showReminder={showReminder} /></ReplacementLoadBoundary>, root);
+  render(<ReplacementLoadBoundary><style>{replacementStyles}</style><ReplacementWorkspace adapter={adapter} showReminder={showReminder} deviceIdentity={deviceIdentity} appControls={appControls} /></ReplacementLoadBoundary>, root);
   return () => render(null, root);
 }

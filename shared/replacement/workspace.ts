@@ -26,7 +26,8 @@ import type {
 } from "./model.ts";
 import { createEmptyImportReport, parsePortableBackup, type ImportReport } from "./importer.ts";
 import { parseIcsCalendar } from "./calendar.ts";
-import { addDaysToDate as addDays } from "./dates.ts";
+import { addDaysToDate as addDays, isIsoDate, isIsoDateTime } from "./dates.ts";
+import type { CapturedToDoInput } from "./capture.ts";
 
 export const FULL_IMPORT_CONFIRMATION = "REPLACE WORKSPACE";
 export const PERMANENT_DELETE_CONFIRMATION = "DELETE FOREVER";
@@ -37,6 +38,10 @@ export const DELETE_HEADING_CONFIRMATION = "DELETE HEADING";
 export const DELETE_TAG_CONFIRMATION = "DELETE TAG";
 export const DELETE_REPEATING_TEMPLATE_CONFIRMATION = "DELETE REPEATING TEMPLATE";
 export const REPEATING_BATCH_LIMIT = 100;
+
+export function exportPortableBackup(document: WorkspaceDocument): string {
+  return JSON.stringify(document, null, 2);
+}
 
 export type WorkspaceDependencies = {
   now: () => IsoDateTime;
@@ -49,6 +54,9 @@ export type AreaChanges = Partial<Pick<Area, "title" | "spaceId" | "color" | "ta
 export type HeadingChanges = Partial<Pick<Heading, "title" | "location">>;
 export type SpaceChanges = Partial<Pick<Space, "title" | "color" | "pinned">>;
 export type CalendarEventChanges = Partial<Pick<CalendarEvent, "title" | "spaceId" | "start" | "end" | "calendar" | "allDay">>;
+export type ApplicationSettingsChanges = Partial<Pick<WorkspaceDocument["settings"],
+  "theme" | "groupToday" | "notifications" | "weekStartsOn" | "showCalendar"
+>>;
 
 export type RepeatingTemplateDraft = {
   title: string;
@@ -96,6 +104,7 @@ export type WorkspaceChange =
   | { type: "updateTag"; id: EntityId; title: string }
   | { type: "deleteTag"; id: EntityId; confirmation: string }
   | { type: "createToDo"; title: string; notes?: string; location?: ToDoLocation; schedule?: Schedule; reminderAt?: string | null; deadline?: string | null; tags?: EntityId[]; checklist?: string[]; quickEntry?: { referenceDate: string } }
+  | { type: "captureToDo"; capture: CapturedToDoInput }
   | { type: "updateToDo"; id: EntityId; changes: ToDoChanges }
   | { type: "setToDoTags"; id: EntityId; titles: string[] }
   | { type: "saveQuickDraft"; value: string; view: WorkspaceView }
@@ -123,6 +132,9 @@ export type WorkspaceChange =
   | { type: "setLogbookPolicy"; policy: LogbookPolicy }
   | { type: "setTheme"; theme: WorkspaceDocument["settings"]["theme"] }
   | { type: "setShowCalendar"; show: boolean }
+  | { type: "updateSettings"; changes: ApplicationSettingsChanges }
+  | { type: "setDefaultSpace"; spaceId: EntityId }
+  | { type: "replaceLaunchRules"; rules: WorkspaceDocument["settings"]["launchRules"] }
   | { type: "createCalendarEvent"; title: string; spaceId: EntityId; start: string; end: string; calendar?: string; allDay?: boolean }
   | { type: "updateCalendarEvent"; id: EntityId; changes: CalendarEventChanges }
   | { type: "deleteCalendarEvent"; id: EntityId }
@@ -196,21 +208,8 @@ function copyDocument<T>(document: T): T {
   return JSON.parse(JSON.stringify(document)) as T;
 }
 
-function isIsoDate(value: string): boolean {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return false;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
-
-function isIsoDateTime(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value));
-}
-
-function isTime(value: string): boolean {
+function isTime(value: unknown): value is string {
+  if (typeof value !== "string") return false;
   const match = /^(\d{2}):(\d{2})$/.exec(value);
   return Boolean(match && Number(match[1]) <= 23 && Number(match[2]) <= 59);
 }
@@ -367,12 +366,14 @@ export function createEmptyWorkspace(now: IsoDateTime): WorkspaceDocument {
     projectClosures: [],
     calendarEvents: [],
     permanentDeletions: [],
+    captureReceipts: [],
     sync: { revision: 0, lastMutationId: null, updatedAt: now },
   };
 }
 
 export function createWorkspace(initial: WorkspaceDocument, dependencies: WorkspaceDependencies): Workspace {
   let document = copyDocument(initial);
+  document.captureReceipts = Array.isArray(document.captureReceipts) ? document.captureReceipts : [];
   const undoEntries = new Map<string, UndoEntry>();
 
   function reject(errors: string[]): WorkspaceChangeResult {
@@ -780,6 +781,14 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
 
   function validate(): string[] {
     const errors: string[] = [];
+    if (!(["system", "light", "dark"] as unknown[]).includes(document.settings.theme)) errors.push("Workspace appearance must be System, Light, or Dark.");
+    if (typeof document.settings.groupToday !== "boolean") errors.push("Group Today must be on or off.");
+    if (typeof document.settings.notifications !== "boolean") errors.push("Notifications must be on or off.");
+    if (document.settings.weekStartsOn !== 0 && document.settings.weekStartsOn !== 1) errors.push("The first weekday must be Sunday or Monday.");
+    if (typeof document.settings.showCalendar !== "boolean") errors.push("Calendar visibility must be on or off.");
+    if (!(["immediately", "daily", "manually"] as unknown[]).includes(document.settings.logCompletedItems)) errors.push("The Logbook policy is invalid.");
+    if (!Array.isArray(document.settings.launchRules)) errors.push("Workspace launch rules are malformed.");
+    if (document.settings.quickDraft && typeof document.settings.quickDraft.value !== "string") errors.push("The unfinished quick entry is malformed.");
     const ids = new Set<string>();
     const collections: Array<[string, Array<{ id: string }>]> = [
       ["Space", document.spaces], ["Area", document.areas], ["Project", document.projects],
@@ -800,16 +809,36 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     if (document.settings.defaultSpaceId && !document.spaces.some((space) => space.id === document.settings.defaultSpaceId)) {
       errors.push("The default Space does not exist.");
     }
-    for (const rule of document.settings.launchRules) {
+    for (const rule of Array.isArray(document.settings.launchRules) ? document.settings.launchRules : []) {
       if (!document.spaces.some((space) => space.id === rule.spaceId)) errors.push(`Launch rule “${rule.id}” has no valid Space.`);
       if (!isTime(rule.start) || !isTime(rule.end)) errors.push(`Launch rule “${rule.id}” has an invalid time.`);
       if (rule.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) errors.push(`Launch rule “${rule.id}” has an invalid weekday.`);
     }
+    const receiptIds = new Set<string>();
+    for (const receipt of document.captureReceipts) {
+      if (!receipt.submissionId || receiptIds.has(receipt.submissionId)) errors.push("A capture submission identity is missing or duplicated.");
+      receiptIds.add(receipt.submissionId);
+      if (!document.toDos.some((toDo) => toDo.id === receipt.toDoId)
+        && !document.permanentDeletions.some((marker) => marker.entityKind === "toDo" && marker.entityId === receipt.toDoId)) {
+        errors.push(`Capture receipt “${receipt.submissionId}” points to a missing to-do.`);
+      }
+      if (!isIsoDateTime(receipt.createdAt)) errors.push(`Capture receipt “${receipt.submissionId}” has an invalid creation date.`);
+    }
     if (document.settings.quickDraft?.updatedAt && !isIsoDateTime(document.settings.quickDraft.updatedAt)) {
       errors.push("The unfinished quick entry has an invalid update date.");
     }
-    const validateSchedule = (schedule: ToDo["schedule"], label: string) => {
-      if (schedule.kind === "scheduled" && !isIsoDate(schedule.date)) errors.push(`${label} has an invalid scheduled date.`);
+    const validateSchedule = (schedule: unknown, label: string) => {
+      if (!schedule || typeof schedule !== "object" || Array.isArray(schedule)) {
+        errors.push(`${label} has no valid Schedule.`);
+        return;
+      }
+      const candidate = schedule as Partial<Schedule>;
+      if (!["inbox", "anytime", "someday", "scheduled"].includes(String(candidate.kind))) {
+        errors.push(`${label} has an invalid Schedule.`);
+      }
+      if (candidate.kind === "scheduled" && (!isIsoDate(candidate.date) || typeof candidate.evening !== "boolean")) {
+        errors.push(`${label} has an invalid scheduled date.`);
+      }
     };
     for (const project of document.projects) {
       const location = project.location;
@@ -820,6 +849,7 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         errors.push(`Project “${project.id}” has no valid Area.`);
       }
       validateSchedule(project.schedule, `Project “${project.id}”`);
+      if (!["open", "completed", "canceled"].includes(String(project.outcome))) errors.push(`Project “${project.id}” has an invalid Outcome.`);
       if (project.deadline && !isIsoDate(project.deadline)) errors.push(`Project “${project.id}” has an invalid Deadline.`);
       if (project.completedAt && !isIsoDateTime(project.completedAt)) errors.push(`Project “${project.id}” has an invalid completion date.`);
       if (project.trashedAt && !isIsoDateTime(project.trashedAt)) errors.push(`Project “${project.id}” has an invalid Trash date.`);
@@ -839,6 +869,7 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     for (const toDo of document.toDos) {
       if (!locationOfToDo(toDo.id)) errors.push(`To-do “${toDo.id}” has no valid Location.`);
       validateSchedule(toDo.schedule, `To-do “${toDo.id}”`);
+      if (!["open", "completed", "canceled"].includes(String(toDo.outcome))) errors.push(`To-do “${toDo.id}” has an invalid Outcome.`);
       if (!isIsoDateTime(toDo.createdAt)) errors.push(`To-do “${toDo.id}” has an invalid creation date.`);
       if (toDo.deadline && !isIsoDate(toDo.deadline)) errors.push(`To-do “${toDo.id}” has an invalid Deadline.`);
       if (toDo.reminder && (!isIsoDateTime(toDo.reminder.at) || (toDo.reminder.sentAt && !isIsoDateTime(toDo.reminder.sentAt)))) {
@@ -900,6 +931,7 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     }
     for (const event of document.calendarEvents) {
       if (!document.spaces.some((space) => space.id === event.spaceId)) errors.push(`Calendar event “${event.id}” has no valid Space.`);
+      if (typeof event.allDay !== "boolean") errors.push(`Calendar event “${event.id}” has an invalid all-day setting.`);
       if (!isIsoDateTime(event.start) || !isIsoDateTime(event.end) || Date.parse(event.end) < Date.parse(event.start)
         || event.allDay && Date.parse(event.end) === Date.parse(event.start)) {
         errors.push(`Calendar event “${event.id}” has an invalid date range.`);
@@ -911,6 +943,9 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       for (const toDoId of closure.changedToDoIds) if (!document.toDos.some((toDo) => toDo.id === toDoId)) errors.push(`Project Closure “${closure.id}” has an unknown to-do.`);
     }
     for (const marker of document.permanentDeletions) {
+      if (!["toDo", "project", "area", "heading", "space", "tag", "repeatingTemplate", "calendarEvent"].includes(String(marker.entityKind))) {
+        errors.push(`Permanent-deletion marker for “${marker.entityId}” has an invalid entity kind.`);
+      }
       if (!isIsoDateTime(marker.deletedAt)) errors.push(`Permanent-deletion marker for “${marker.entityId}” has an invalid date.`);
     }
     if (!isIsoDateTime(document.sync.updatedAt)) errors.push("Workspace sync metadata has an invalid update date.");
@@ -1012,7 +1047,12 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       }
       const previous = document;
       document = parsed.document;
-      const errors = validate();
+      let errors: string[];
+      try {
+        errors = validate();
+      } catch {
+        errors = ["The current Objects backup contains malformed Workspace records."];
+      }
       if (errors.length) {
         document = previous;
         parsed.report.rejected += errors.length;
@@ -1068,6 +1108,36 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       if (change.type === "setShowCalendar") {
         document.settings.showCalendar = change.show;
         return finishChange(previous, "calendar-visibility-updated", []);
+      }
+      if (change.type === "updateSettings") {
+        const changes = change.changes;
+        if (changes.theme !== undefined && !["system", "light", "dark"].includes(changes.theme)) return fail(["Choose System, Light, or Dark appearance."]);
+        if (changes.weekStartsOn !== undefined && changes.weekStartsOn !== 0 && changes.weekStartsOn !== 1) return fail(["Choose Sunday or Monday as the first day of the week."]);
+        if (changes.theme !== undefined) document.settings.theme = changes.theme;
+        if (changes.groupToday !== undefined) document.settings.groupToday = Boolean(changes.groupToday);
+        if (changes.notifications !== undefined) document.settings.notifications = Boolean(changes.notifications);
+        if (changes.weekStartsOn !== undefined) document.settings.weekStartsOn = changes.weekStartsOn;
+        if (changes.showCalendar !== undefined) document.settings.showCalendar = Boolean(changes.showCalendar);
+        return finishChange(previous, "application-settings-updated", []);
+      }
+      if (change.type === "setDefaultSpace") {
+        if (!document.spaces.some((space) => space.id === change.spaceId)) return failAs("not-found", ["The selected default Space no longer exists."]);
+        document.settings.defaultSpaceId = change.spaceId;
+        return finishChange(previous, "default-space-updated", [{ kind: "space", id: change.spaceId }]);
+      }
+      if (change.type === "replaceLaunchRules") {
+        const ruleIds = new Set<string>();
+        for (const rule of change.rules) {
+          if (!rule.id || ruleIds.has(rule.id)) return fail(["Every launch rule needs a unique identity."]);
+          ruleIds.add(rule.id);
+          if (!document.spaces.some((space) => space.id === rule.spaceId)) return fail(["Every launch rule must use an available Space."]);
+          if (!rule.weekdays.length || rule.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) return fail(["Choose at least one valid weekday for every launch rule."]);
+          if (!isTime(rule.start) || !isTime(rule.end) || rule.start === rule.end) return fail(["Choose a valid time range for every launch rule."]);
+        }
+        document.settings.launchRules = change.rules.map((rule, order) => ({
+          ...copyDocument(rule), weekdays: [...new Set(rule.weekdays)].sort((left, right) => left - right), order,
+        }));
+        return finishChange(previous, "launch-rules-updated", []);
       }
       if (change.type === "createCalendarEvent") {
         const title = change.title.trim();
@@ -1840,6 +1910,56 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         document.toDos.push(toDo);
         if (change.quickEntry) document.settings.quickDraft = null;
         return finishChange(previous, "to-do-created", [{ kind: "toDo", id: toDo.id }], `Delete “${toDo.title}”`);
+      }
+
+      if (change.type === "captureToDo") {
+        const capture = change.capture;
+        if (!capture.submissionId || capture.submissionId.length > 200) return fail(["Capture needs a valid submission identity."]);
+        const existingReceipt = document.captureReceipts.find((receipt) => receipt.submissionId === capture.submissionId);
+        if (existingReceipt) {
+          const existingToDo = document.toDos.find((toDo) => toDo.id === existingReceipt.toDoId);
+          if (!existingToDo && document.permanentDeletions.some((marker) => marker.entityKind === "toDo" && marker.entityId === existingReceipt.toDoId)) {
+            return { status: "changed", outcome: "capture-reused", affected: [], undo: null };
+          }
+          if (!existingToDo) return fail(["This capture receipt points to a missing to-do."]);
+          return { status: "changed", outcome: "capture-reused", affected: [{ kind: "toDo", id: existingToDo.id }], undo: null };
+        }
+
+        const tagIds: string[] = [];
+        for (const rawTitle of capture.tags) {
+          const title = rawTitle.trim();
+          if (!title || title.length > 100) return fail(["Tag names must be between 1 and 100 characters."]);
+          let tag = document.tags.find((item) => item.title.toLocaleLowerCase() === title.toLocaleLowerCase());
+          if (!tag) {
+            tag = { id: dependencies.createId("tag"), title, order: document.tags.length };
+            document.tags.push(tag);
+          }
+          if (!tagIds.includes(tag.id)) tagIds.push(tag.id);
+        }
+
+        const created = this.change({
+          type: "createToDo",
+          title: capture.title,
+          notes: capture.notes,
+          location: capture.location,
+          schedule: capture.schedule,
+          reminderAt: capture.reminderAt,
+          deadline: capture.deadline,
+          tags: tagIds,
+          checklist: capture.checklist,
+        });
+        if (created.status === "rejected") {
+          document = previous;
+          return created;
+        }
+        if (created.undo) undoEntries.delete(created.undo.token);
+        const toDoId = created.affected.find((item) => item.kind === "toDo")?.id;
+        if (!toDoId) {
+          document = previous;
+          return reject(["The captured to-do could not be identified."]);
+        }
+        document.captureReceipts.push({ submissionId: capture.submissionId, toDoId, createdAt: dependencies.now() });
+        return finishChange(previous, "to-do-captured", [{ kind: "toDo", id: toDoId }], `Delete captured “${capture.title}”`);
       }
 
       if (change.type === "reorderToDos") {
