@@ -2,7 +2,21 @@ import { Component, render, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import type { ImportReport } from "../../shared/replacement/importer";
-import type { EntityId, HeadingLocation, Project, ProjectLocation, RepeatingPattern, RepeatingProjectContents, RepeatingProjectToDoBlueprint, RepeatingTemplate, Schedule, ToDo, ToDoLocation, WorkspaceDocument, WorkspaceUndo } from "../../shared/replacement/model";
+import type { CalendarEvent, EntityId, HeadingLocation, Project, ProjectLocation, RepeatingPattern, RepeatingProjectContents, RepeatingProjectToDoBlueprint, RepeatingTemplate, Schedule, ToDo, ToDoLocation, WorkspaceDocument, WorkspaceUndo } from "../../shared/replacement/model";
+import { agendaForView } from "../../shared/replacement/calendar";
+import { addDaysToDate as datePlus, dateInTimeZone } from "../../shared/replacement/dates";
+import { effectiveTagIdsForRepeatingTemplate, spaceIdForRepeatingTemplate } from "../../shared/replacement/location";
+import {
+  directTargetUrl,
+  moveQuickFindSelection,
+  parseDirectTarget,
+  recoverDirectTargetAfterLoad,
+  resolveDirectTarget,
+  searchWorkspace,
+  type DirectTarget,
+  type ResolvedDirectTarget,
+  type SearchResult,
+} from "../../shared/replacement/discovery";
 import {
   DELETE_HEADING_CONFIRMATION,
   DELETE_SPACE_CONFIRMATION,
@@ -61,12 +75,6 @@ function reportText(report: ImportReport): string {
   return `Imported ${total} items. Corrected ${report.corrected}, skipped ${report.skipped}, rejected ${report.rejected}.`;
 }
 
-function datePlus(date: string, days: number): string {
-  const value = new Date(`${date}T00:00:00.000Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
-}
-
 function viewTitle(view: WorkspaceView, document: WorkspaceDocument): string {
   const standard: Record<string, string> = { today: "Today", thisEvening: "This Evening", tomorrow: "Tomorrow", upcoming: "Upcoming", inbox: "Inbox", anytime: "Anytime", someday: "Someday", deadlines: "Deadlines", logbook: "Logbook", trash: "Trash", repeating: "Repeating" };
   if (standard[view.kind]) return standard[view.kind];
@@ -92,6 +100,21 @@ function moveActionForView(view: WorkspaceView): ToDoAction | null {
   if (view.kind === "project") return { type: "move", location: { kind: "project", projectId: view.id } };
   if (view.kind === "heading") return { type: "move", location: { kind: "heading", headingId: view.id } };
   return null;
+}
+
+function directTargetForView(view: WorkspaceView): DirectTarget {
+  if (view.kind === "space" || view.kind === "area" || view.kind === "project" || view.kind === "heading") return { kind: view.kind, id: view.id };
+  return { kind: "view", viewKind: view.kind };
+}
+
+function dateTimeInputValue(iso: string): string {
+  const date = new Date(iso);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function dateTimeInputIso(value: string, allDay: boolean): string {
+  return allDay ? `${value}T00:00:00.000Z` : new Date(value).toISOString();
 }
 
 function destinationForSection(sectionKey: string, view: WorkspaceView): Extract<WorkspaceChange, { type: "reorderToDos" }>["destination"] {
@@ -450,8 +473,8 @@ function Inspector({ item, document, saving, modal, runChange, runIntent, openRe
         {item.outcome === "open" ? <><button className="replacement-button" type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "complete" }, [item.id]) : runChange({ type: "completeToDo", id: item.id }))}>Complete</button><button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "cancel" }, [item.id]) : runChange({ type: "cancelToDo", id: item.id }))}>Cancel</button>{item.occurrence ? <button type="button" onClick={() => void runChange({ type: "skipOccurrence", itemKind: "toDo", id: item.id })}>Skip</button> : null}</> : <><button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "reopen" }, [item.id]) : runChange({ type: "reopenToDo", id: item.id }))}>Reopen</button>{!item.logbookAt ? <button type="button" onClick={() => void runChange({ type: "logToDo", id: item.id })}>Move to Logbook</button> : null}</>}
         {!item.occurrence && item.outcome === "open" ? <button type="button" onClick={() => openRepeatEditor(item)}>Make repeating…</button> : null}
         <button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "duplicate" }, [item.id]) : runChange({ type: "duplicateToDo", id: item.id }))}>Duplicate</button>
-        <button type="button" onClick={() => void navigator.clipboard.writeText(`${location.origin}${location.pathname}?todo=${item.id}`)}>Copy link</button>
-        {navigator.share ? <button type="button" onClick={() => void navigator.share({ title: item.title, text: item.notes, url: `${location.origin}${location.pathname}?todo=${item.id}` })}>Share</button> : null}
+        <button type="button" onClick={() => void navigator.clipboard.writeText(directTargetUrl({ kind: "toDo", id: item.id }, `${location.origin}${location.pathname}`))}>Copy link</button>
+        {navigator.share ? <button type="button" onClick={() => void navigator.share({ title: item.title, text: item.notes, url: directTargetUrl({ kind: "toDo", id: item.id }, `${location.origin}${location.pathname}`) })}>Share</button> : null}
         <button className="danger" type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "trash" }, [item.id]) : runChange({ type: "trashToDo", id: item.id }))}>Move to Trash</button>
       </>}
     </div>
@@ -666,7 +689,7 @@ function WorkspaceItemRow({
     data-todo-id={isToDo ? item.id : undefined}
     draggable={isToDo}
     onDragStart={(event) => {
-      if (!isToDo) return;
+      if (!isToDo || !event.dataTransfer) return;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("application/x-objects-todos", idsForAction(item.id).join(","));
     }}
@@ -797,26 +820,159 @@ function ToDoActionDialog({ kind, count, ids, today, moveChoices, runIntent, clo
   </WaDialog>;
 }
 
-function WorkspaceSettingsDialog({ settings, runChange, close }: {
-  settings: WorkspaceDocument["settings"];
+function QuickFindDialog({ document, today, query, setQuery, choose, close }: {
+  document: WorkspaceDocument;
+  today: string;
+  query: string;
+  setQuery: (value: string) => void;
+  choose: (result: SearchResult) => void;
+  close: () => void;
+}) {
+  const dialog = useRef<OverlayElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const results = useMemo(() => searchWorkspace(document, query, today), [document, query, today]);
+  const activeIndex = Math.min(selectedIndex, Math.max(0, results.length - 1));
+  useWebAwesomeOverlay(dialog, close, () => input.current?.focus());
+  const grouped = new Map<string, Array<{ result: SearchResult; index: number }>>();
+  results.forEach((result, index) => {
+    const group = grouped.get(result.group) ?? [];
+    group.push({ result, index });
+    grouped.set(result.group, group);
+  });
+  return <WaDialog ref={dialog} class="replacement-wa-dialog replacement-quick-find-dialog" label="Quick Find" without-header light-dismiss>
+    <section className="replacement-dialog replacement-quick-find" aria-labelledby="replacement-quick-find-title">
+      <header><div><p className="replacement-kicker">Jump anywhere</p><h2 id="replacement-quick-find-title">Quick Find</h2></div><button type="button" aria-label="Close Quick Find" onClick={close}>×</button></header>
+      <label className="replacement-quick-find-input">Search your whole Workspace
+        <input
+          ref={input}
+          type="search"
+          value={query}
+          aria-controls="replacement-quick-find-results"
+          aria-activedescendant={results.length ? `replacement-quick-find-${activeIndex}` : undefined}
+          placeholder="Lists, to-dos, notes, Tags, Templates…"
+          onInput={(event) => { setQuery(event.currentTarget.value); setSelectedIndex(0); }}
+          onKeyDown={(event) => {
+            if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+              event.preventDefault();
+              setSelectedIndex(moveQuickFindSelection(activeIndex, results.length, event.key as "ArrowDown" | "ArrowUp" | "Home" | "End"));
+            }
+            if (event.key === "Enter" && results[activeIndex]) { event.preventDefault(); choose(results[activeIndex]); }
+          }}
+        />
+      </label>
+      <div id="replacement-quick-find-results" className="replacement-quick-find-results" role="listbox" aria-label="Quick Find results">
+        {[...grouped].map(([groupName, group]) => <section key={groupName} role="group" aria-labelledby={`quick-find-group-${group[0].index}`}>
+          <h3 id={`quick-find-group-${group[0].index}`}>{groupName}</h3>
+          {group.map(({ result, index }) => <button
+            id={`replacement-quick-find-${index}`}
+            key={result.id}
+            className={index === activeIndex ? "active" : ""}
+            type="button"
+            role="option"
+            aria-selected={index === activeIndex}
+            onMouseEnter={() => setSelectedIndex(index)}
+            onClick={() => choose(result)}
+          ><span><strong>{result.title}</strong><small>{result.detail}</small></span><span aria-hidden="true">›</span></button>)}
+        </section>)}
+        {!results.length ? <div className="replacement-quick-find-empty"><strong>No results</strong><span>Try a title, note, checklist item, Tag, or list name.</span></div> : null}
+      </div>
+    </section>
+  </WaDialog>;
+}
+
+type CalendarDraft = { title: string; spaceId: string; allDay: boolean; start: string; end: string };
+
+function toggleCalendarDraftAllDay(draft: CalendarDraft, allDay: boolean): CalendarDraft {
+  const startDate = draft.start.slice(0, 10);
+  const endDate = draft.end.slice(0, 10);
+  return {
+    ...draft,
+    allDay,
+    start: allDay ? startDate : `${startDate}T09:00`,
+    end: allDay ? endDate <= startDate ? datePlus(startDate, 1) : endDate : `${endDate}T10:00`,
+  };
+}
+
+function CalendarEventFields({ draft, spaces, setDraft, titlePlaceholder }: {
+  draft: CalendarDraft;
+  spaces: WorkspaceDocument["spaces"];
+  setDraft: (draft: CalendarDraft) => void;
+  titlePlaceholder?: string;
+}) {
+  const update = (changes: Partial<CalendarDraft>) => setDraft({ ...draft, ...changes });
+  return <>
+    <label>Title<input value={draft.title} onInput={(input) => update({ title: input.currentTarget.value })} placeholder={titlePlaceholder} required /></label>
+    <label>Space<select value={draft.spaceId} onChange={(input) => update({ spaceId: input.currentTarget.value })}>{spaces.map((space) => <option key={space.id} value={space.id}>{space.title}</option>)}</select></label>
+    <label>Starts<input type={draft.allDay ? "date" : "datetime-local"} value={draft.start} onInput={(input) => update({ start: input.currentTarget.value })} required /></label>
+    <label>Ends<input type={draft.allDay ? "date" : "datetime-local"} value={draft.end} onInput={(input) => update({ end: input.currentTarget.value })} required /></label>
+    <label className="replacement-inline-check"><input type="checkbox" checked={draft.allDay} onChange={(input) => setDraft(toggleCalendarDraftAllDay(draft, input.currentTarget.checked))} />All day</label>
+  </>;
+}
+
+function CalendarEventEditor({ event, spaces, runChange }: {
+  event: CalendarEvent;
+  spaces: WorkspaceDocument["spaces"];
+  runChange: (change: WorkspaceChange) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState<CalendarDraft>({
+    title: event.title,
+    spaceId: event.spaceId,
+    allDay: event.allDay,
+    start: event.allDay ? event.start.slice(0, 10) : dateTimeInputValue(event.start),
+    end: event.allDay ? event.end.slice(0, 10) : dateTimeInputValue(event.end),
+  });
+  return <article className="replacement-calendar-editor">
+    <CalendarEventFields draft={draft} spaces={spaces} setDraft={setDraft} />
+    <div className="replacement-calendar-actions"><button type="button" onClick={() => void runChange({ type: "updateCalendarEvent", id: event.id, changes: { title: draft.title, spaceId: draft.spaceId, allDay: draft.allDay, start: dateTimeInputIso(draft.start, draft.allDay), end: dateTimeInputIso(draft.end, draft.allDay) } })}>Save</button><button className="danger" type="button" onClick={() => { if (window.confirm(`Delete ${event.title}?`)) void runChange({ type: "deleteCalendarEvent", id: event.id }); }}>Delete</button></div>
+  </article>;
+}
+
+function WorkspaceSettingsDialog({ document, today, runChange, close }: {
+  document: WorkspaceDocument;
+  today: string;
   runChange: (change: WorkspaceChange) => Promise<boolean>;
   close: () => void;
 }) {
   const dialog = useRef<OverlayElement>(null);
+  const [draft, setDraft] = useState<CalendarDraft>({
+    title: "",
+    spaceId: document.settings.defaultSpaceId ?? document.spaces[0]?.id ?? "",
+    allDay: false,
+    start: `${today}T09:00`,
+    end: `${today}T10:00`,
+  });
   useWebAwesomeOverlay(dialog, close);
   return <WaDialog ref={dialog} class="replacement-wa-dialog" label="Settings" without-header light-dismiss>
     <section className="replacement-dialog" aria-labelledby="replacement-settings-title">
       <header><div><p className="replacement-kicker">Objects</p><h2 id="replacement-settings-title">Settings</h2></div><button type="button" aria-label="Close settings" onClick={close}>×</button></header>
       <label className="replacement-setting-row">Appearance
-        <select autoFocus value={settings.theme} onChange={(event) => void runChange({ type: "setTheme", theme: event.currentTarget.value as WorkspaceDocument["settings"]["theme"] })}>
+        <select autoFocus value={document.settings.theme} onChange={(event) => void runChange({ type: "setTheme", theme: event.currentTarget.value as WorkspaceDocument["settings"]["theme"] })}>
           <option value="system">Follow this device</option><option value="light">Light</option><option value="dark">Dark</option>
         </select>
       </label>
       <label className="replacement-setting-row">Log completed items
-        <select value={settings.logCompletedItems} onChange={(event) => void runChange({ type: "setLogbookPolicy", policy: event.currentTarget.value as WorkspaceDocument["settings"]["logCompletedItems"] })}>
+        <select value={document.settings.logCompletedItems} onChange={(event) => void runChange({ type: "setLogbookPolicy", policy: event.currentTarget.value as WorkspaceDocument["settings"]["logCompletedItems"] })}>
           <option value="immediately">Immediately</option><option value="daily">Daily</option><option value="manually">Manually</option>
         </select>
       </label>
+      <label className="replacement-setting-check"><input type="checkbox" checked={document.settings.showCalendar} onChange={(event) => void runChange({ type: "setShowCalendar", show: event.currentTarget.checked })} />Show calendar events in agenda views</label>
+      <section className="replacement-calendar-settings" aria-labelledby="replacement-calendar-title">
+        <h3 id="replacement-calendar-title">Calendar</h3><p>Events appear beside scheduled work, but they cannot be completed like to-dos.</p>
+        <form className="replacement-calendar-form" onSubmit={(event) => {
+          event.preventDefault();
+          void runChange({ type: "createCalendarEvent", title: draft.title, spaceId: draft.spaceId, start: dateTimeInputIso(draft.start, draft.allDay), end: dateTimeInputIso(draft.end, draft.allDay), calendar: "Objects", allDay: draft.allDay }).then((saved) => { if (saved) setDraft({ ...draft, title: "" }); });
+        }}>
+          <CalendarEventFields draft={draft} spaces={document.spaces} setDraft={setDraft} titlePlaceholder="New event" />
+          <button className="replacement-button" type="submit">Add event</button>
+        </form>
+        <label className="replacement-ics-import">Import an ICS file<input type="file" accept=".ics,text/calendar" onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          if (file) void file.text().then((source) => runChange({ type: "importIcsCalendar", source, spaceId: draft.spaceId }));
+          event.currentTarget.value = "";
+        }} /></label>
+        {document.calendarEvents.length ? <div className="replacement-calendar-editors"><h3>Saved events</h3>{document.calendarEvents.map((event) => <CalendarEventEditor key={event.id} event={event} spaces={document.spaces} runChange={runChange} />)}</div> : null}
+      </section>
     </section>
   </WaDialog>;
 }
@@ -831,6 +987,7 @@ type WorkspaceKeyboardOptions = {
   contextMenu: ContextMenuState | null;
   actionDialog: ActionDialogKind | null;
   settingsOpen: boolean;
+  quickFindOpen: boolean;
   backupOpen: boolean;
   sidebarOpen: boolean;
   mobile: boolean;
@@ -844,6 +1001,7 @@ type WorkspaceKeyboardOptions = {
   setSelectedView: (value: WorkspaceView) => void;
   setContextMenu: (value: ContextMenuState | null) => void;
   setSettingsOpen: (value: boolean) => void;
+  setQuickFindOpen: (value: boolean) => void;
   setBackupOpen: (value: boolean) => void;
   setSidebarOpen: (value: boolean) => void;
   restoreFocus: () => void;
@@ -860,11 +1018,12 @@ function mountWorkspaceKeyboard(options: WorkspaceKeyboardOptions): () => void {
     const visibleIds = visibleToDoIdsFor(options.workspace, options.view, options.search);
     const ids = options.selection.ids.length ? options.selection.ids : options.selectedId ? [options.selectedId] : [];
     const command = event.metaKey || event.ctrlKey;
-    if ((options.actionDialog || options.settingsOpen) && event.key === "Tab") containTabKey(event, options.shell?.querySelector(".replacement-dialog") ?? null);
+    if ((options.actionDialog || options.settingsOpen || options.quickFindOpen) && event.key === "Tab") containTabKey(event, options.shell?.querySelector(".replacement-dialog") ?? null);
     else if (options.mobile && options.selectedId && event.key === "Tab") containTabKey(event, options.shell?.querySelector(".replacement-inspector") ?? null);
     if (event.key === "Escape") {
       if (options.contextMenu) { options.setContextMenu(null); options.restoreFocus(); }
       else if (options.actionDialog) options.closeActionDialog();
+      else if (options.quickFindOpen) { options.setQuickFindOpen(false); options.restoreFocus(); }
       else if (options.settingsOpen) { options.setSettingsOpen(false); options.restoreFocus(); }
       else if (options.backupOpen) { options.setBackupOpen(false); options.restoreFocus(); }
       else if (options.selection.ids.length) { options.setSelection({ ids: [], anchorId: null }); options.restoreFocus(); }
@@ -872,6 +1031,7 @@ function mountWorkspaceKeyboard(options: WorkspaceKeyboardOptions): () => void {
       else if (options.sidebarOpen) { options.setSidebarOpen(false); options.restoreFocus(); }
       return;
     }
+    if (options.quickFindOpen) return;
     if (options.contextMenu && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       const controls = [...(options.shell?.querySelectorAll<HTMLElement>(".replacement-context-menu [role='menuitem']") ?? [])];
       if (!controls.length) return;
@@ -896,7 +1056,8 @@ function mountWorkspaceKeyboard(options: WorkspaceKeyboardOptions): () => void {
     }
     if (command && ["k", "f"].includes(event.key.toLowerCase())) {
       event.preventDefault();
-      (options.shell?.querySelector(".replacement-search") as HTMLInputElement | null)?.focus();
+      options.returnFocus.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
+      options.setQuickFindOpen(true);
       return;
     }
     if (command && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") { event.preventDefault(); options.quickInput?.focus(); return; }
@@ -914,7 +1075,12 @@ function mountWorkspaceKeyboard(options: WorkspaceKeyboardOptions): () => void {
       void options.runChange({ type: "runDailyLogbook", ...(options.activeSpaceId ? { spaceId: options.activeSpaceId } : {}) });
       return;
     }
-    if (!typing && !command && !event.altKey && event.key === "/") { event.preventDefault(); (options.shell?.querySelector(".replacement-search") as HTMLInputElement | null)?.focus(); return; }
+    if (!typing && !command && !event.altKey && event.key === "/") {
+      event.preventDefault();
+      options.returnFocus.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
+      options.setQuickFindOpen(true);
+      return;
+    }
     if (!ids.length) return;
     const shortcutAction = toDoActionForShortcut({ key: event.key, command, alt: event.altKey, shift: event.shiftKey, today: options.today });
     if (shortcutAction) { event.preventDefault(); void options.runIntent("keyboard", shortcutAction, ids); return; }
@@ -1023,8 +1189,9 @@ function useWorkspaceDocument(adapter: WorkspaceSyncAdapter, onLoad: (document: 
 }
 
 function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyncAdapter; showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean> }) {
-  const [selectedView, setSelectedView] = useState<WorkspaceView>(() => ({ kind: "today", date: new Date().toISOString().slice(0, 10) }));
-  const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(location.search).get("todo"));
+  const localToday = () => dateInTimeZone(new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [selectedView, setSelectedView] = useState<WorkspaceView>(() => ({ kind: "today", date: localToday() }));
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [activeTagIds, setActiveTagIds] = useState<EntityId[]>([]);
   const [draft, setDraft] = useState(() => localStorage.getItem(QUICK_DRAFT_KEY) ?? "");
@@ -1039,6 +1206,8 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [actionDialog, setActionDialog] = useState<"move" | "schedule" | "tags" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [quickFindOpen, setQuickFindOpen] = useState(false);
+  const [missingTarget, setMissingTarget] = useState<string | null>(null);
   const [repeatTarget, setRepeatTarget] = useState<RepeatEditorTarget | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 720px)").matches);
@@ -1052,11 +1221,38 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const dailyLogbookDate = useRef<string | null>(null);
   const repeatingGenerationDate = useRef<string | null>(null);
   const notificationSnoozeHandled = useRef(false);
+  const initialRouteHandled = useRef(false);
 
   const restoreFocus = () => {
     const target = returnFocus.current;
     returnFocus.current = null;
     window.setTimeout(() => target?.focus(), 0);
+  };
+
+  const applyResolvedTarget = (resolved: ResolvedDirectTarget) => {
+    setSelectedView(resolved.view);
+    setSelectedId(resolved.selectedToDoId);
+    setActiveTagIds(resolved.tagIds);
+    setSelection({ ids: [], anchorId: null });
+    setContextMenu(null);
+    setSidebarOpen(false);
+    setMissingTarget(null);
+    if (resolved.activeSpaceId) setActiveSpaceId(resolved.activeSpaceId);
+    if (resolved.repeatingTemplateId && snapshot) {
+      const template = snapshot.document.repeatingTemplates.find((item) => item.id === resolved.repeatingTemplateId);
+      if (template) setRepeatTarget({ kind: "template", template });
+    } else setRepeatTarget(null);
+  };
+
+  const openDirectTarget = (target: DirectTarget, pushHistory: boolean) => {
+    if (!snapshot) return;
+    const resolved = resolveDirectTarget(snapshot.document, target, localToday());
+    if (resolved.status === "missing") {
+      setMissingTarget(resolved.message);
+      setSelectedId(null);
+      setRepeatTarget(null);
+    } else applyResolvedTarget(resolved);
+    if (pushHistory) history.pushState(null, "", directTargetUrl(target, `${location.origin}${location.pathname}`));
   };
 
   useEffect(() => {
@@ -1065,6 +1261,26 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
+
+  useEffect(() => {
+    if (!loaded || !snapshot || initialRouteHandled.current) return;
+    initialRouteHandled.current = true;
+    const recovered = recoverDirectTargetAfterLoad(snapshot.document, location.search, localToday());
+    if (recovered) {
+      if (recovered.resolved.status === "missing") setMissingTarget(recovered.resolved.message);
+      else applyResolvedTarget(recovered.resolved);
+    }
+  }, [loaded, snapshot?.revision]);
+
+  useEffect(() => {
+    if (!loaded || !snapshot) return;
+    const handleHistory = () => {
+      const target = parseDirectTarget(location.search) ?? { kind: "view" as const, viewKind: "today" as const };
+      openDirectTarget(target, false);
+    };
+    window.addEventListener("popstate", handleHistory);
+    return () => window.removeEventListener("popstate", handleHistory);
+  }, [loaded, snapshot?.revision]);
 
   useEffect(() => {
     const query = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1119,7 +1335,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     return () => window.clearInterval(timer);
   }, [loaded, saving, snapshot?.revision]);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localToday();
   const datedView: WorkspaceView = selectedView.kind === "tomorrow" ? { ...selectedView, date: datePlus(today, 1) } : { ...selectedView, date: today } as WorkspaceView;
   const normalizedView: WorkspaceView = { ...datedView, tagIds: activeTagIds } as WorkspaceView;
   const workspace = useMemo(() => snapshot ? workspaceFor(snapshot.document) : null, [snapshot]);
@@ -1158,28 +1374,44 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     if (!workspace || !snapshot) return;
     return mountWorkspaceKeyboard({
       workspace, document: snapshot.document, view: normalizedView, search, selection, selectedId,
-      contextMenu, actionDialog, settingsOpen, backupOpen, sidebarOpen, mobile, today, activeSpaceId,
+      contextMenu, actionDialog, settingsOpen, quickFindOpen, backupOpen, sidebarOpen, mobile, today, activeSpaceId,
       shell: shellRef.current, quickInput: quickInput.current, returnFocus,
-      setSelection, setSelectedId, setSelectedView, setContextMenu, setSettingsOpen, setBackupOpen, setSidebarOpen,
+      setSelection, setSelectedId, setSelectedView, setContextMenu, setSettingsOpen, setQuickFindOpen, setBackupOpen, setSidebarOpen,
       restoreFocus, closeActionDialog, openActionDialog, runChange, runIntent,
     });
-  }, [workspace, snapshot?.revision, selectedId, selection.ids.join(","), contextMenu, actionDialog, settingsOpen, backupOpen, sidebarOpen, mobile, search, normalizedView.kind, "id" in normalizedView ? normalizedView.id : ""]);
+  }, [workspace, snapshot?.revision, selectedId, selection.ids.join(","), contextMenu, actionDialog, settingsOpen, quickFindOpen, backupOpen, sidebarOpen, mobile, search, normalizedView.kind, "id" in normalizedView ? normalizedView.id : ""]);
 
   if (loadError) return <ReplacementState title="Your Workspace is unavailable" copy="Your saved Workspace has not been changed."><button className="replacement-button" type="button" onClick={() => window.location.reload()}>Retry loading</button></ReplacementState>;
   if (!loaded || !workspace || !snapshot) return <ReplacementState title="Loading your Workspace" copy="Checking the private Lakebed copy for this account." />;
 
   const document = snapshot.document;
   const allItems = workspace.view(normalizedView);
-  const items = search.trim() ? allItems.filter((item) => item.title.toLowerCase().includes(search.trim().toLowerCase()) || item.notes.toLowerCase().includes(search.trim().toLowerCase())) : allItems;
+  const agendaItems = normalizedView.kind === "today" || normalizedView.kind === "tomorrow" || normalizedView.kind === "upcoming"
+    ? agendaForView(
+      document,
+      { kind: normalizedView.kind, date: normalizedView.date },
+      activeSpaceId,
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+      activeTagIds,
+    )
+    : [];
+  const usesAgenda = normalizedView.kind === "today" || normalizedView.kind === "tomorrow" || normalizedView.kind === "upcoming";
+  const items = usesAgenda ? agendaItems.filter((item) => item.actionable).map((item) => item.item as ToDo | Project) : allItems;
   const upcomingPreviews = normalizedView.kind === "upcoming"
-    ? workspace.nextRepeatingPreviews(datePlus(today, 1)).filter((preview) => !search.trim() || preview.title.toLowerCase().includes(search.trim().toLowerCase()))
+    ? workspace.nextRepeatingPreviews(datePlus(today, 1)).filter((preview) => {
+      const template = document.repeatingTemplates.find((item) => item.id === preview.templateId);
+      if (!template) return false;
+      if (activeSpaceId && spaceIdForRepeatingTemplate(document, template) !== activeSpaceId) return false;
+      const effectiveTags = effectiveTagIdsForRepeatingTemplate(document, template);
+      return activeTagIds.every((tagId) => effectiveTags.includes(tagId));
+    })
     : [];
   const itemSections = groupWorkspaceItems(items, normalizedView, document, workspace);
   const visibleToDoIds = items.filter((item): item is ToDo => "checklist" in item).map((item) => item.id);
   const selected = selectedId ? document.toDos.find((item) => item.id === selectedId) ?? null : null;
   const activeSpace = document.spaces.find((space) => space.id === activeSpaceId) ?? document.spaces.find((space) => space.id === document.settings.defaultSpaceId) ?? null;
   const darkAppearance = document.settings.theme === "dark" || (document.settings.theme === "system" && systemDark);
-  const nav = (view: WorkspaceView, label: string) => <button type="button" className={`replacement-nav-row${selectedView.kind === view.kind && (!("id" in view) || ("id" in selectedView && selectedView.id === view.id)) ? " active" : ""}`} onClick={() => { setSelectedView(view); setSelectedId(null); setSelection({ ids: [], anchorId: null }); setSidebarOpen(false); setActiveSpaceId(workspace.spaceIdForView(view) ?? activeSpaceId); }} onDragOver={(event) => { if (moveActionForView(view)) event.preventDefault(); }} onDrop={(event) => { const ids = event.dataTransfer.getData("application/x-objects-todos").split(",").filter(Boolean); const action = moveActionForView(view); if (ids.length && action) { event.preventDefault(); void runIntent("drag", action, ids); } }}><span>{label}</span><span>{view.kind === "repeating" ? document.repeatingTemplates.length : workspace.view(view).length}</span></button>;
+  const nav = (view: WorkspaceView, label: string) => <button type="button" className={`replacement-nav-row${selectedView.kind === view.kind && (!("id" in view) || ("id" in selectedView && selectedView.id === view.id)) ? " active" : ""}`} onClick={() => openDirectTarget(directTargetForView(view), true)} onDragOver={(event) => { if (moveActionForView(view)) event.preventDefault(); }} onDrop={(event) => { const ids = event.dataTransfer?.getData("application/x-objects-todos").split(",").filter(Boolean) ?? []; const action = moveActionForView(view); if (ids.length && action) { event.preventDefault(); void runIntent("drag", action, ids); } }}><span>{label}</span><span>{view.kind === "repeating" ? document.repeatingTemplates.length : workspace.view(view).length}</span></button>;
 
   const submitQuickEntry = async () => {
     const value = draft.trim();
@@ -1209,7 +1441,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     }
     returnFocus.current = event.currentTarget as HTMLElement;
     setSelection({ ids: [], anchorId: null });
-    setSelectedId(id);
+    openDirectTarget({ kind: "toDo", id }, true);
   };
   const openContextMenu = (id: string, x: number, y: number, trigger: HTMLElement | null) => {
     returnFocus.current = trigger;
@@ -1239,6 +1471,28 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     ...document.projects.filter((project) => !project.trashedAt && project.outcome === "open").map((project) => ({ label: project.title, action: { type: "move" as const, location: { kind: "project" as const, projectId: project.id } } })),
     ...document.headings.filter((heading) => !heading.archivedAt).map((heading) => ({ label: heading.title, action: { type: "move" as const, location: { kind: "heading" as const, headingId: heading.id } } })),
   ];
+  const workspaceRow = (item: ToDo | Project) => <WorkspaceItemRow
+    key={item.id}
+    item={item}
+    selected={selectedId === item.id}
+    bulkSelected={selection.ids.includes(item.id)}
+    idsForAction={idsForAction}
+    runIntent={runIntent}
+    selectRow={selectRow}
+    selectProject={(id) => openDirectTarget({ kind: "project", id }, true)}
+    toggleSelection={(id, trigger) => {
+      returnFocus.current = trigger;
+      setSelectedId(null);
+      setSelection((current) => updateSelection(current, visibleToDoIds, id, "toggle"));
+    }}
+    openContextMenu={openContextMenu}
+    beginTouch={beginTouch}
+    endTouch={endTouch}
+    cancelTouch={() => {
+      if (touchGesture.current) window.clearTimeout(touchGesture.current.timer);
+      touchGesture.current = null;
+    }}
+  />;
 
   return <div
     ref={shellRef}
@@ -1257,9 +1511,9 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     }}
     onPointerCancel={() => { drawerGesture.current = null; }}
   >
-    <aside className="replacement-sidebar" aria-label="Lists" aria-hidden={mobile && !sidebarOpen} inert={(mobile && (!sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen || repeatTarget !== null ? true : undefined}>
+    <aside className="replacement-sidebar" aria-label="Lists" aria-hidden={mobile && !sidebarOpen} inert={(mobile && (!sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen || quickFindOpen || repeatTarget !== null ? true : undefined}>
       <div className="replacement-brand"><span className="replacement-brand-mark" aria-hidden="true">O</span>Objects <button className="replacement-mobile-close" type="button" aria-label="Close sidebar" onClick={() => { setSidebarOpen(false); restoreFocus(); }}>×</button></div>
-      {activeSpace ? <button className="replacement-spaces-pill" type="button" aria-label={`Open ${activeSpace.title} Space`} onClick={() => { setSelectedView({ kind: "space", id: activeSpace.id, date: today }); setSelectedId(null); setSidebarOpen(false); }}><span style={{ background: activeSpace.color }} aria-hidden="true" /><strong>{activeSpace.title}</strong><small>Space</small></button> : null}
+      {activeSpace ? <button className="replacement-spaces-pill" type="button" aria-label={`Open ${activeSpace.title} Space`} onClick={() => openDirectTarget({ kind: "space", id: activeSpace.id }, true)}><span style={{ background: activeSpace.color }} aria-hidden="true" /><strong>{activeSpace.title}</strong><small>Space</small></button> : null}
       <nav className="replacement-nav">
         {nav({ kind: "inbox", date: today }, "Inbox")}{nav({ kind: "today", date: today }, "Today")}{nav({ kind: "thisEvening", date: today }, "This Evening")}{nav({ kind: "tomorrow", date: datePlus(today, 1) }, "Tomorrow")}{nav({ kind: "upcoming", date: today }, "Upcoming")}{nav({ kind: "anytime", date: today }, "Anytime")}{nav({ kind: "someday", date: today }, "Someday")}{nav({ kind: "deadlines", date: today }, "Deadlines")}{nav({ kind: "logbook", date: today }, "Logbook")}{nav({ kind: "trash", date: today }, "Trash")}
       </nav>
@@ -1278,44 +1532,26 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
           window.setTimeout(() => shellRef.current?.querySelector<HTMLInputElement>(".replacement-file")?.focus(), 0);
         }
       }}>Import backup</button>
-      <div className="replacement-sidebar-footer"><button className="replacement-sidebar-action" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setSettingsOpen(true); if (mobile) setSidebarOpen(false); }}>Settings</button><button className="replacement-sidebar-action replacement-repeating-icon" type="button" aria-label="Open Repeating" title="Repeating" onClick={() => { setSelectedView({ kind: "repeating", date: today }); setSelectedId(null); setSidebarOpen(false); }}>↻</button></div>
+      <div className="replacement-sidebar-footer"><button className="replacement-sidebar-action" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setSettingsOpen(true); if (mobile) setSidebarOpen(false); }}>Settings</button><button className="replacement-sidebar-action replacement-repeating-icon" type="button" aria-label="Open Repeating" title="Repeating" onClick={() => openDirectTarget({ kind: "view", viewKind: "repeating" }, true)}>↻</button></div>
     </aside>
 
-    <main className="replacement-main" inert={(mobile && (sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen || repeatTarget !== null ? true : undefined}>
-      <div className="replacement-mobile-header"><button type="button" aria-label="Open sidebar" onClick={(event) => { returnFocus.current = event.currentTarget; setSidebarOpen(true); window.setTimeout(() => (shellRef.current?.querySelector(".replacement-mobile-close") as HTMLElement | null)?.focus(), 0); }}>☰</button><strong>Objects</strong><button type="button" aria-label="Focus Quick Find" onClick={() => (shellRef.current?.querySelector(".replacement-search") as HTMLInputElement | null)?.focus()}>⌕</button></div>
+    <main className="replacement-main" inert={(mobile && (sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen || quickFindOpen || repeatTarget !== null ? true : undefined}>
+      <div className="replacement-mobile-header"><button type="button" aria-label="Open sidebar" onClick={(event) => { returnFocus.current = event.currentTarget; setSidebarOpen(true); window.setTimeout(() => (shellRef.current?.querySelector(".replacement-mobile-close") as HTMLElement | null)?.focus(), 0); }}>☰</button><strong>Objects</strong><button type="button" aria-label="Open Quick Find" onClick={(event) => { returnFocus.current = event.currentTarget; setQuickFindOpen(true); }}>⌕</button></div>
       <div className="replacement-main-inner">
-        <header><p className="replacement-kicker">{saving ? "Saving…" : "Workspace"}</p><div className="replacement-title-row"><div><h1>{viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{normalizedView.kind === "repeating" ? `${document.repeatingTemplates.length} Template${document.repeatingTemplates.length === 1 ? "" : "s"}` : items.length + upcomingPreviews.length ? `${items.length + upcomingPreviews.length} item${items.length + upcomingPreviews.length === 1 ? "" : "s"}` : "Nothing here yet"}</p></div><label className="replacement-search-label"><span>Quick Find</span><input className="replacement-search" type="search" value={search} onInput={(event) => setSearch(event.currentTarget.value)} placeholder="Search this list" /></label></div>{search.trim() && "repeating".includes(search.trim().toLowerCase()) && normalizedView.kind !== "repeating" ? <button className="replacement-quick-route" type="button" onClick={() => setSelectedView({ kind: "repeating", date: today })}>Open Repeating</button> : null}{document.tags.length && normalizedView.kind !== "repeating" ? <div className="replacement-tag-filters" aria-label="Filter by effective Tags"><button type="button" className={!activeTagIds.length ? "active" : ""} onClick={() => setActiveTagIds([])}>All Tags</button>{document.tags.map((tag) => <button key={tag.id} type="button" className={activeTagIds.includes(tag.id) ? "active" : ""} aria-pressed={activeTagIds.includes(tag.id)} onClick={(event) => setActiveTagIds((current) => event.metaKey || event.ctrlKey ? current.includes(tag.id) ? current.filter((id) => id !== tag.id) : [...current, tag.id] : current.length === 1 && current[0] === tag.id ? [] : [tag.id])}>{tag.title}</button>)}</div> : null}</header>
-        {normalizedView.kind !== "repeating" ? <EntityTools view={normalizedView} document={document} workspace={workspace} runChange={runChange} selectView={(view) => { setSelectedView(view); setSelectedId(null); }} openProjectRepeatEditor={(project) => setRepeatTarget({ kind: "project", project })} openTemplate={(id) => { const template = document.repeatingTemplates.find((item) => item.id === id); if (template) setRepeatTarget({ kind: "template", template }); }} /> : null}
+        <header><p className="replacement-kicker">{saving ? "Saving…" : "Workspace"}</p><div className="replacement-title-row"><div><h1>{missingTarget ? "Link unavailable" : viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{missingTarget ?? (normalizedView.kind === "repeating" ? `${document.repeatingTemplates.length} Template${document.repeatingTemplates.length === 1 ? "" : "s"}` : (usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length ? `${(usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length} item${(usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length === 1 ? "" : "s"}` : "Nothing here yet")}</p></div><button className="replacement-search" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setQuickFindOpen(true); }}><span>⌕</span><span>{search || "Quick Find"}</span><kbd>⌘K</kbd></button></div>{document.tags.length && normalizedView.kind !== "repeating" && !missingTarget ? <div className="replacement-tag-filters" aria-label="Filter by effective Tags"><button type="button" className={!activeTagIds.length ? "active" : ""} onClick={() => setActiveTagIds([])}>All Tags</button>{document.tags.map((tag) => <button key={tag.id} type="button" className={activeTagIds.includes(tag.id) ? "active" : ""} aria-pressed={activeTagIds.includes(tag.id)} onClick={(event) => setActiveTagIds((current) => event.metaKey || event.ctrlKey ? current.includes(tag.id) ? current.filter((id) => id !== tag.id) : [...current, tag.id] : current.length === 1 && current[0] === tag.id ? [] : [tag.id])}>{tag.title}</button>)}</div> : null}</header>
+        {!missingTarget && normalizedView.kind !== "repeating" ? <EntityTools view={normalizedView} document={document} workspace={workspace} runChange={runChange} selectView={(view) => openDirectTarget(directTargetForView(view), true)} openProjectRepeatEditor={(project) => setRepeatTarget({ kind: "project", project })} openTemplate={(id) => openDirectTarget({ kind: "repeatingTemplate", id }, true)} /> : null}
         {backupOpen ? <section className="replacement-import" aria-labelledby="replacement-import-title"><h2 id="replacement-import-title">Import the current portable backup</h2><p>Type <strong>{FULL_IMPORT_CONFIRMATION}</strong> before replacing this Workspace.</p><div className="replacement-import-controls"><input className="replacement-file" type="file" accept="application/json,.json" aria-label="Choose Objects JSON backup" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void file.text().then(setBackup); }} /><input className="replacement-confirmation" value={confirmation} onInput={(event) => setConfirmation(event.currentTarget.value)} placeholder={FULL_IMPORT_CONFIRMATION} aria-label="Full import confirmation" /><button className="replacement-button" type="button" disabled={!backup || saving} onClick={() => void importBackup()}>Import backup</button></div></section> : null}
 
-        {normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" && normalizedView.kind !== "repeating" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(QUICK_DRAFT_KEY, value); }} onBlur={(event) => { const next = event.relatedTarget; if (draft && (!(next instanceof Node) || !event.currentTarget.form?.contains(next))) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim() || saving}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
+        {!missingTarget && normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" && normalizedView.kind !== "repeating" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(QUICK_DRAFT_KEY, value); }} onBlur={(event) => { const next = event.relatedTarget; if (draft && (!(next instanceof Node) || !event.currentTarget.form?.contains(next))) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim() || saving}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
 
-        {normalizedView.kind === "repeating" ? <RepeatingView document={document} search={search} edit={(template) => setRepeatTarget({ kind: "template", template })} create={() => setRepeatTarget({ kind: "direct" })} runChange={runChange} /> : items.length || upcomingPreviews.length ? <div className="replacement-sections">
+        {missingTarget ? <section className="replacement-missing"><div aria-hidden="true">?</div><h2>We could not open this link</h2><p>{missingTarget}</p><button className="replacement-button" type="button" onClick={() => openDirectTarget({ kind: "view", viewKind: "today" }, true)}>Open Today</button></section> : normalizedView.kind === "repeating" ? <RepeatingView document={document} search="" edit={(template) => setRepeatTarget({ kind: "template", template })} create={() => setRepeatTarget({ kind: "direct" })} runChange={runChange} /> : usesAgenda && agendaItems.length ? <section className="replacement-agenda" aria-label={`${viewTitle(normalizedView, document)} agenda`}>
+          {agendaItems.map((agendaItem) => agendaItem.kind === "calendarEvent" ? <article className="replacement-calendar-row" key={agendaItem.id}><span className="replacement-calendar-time">{agendaItem.item.allDay ? "All day" : new Date(agendaItem.item.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span><span className="replacement-calendar-line" aria-hidden="true" /><span><strong>{agendaItem.title}</strong><small>{agendaItem.item.calendar} · Calendar event</small></span><button type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setSettingsOpen(true); }}>Edit</button></article> : workspaceRow(agendaItem.item))}
+          {upcomingPreviews.length ? <section className="replacement-section" aria-label="Future repeating previews"><h2>Repeating previews</h2><div className="replacement-list">{upcomingPreviews.map((preview) => <article className="replacement-row replacement-preview-row" key={preview.id}><span className="replacement-preview-icon" aria-hidden="true">↻</span><div className="replacement-row-body" aria-disabled="true"><strong>{preview.title}</strong><span>{preview.scheduledDate} · {preview.itemKind === "toDo" ? "To-do" : "Project"} preview · Becomes actionable when due</span></div><button className="replacement-preview-label" type="button" onClick={() => openDirectTarget({ kind: "repeatingTemplate", id: preview.templateId }, true)}>Template</button></article>)}</div></section> : null}
+        </section> : items.length || upcomingPreviews.length ? <div className="replacement-sections">
           {[...itemSections].map(([sectionKey, section]) => <section className="replacement-section" key={sectionKey} aria-label={section.title ?? `${viewTitle(normalizedView, document)} items`}>
           {section.title ? <h2>{section.title}</h2> : null}
           <div className="replacement-list" data-section={sectionKey}>
-          {section.items.map((item) => <WorkspaceItemRow
-            key={item.id}
-            item={item}
-            selected={selectedId === item.id}
-            bulkSelected={selection.ids.includes(item.id)}
-            idsForAction={idsForAction}
-            runIntent={runIntent}
-            selectRow={selectRow}
-            selectProject={(id) => setSelectedView({ kind: "project", id, date: today })}
-            toggleSelection={(id, trigger) => {
-              returnFocus.current = trigger;
-              setSelectedId(null);
-              setSelection((current) => updateSelection(current, visibleToDoIds, id, "toggle"));
-            }}
-            openContextMenu={openContextMenu}
-            beginTouch={beginTouch}
-            endTouch={endTouch}
-            cancelTouch={() => {
-              if (touchGesture.current) window.clearTimeout(touchGesture.current.timer);
-              touchGesture.current = null;
-            }}
-          />)}
+          {section.items.map(workspaceRow)}
           </div>
           </section>)}
           {upcomingPreviews.length ? <section className="replacement-section" aria-label="Future repeating previews"><h2>Repeating previews</h2><div className="replacement-list">{upcomingPreviews.map((preview) => <article className="replacement-row replacement-preview-row" key={preview.id}><span className="replacement-preview-icon" aria-hidden="true">↻</span><div className="replacement-row-body" aria-disabled="true"><strong>{preview.title}</strong><span>{preview.scheduledDate} · {preview.itemKind === "toDo" ? "To-do" : "Project"} preview · Becomes actionable when due</span></div><button className="replacement-preview-label" type="button" onClick={() => { const template = document.repeatingTemplates.find((item) => item.id === preview.templateId); setSelectedView({ kind: "repeating", date: today }); if (template) setRepeatTarget({ kind: "template", template }); }}>Template</button></article>)}</div></section> : null}
@@ -1354,10 +1590,11 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
       runIntent={runIntent}
       close={closeActionDialog}
     /> : null}
-    {settingsOpen ? <WorkspaceSettingsDialog settings={document.settings} runChange={runChange} close={() => { setSettingsOpen(false); restoreFocus(); }} /> : null}
+    {settingsOpen ? <WorkspaceSettingsDialog document={document} today={today} runChange={runChange} close={() => { setSettingsOpen(false); restoreFocus(); }} /> : null}
+    {quickFindOpen ? <QuickFindDialog document={document} today={today} query={search} setQuery={setSearch} choose={(result) => { setQuickFindOpen(false); openDirectTarget(result.target, true); }} close={() => { setQuickFindOpen(false); restoreFocus(); }} /> : null}
     {repeatTarget ? <RepeatEditor target={repeatTarget} document={document} today={today} runChange={runChange} close={() => setRepeatTarget(null)} /> : null}
-    <button className="replacement-magic-plus" type="button" inert={actionDialog !== null || settingsOpen || repeatTarget !== null ? true : undefined} aria-label={normalizedView.kind === "repeating" ? "Add Repeating Template" : "Magic Plus: add to-do"} onClick={() => { if (normalizedView.kind === "repeating") setRepeatTarget({ kind: "direct" }); else { quickInput.current?.focus(); quickInput.current?.scrollIntoView({ behavior: "smooth", block: "center" }); } }}>+</button>
-    {selected ? <div inert={actionDialog !== null || settingsOpen || repeatTarget !== null ? true : undefined}><Inspector key={`${selected.id}-${snapshot.revision}`} item={selected} document={document} saving={saving} modal={mobile} runChange={runChange} runIntent={runIntent} openRepeatEditor={(item) => setRepeatTarget({ kind: "toDo", toDo: item })} openTemplate={(id) => { const template = document.repeatingTemplates.find((item) => item.id === id); if (template) { setSelectedView({ kind: "repeating", date: today }); setSelectedId(null); setRepeatTarget({ kind: "template", template }); } }} close={() => { setSelectedId(null); restoreFocus(); }} /></div> : null}
+    {!missingTarget ? <button className="replacement-magic-plus" type="button" inert={actionDialog !== null || settingsOpen || quickFindOpen || repeatTarget !== null ? true : undefined} aria-label={normalizedView.kind === "repeating" ? "Add Repeating Template" : "Magic Plus: add to-do"} onClick={() => { if (normalizedView.kind === "repeating") setRepeatTarget({ kind: "direct" }); else { quickInput.current?.focus(); quickInput.current?.scrollIntoView({ behavior: "smooth", block: "center" }); } }}>+</button> : null}
+    {selected ? <div inert={actionDialog !== null || settingsOpen || quickFindOpen || repeatTarget !== null ? true : undefined}><Inspector key={`${selected.id}-${snapshot.revision}`} item={selected} document={document} saving={saving} modal={mobile} runChange={runChange} runIntent={runIntent} openRepeatEditor={(item) => setRepeatTarget({ kind: "toDo", toDo: item })} openTemplate={(id) => openDirectTarget({ kind: "repeatingTemplate", id }, true)} close={() => { setSelectedId(null); history.pushState(null, "", directTargetUrl(directTargetForView(normalizedView), `${location.origin}${location.pathname}`)); restoreFocus(); }} /></div> : null}
     {feedback ? <div className={`replacement-toast${feedback.error ? " error" : ""}`} role="status"><span>{feedback.text}</span>{feedback.error && pending.current ? <button type="button" onClick={() => void retrySave()}>Retry</button> : null}{feedback.undo ? <button type="button" onClick={() => void undo(feedback.undo!, feedback.undoDocument)}>Undo</button> : null}<button type="button" aria-label="Dismiss message" onClick={() => setFeedback(null)}>×</button></div> : null}
   </div>;
 }

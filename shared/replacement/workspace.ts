@@ -1,6 +1,7 @@
 import type {
   AffectedEntity,
   Area,
+  CalendarEvent,
   ChecklistItem,
   EntityId,
   Heading,
@@ -24,6 +25,8 @@ import type {
   WorkspaceEntityKind,
 } from "./model.ts";
 import { createEmptyImportReport, parsePortableBackup, type ImportReport } from "./importer.ts";
+import { parseIcsCalendar } from "./calendar.ts";
+import { addDaysToDate as addDays } from "./dates.ts";
 
 export const FULL_IMPORT_CONFIRMATION = "REPLACE WORKSPACE";
 export const PERMANENT_DELETE_CONFIRMATION = "DELETE FOREVER";
@@ -45,6 +48,7 @@ export type ProjectChanges = Partial<Pick<Project, "title" | "notes" | "location
 export type AreaChanges = Partial<Pick<Area, "title" | "spaceId" | "color" | "tags">>;
 export type HeadingChanges = Partial<Pick<Heading, "title" | "location">>;
 export type SpaceChanges = Partial<Pick<Space, "title" | "color" | "pinned">>;
+export type CalendarEventChanges = Partial<Pick<CalendarEvent, "title" | "spaceId" | "start" | "end" | "calendar" | "allDay">>;
 
 export type RepeatingTemplateDraft = {
   title: string;
@@ -118,6 +122,11 @@ export type WorkspaceChange =
   | { type: "runDailyLogbook"; spaceId?: EntityId }
   | { type: "setLogbookPolicy"; policy: LogbookPolicy }
   | { type: "setTheme"; theme: WorkspaceDocument["settings"]["theme"] }
+  | { type: "setShowCalendar"; show: boolean }
+  | { type: "createCalendarEvent"; title: string; spaceId: EntityId; start: string; end: string; calendar?: string; allDay?: boolean }
+  | { type: "updateCalendarEvent"; id: EntityId; changes: CalendarEventChanges }
+  | { type: "deleteCalendarEvent"; id: EntityId }
+  | { type: "importIcsCalendar"; source: string; spaceId: EntityId }
   | { type: "trashToDo"; id: EntityId }
   | { type: "restoreToDo"; id: EntityId }
   | { type: "permanentlyDeleteToDo"; id: EntityId; confirmation: string }
@@ -204,12 +213,6 @@ function isIsoDateTime(value: string): boolean {
 function isTime(value: string): boolean {
   const match = /^(\d{2}):(\d{2})$/.exec(value);
   return Boolean(match && Number(match[1]) <= 23 && Number(match[2]) <= 59);
-}
-
-function addDays(date: string, days: number): string {
-  const value = new Date(`${date}T00:00:00.000Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
 }
 
 function daysBetween(left: string, right: string): number {
@@ -897,7 +900,8 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     }
     for (const event of document.calendarEvents) {
       if (!document.spaces.some((space) => space.id === event.spaceId)) errors.push(`Calendar event “${event.id}” has no valid Space.`);
-      if (!isIsoDateTime(event.start) || !isIsoDateTime(event.end) || Date.parse(event.end) < Date.parse(event.start)) {
+      if (!isIsoDateTime(event.start) || !isIsoDateTime(event.end) || Date.parse(event.end) < Date.parse(event.start)
+        || event.allDay && Date.parse(event.end) === Date.parse(event.start)) {
         errors.push(`Calendar event “${event.id}” has an invalid date range.`);
       }
     }
@@ -1060,6 +1064,90 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       if (change.type === "setTheme") {
         document.settings.theme = change.theme;
         return finishChange(previous, "theme-updated", []);
+      }
+      if (change.type === "setShowCalendar") {
+        document.settings.showCalendar = change.show;
+        return finishChange(previous, "calendar-visibility-updated", []);
+      }
+      if (change.type === "createCalendarEvent") {
+        const title = change.title.trim();
+        if (!title || title.length > 500) return fail(["Enter a calendar event title between 1 and 500 characters."]);
+        if (!document.spaces.some((space) => space.id === change.spaceId)) return fail(["Choose an available Space for this calendar event."]);
+        if (!isIsoDateTime(change.start) || !isIsoDateTime(change.end) || Date.parse(change.end) < Date.parse(change.start)
+          || change.allDay && Date.parse(change.end) === Date.parse(change.start)) {
+          return fail(["Choose a valid calendar event start and end time."]);
+        }
+        const id = dependencies.createId("calendarEvent");
+        document.calendarEvents.push({
+          id,
+          spaceId: change.spaceId,
+          title,
+          start: new Date(change.start).toISOString(),
+          end: new Date(change.end).toISOString(),
+          calendar: change.calendar?.trim() || "Objects",
+          allDay: change.allDay ?? false,
+          sourceUid: null,
+        });
+        return finishChange(previous, "calendar-event-created", [{ kind: "calendarEvent", id }], "Undo new calendar event");
+      }
+      if (change.type === "updateCalendarEvent") {
+        const event = document.calendarEvents.find((item) => item.id === change.id);
+        if (!event) return failAs("not-found", ["This calendar event no longer exists."]);
+        if (change.changes.title !== undefined) {
+          const title = change.changes.title.trim();
+          if (!title || title.length > 500) return fail(["Enter a calendar event title between 1 and 500 characters."]);
+          event.title = title;
+        }
+        if (change.changes.spaceId !== undefined) {
+          if (!document.spaces.some((space) => space.id === change.changes.spaceId)) return fail(["Choose an available Space for this calendar event."]);
+          event.spaceId = change.changes.spaceId;
+        }
+        if (change.changes.start !== undefined) event.start = change.changes.start;
+        if (change.changes.end !== undefined) event.end = change.changes.end;
+        if (change.changes.calendar !== undefined) event.calendar = change.changes.calendar.trim() || "Objects";
+        if (change.changes.allDay !== undefined) event.allDay = change.changes.allDay;
+        if (!isIsoDateTime(event.start) || !isIsoDateTime(event.end) || Date.parse(event.end) < Date.parse(event.start)
+          || event.allDay && Date.parse(event.end) === Date.parse(event.start)) {
+          return fail(["Choose a valid calendar event start and end time."]);
+        }
+        event.start = new Date(event.start).toISOString();
+        event.end = new Date(event.end).toISOString();
+        return finishChange(previous, "calendar-event-updated", [{ kind: "calendarEvent", id: event.id }], "Undo calendar event changes");
+      }
+      if (change.type === "deleteCalendarEvent") {
+        const index = document.calendarEvents.findIndex((item) => item.id === change.id);
+        if (index < 0) return failAs("not-found", ["This calendar event no longer exists."]);
+        document.calendarEvents.splice(index, 1);
+        document.permanentDeletions.push({ entityKind: "calendarEvent", entityId: change.id, deletedAt: dependencies.now() });
+        return finishChange(previous, "calendar-event-deleted", [{ kind: "calendarEvent", id: change.id }], "Undo deleted calendar event");
+      }
+      if (change.type === "importIcsCalendar") {
+        if (!document.spaces.some((space) => space.id === change.spaceId)) return fail(["Choose an available Space for imported calendar events."]);
+        const parsed = parseIcsCalendar(change.source);
+        if (parsed.status === "rejected") return fail(parsed.errors);
+        const duplicate = parsed.events.find((candidate) => document.calendarEvents.some((event) => candidate.uid
+          ? event.sourceUid === candidate.uid
+          : event.title.toLocaleLowerCase() === candidate.title.toLocaleLowerCase()
+            && event.start === candidate.start
+            && event.end === candidate.end
+        ));
+        if (duplicate) return fail([`The calendar event “${duplicate.title}” already exists.`]);
+        const affected: AffectedEntity[] = [];
+        for (const imported of parsed.events) {
+          const id = dependencies.createId("calendarEvent");
+          document.calendarEvents.push({
+            id,
+            spaceId: change.spaceId,
+            title: imported.title,
+            start: imported.start,
+            end: imported.end,
+            calendar: imported.calendar,
+            allDay: imported.allDay,
+            sourceUid: imported.uid,
+          });
+          affected.push({ kind: "calendarEvent", id });
+        }
+        return finishChange(previous, "ics-calendar-imported", affected, "Undo imported calendar events");
       }
       if (change.type === "runDailyLogbook") {
         const affected: AffectedEntity[] = [];

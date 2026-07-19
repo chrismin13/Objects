@@ -9,7 +9,7 @@ function decodeBase64(value: string): Uint8Array {
 
 async function loadSortable() {
   const compressed = decodeBase64(sortableCompressed);
-  const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const stream = new Blob([compressed.buffer as ArrayBuffer]).stream().pipeThrough(new DecompressionStream("gzip"));
   const source = await new Response(stream).text();
   const moduleUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
   try {

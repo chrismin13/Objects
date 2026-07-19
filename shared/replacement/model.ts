@@ -116,6 +116,7 @@ export type CalendarEvent = {
   end: IsoDateTime;
   calendar: string;
   allDay: boolean;
+  sourceUid?: string | null;
 };
 
 export type RepeatingPattern = {

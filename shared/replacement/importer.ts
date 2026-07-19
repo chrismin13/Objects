@@ -508,7 +508,16 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
     const requestedSpaceId = optionalText(item.spaceId);
     const spaceId = requestedSpaceId && spaceIds.has(requestedSpaceId) ? requestedSpaceId : fallbackSpaceId;
     if (requestedSpaceId !== spaceId) correction(report, `Calendar event “${title}”: replaced its missing Space.`);
-    calendarEvents.push({ id, title, start, end, spaceId, calendar: optionalText(item.calendar) ?? "Imported", allDay: Boolean(item.allDay) });
+    calendarEvents.push({
+      id,
+      title,
+      start,
+      end,
+      spaceId,
+      calendar: optionalText(item.calendar) ?? "Imported",
+      allDay: Boolean(item.allDay),
+      sourceUid: optionalText(item.sourceUid),
+    });
     eventIds.add(id);
   }
   report.imported.calendarEvents = calendarEvents.length;
