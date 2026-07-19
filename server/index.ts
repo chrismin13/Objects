@@ -1,8 +1,15 @@
 import { capsule, endpoint, json, mutation, query, string, table, text } from "lakebed/server";
 import { addCapturedTask, createSeed, isObjectsState } from "../shared/state";
+import {
+  resolveSyncCommand,
+  type WorkspaceSyncCommand,
+  type WorkspaceSyncSnapshot,
+} from "../shared/replacement/sync";
 
 const MAX_STATE_SIZE = 750_000;
 const MAX_ROW_SIZE = 60_000;
+const MAX_REPLACEMENT_WORKSPACE_SIZE = 2_000_000;
+const REPLACEMENT_CHUNK_SIZE = 50_000;
 const ENTITY_KINDS = ["spaces", "areas", "projects", "headings", "calendarEvents", "tasks"] as const;
 type EntityKind = typeof ENTITY_KINDS[number];
 type JsonRecord = Record<string, unknown>;
@@ -156,6 +163,36 @@ function parseRecord(serialized: string): JsonRecord {
   const value: unknown = JSON.parse(serialized);
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Objects row");
   return value as JsonRecord;
+}
+
+function replacementOwner(ctx: any): string {
+  if (!ctx.auth.isAuthenticated || !ctx.auth.userId) throw new Error("Authentication required");
+  return ctx.auth.userId;
+}
+
+function parseReplacementCommand(serialized: string): WorkspaceSyncCommand {
+  if (typeof serialized !== "string" || serialized.length > MAX_REPLACEMENT_WORKSPACE_SIZE) {
+    throw new Error("Replacement Workspace data is too large");
+  }
+  const value: unknown = JSON.parse(serialized);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid replacement Workspace change");
+  return value as WorkspaceSyncCommand;
+}
+
+async function replacementSnapshot(ctx: any, ownerId: string): Promise<WorkspaceSyncSnapshot | null> {
+  const meta = await ctx.db.replacementWorkspaceMeta
+    .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
+    .first();
+  if (!meta) return null;
+  const chunks = await ctx.db.replacementWorkspaceChunks
+    .withIndex("by_owner_part", (range: any) => range.eq("ownerId", ownerId))
+    .order("asc")
+    .collect();
+  const document = chunks
+    .sort((left: any, right: any) => left.part.localeCompare(right.part))
+    .map((chunk: any) => chunk.data)
+    .join("");
+  return { revision: Number(meta.revision), document: JSON.parse(document) } as WorkspaceSyncSnapshot;
 }
 
 function serializeRecord(value: JsonRecord): string {
@@ -433,12 +470,29 @@ export default capsule({
       kind: string(),
       entityId: string(),
       deletedAt: string()
-    }).index("by_owner_kind_entity", ["ownerId", "kind", "entityId"])
+    }).index("by_owner_kind_entity", ["ownerId", "kind", "entityId"]),
+    replacementWorkspaceMeta: table({
+      ownerId: string(),
+      revision: string(),
+      mutationId: string(),
+      syncUpdatedAt: string(),
+      partCount: string()
+    }).index("by_owner", ["ownerId"]),
+    replacementWorkspaceChunks: table({
+      ownerId: string(),
+      part: string(),
+      data: string()
+    }).index("by_owner_part", ["ownerId", "part"])
   },
 
   queries: {
     state: query(async (ctx) => {
       return normalizedState(ctx, ctx.auth.userId);
+    }),
+    replacementWorkspace: query(async (ctx) => {
+      const ownerId = replacementOwner(ctx);
+      const snapshot = await replacementSnapshot(ctx, ownerId);
+      return snapshot ? JSON.stringify(snapshot) : null;
     })
   },
 
@@ -449,7 +503,46 @@ export default capsule({
     }),
     applyChanges: mutation(async (ctx, serialized: string) =>
       applyChangeSet(ctx, ctx.auth.userId, parseChanges(serialized))
-    )
+    ),
+    saveReplacementWorkspace: mutation(async (ctx, serialized: string) => {
+      const ownerId = replacementOwner(ctx);
+      const current = await replacementSnapshot(ctx, ownerId);
+      const resolved = resolveSyncCommand(current, parseReplacementCommand(serialized), new Date().toISOString());
+      if (resolved.next) {
+        const existingMeta = await ctx.db.replacementWorkspaceMeta
+          .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
+          .first();
+        const existingChunks = await ctx.db.replacementWorkspaceChunks
+          .withIndex("by_owner_part", (range: any) => range.eq("ownerId", ownerId))
+          .order("asc")
+          .collect();
+        const document = JSON.stringify(resolved.next.document);
+        if (document.length > MAX_REPLACEMENT_WORKSPACE_SIZE) throw new Error("Replacement Workspace data is too large");
+        const chunks = [] as string[];
+        for (let start = 0; start < document.length; start += REPLACEMENT_CHUNK_SIZE) {
+          chunks.push(document.slice(start, start + REPLACEMENT_CHUNK_SIZE));
+        }
+        for (let index = 0; index < chunks.length; index += 1) {
+          const part = String(index).padStart(6, "0");
+          const existing = existingChunks.find((chunk: any) => chunk.part === part);
+          if (existing) await ctx.db.replacementWorkspaceChunks.update(existing.id, { data: chunks[index] });
+          else await ctx.db.replacementWorkspaceChunks.insert({ ownerId, part, data: chunks[index] });
+        }
+        for (const existing of existingChunks) {
+          if (Number(existing.part) >= chunks.length) await ctx.db.replacementWorkspaceChunks.delete(existing.id);
+        }
+        const meta = {
+          ownerId,
+          revision: String(resolved.next.revision),
+          mutationId: resolved.next.document.sync.lastMutationId ?? "",
+          syncUpdatedAt: resolved.next.document.sync.updatedAt,
+          partCount: String(chunks.length)
+        };
+        if (existingMeta) await ctx.db.replacementWorkspaceMeta.update(existingMeta.id, meta);
+        else await ctx.db.replacementWorkspaceMeta.insert(meta);
+      }
+      return JSON.stringify(resolved.result);
+    })
   },
 
   endpoints: {

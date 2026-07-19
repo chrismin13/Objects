@@ -6,6 +6,7 @@ import { objectsTheme } from "./theme";
 import { webAwesomeReady } from "./vendor/webawesome/loader";
 import { objectsRuntimeReady } from "./runtime/loader";
 import { ComponentGallery, isComponentGalleryLocation } from "./features/gallery/component-gallery";
+import { ReplacementApp } from "./replacement";
 
 type AuthIdentity = ReturnType<typeof useAuth>;
 
@@ -162,7 +163,7 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
   return <StableObjectsDom />;
 }
 
-export function App() {
+function CurrentApp() {
   const auth = useAuth();
   const componentGallery = isComponentGalleryLocation();
   const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
@@ -233,4 +234,9 @@ export function App() {
       {componentGallery ? <ComponentGallery /> : auth.isLoading ? !online ? <OfflineScreen /> : authTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
     </>
   );
+}
+
+export function App() {
+  const replacement = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("replacement") === "1";
+  return replacement ? <ReplacementApp /> : <CurrentApp />;
 }
