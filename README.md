@@ -120,7 +120,11 @@ Authenticated tools can send the same capture fields as JSON to `POST /api/tasks
 
 ## Data model
 
-Objects stores Spaces, areas, projects, headings, calendar events, tasks, and checklist items as separate owner-scoped rows. Client edits are sent as field-level patches, Lakebed mutations apply them transactionally, and live query results are merged with any unsaved local draft instead of replacing the active editor. Permanent deletions create tombstones so a stale client cannot recreate an item.
+Objects stores each account's portable Workspace in private, owner-scoped Lakebed rows. Client edits are sent as compact field-level changes. Lakebed applies each change as one transaction, records its mutation identity, and returns the merged Workspace. Retrying an old or uncertain mutation identity returns the current saved Workspace instead of running that mutation again.
+
+The app keeps an account-scoped copy and pending-change queue in device storage. A local action appears immediately and remains available after a reload or temporary loss of the session. When the connection returns, Objects sends the pending changes in order. It does not cache private Lakebed API or authentication responses in the service worker.
+
+Multi-device conflicts follow one fixed rule. Changes to different fields are combined. If two devices changed the same field from the same older value, the later submitted local change is kept and Objects shows conflict feedback. If one device permanently deleted an item, the durable deletion marker always wins over a stale edit. Repeating Occurrences and capture receipts are also checked by their schedule or submission identity so concurrent retries create one result.
 
 Deployments created before the normalized schema are migrated automatically from the legacy `workspaceChunks` document on first load. The legacy rows are retained as a migration backup but are no longer used after the per-user `workspaceMeta` row exists. Data can still be exported as one portable JSON backup from Settings at any time.
 

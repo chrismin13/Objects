@@ -9,6 +9,7 @@ import { captureIntoSnapshot } from "../shared/replacement/http-capture";
 import { createEmptyWorkspace } from "../shared/replacement/workspace";
 
 const MAX_REPLACEMENT_WORKSPACE_SIZE = 2_000_000;
+const MAX_REPLACEMENT_COMMAND_SIZE = 5_000_000;
 const REPLACEMENT_CHUNK_SIZE = 50_000;
 const PWA_MANIFEST = JSON.stringify({
   id: "/",
@@ -43,7 +44,7 @@ const PWA_MANIFEST = JSON.stringify({
 });
 
 
-const SERVICE_WORKER = `const CACHE = "objects-pwa-v9";
+const SERVICE_WORKER = `const CACHE = "objects-pwa-v11";
 const CORE = ["/", "/client.js", "/manifest.webmanifest", "/favicon.svg"];
 const network = self["fet" + "ch"].bind(self);
 
@@ -146,7 +147,7 @@ function replacementOwner(ctx: any): string {
 }
 
 function parseReplacementCommand(serialized: string): WorkspaceSyncCommand {
-  if (typeof serialized !== "string" || serialized.length > MAX_REPLACEMENT_WORKSPACE_SIZE) {
+  if (typeof serialized !== "string" || serialized.length > MAX_REPLACEMENT_COMMAND_SIZE) {
     throw new Error("Replacement Workspace data is too large");
   }
   const value: unknown = JSON.parse(serialized);
@@ -257,24 +258,50 @@ export default capsule({
       ownerId: string(),
       part: string(),
       data: string()
-    }).index("by_owner_part", ["ownerId", "part"])
+    }).index("by_owner_part", ["ownerId", "part"]),
+    replacementMutationReceipts: table({
+      ownerId: string(),
+      mutationId: string(),
+      revision: string(),
+      conflictsData: string()
+    }).index("by_owner_mutation", ["ownerId", "mutationId"])
   },
 
   queries: {
     replacementWorkspace: query(async (ctx) => {
       const ownerId = replacementOwner(ctx);
       const snapshot = await replacementSnapshot(ctx, ownerId);
-      return snapshot ? JSON.stringify(snapshot) : null;
-    }),
-    replacementOwnerIdentity: query((ctx) => replacementOwner(ctx))
+      return JSON.stringify({ ownerIdentity: ownerId, snapshot });
+    })
   },
 
   mutations: {
     saveReplacementWorkspace: mutation(async (ctx, serialized: string) => {
       const ownerId = replacementOwner(ctx);
+      const command = parseReplacementCommand(serialized);
       const current = await replacementSnapshot(ctx, ownerId);
-      const resolved = resolveSyncCommand(current, parseReplacementCommand(serialized), new Date().toISOString());
-      if (resolved.next) await writeReplacementSnapshot(ctx, ownerId, resolved.next);
+      const known = await ctx.db.replacementMutationReceipts
+        .withIndex("by_owner_mutation", (range: any) => range.eq("ownerId", ownerId).eq("mutationId", command.mutationId))
+        .first();
+      if (known && current) {
+        return JSON.stringify({
+          status: "acknowledged",
+          mutationId: command.mutationId,
+          revision: current.revision,
+          snapshot: current,
+          conflicts: JSON.parse(known.conflictsData),
+        });
+      }
+      const resolved = resolveSyncCommand(current, command, new Date().toISOString());
+      if (resolved.next) {
+        await writeReplacementSnapshot(ctx, ownerId, resolved.next);
+        await ctx.db.replacementMutationReceipts.insert({
+          ownerId,
+          mutationId: command.mutationId,
+          revision: String(resolved.next.revision),
+          conflictsData: JSON.stringify(resolved.result.status === "acknowledged" ? resolved.result.conflicts : []),
+        });
+      }
       return JSON.stringify(resolved.result);
     })
   },

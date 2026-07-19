@@ -1,12 +1,8 @@
 import { useMutation, useQuery } from "lakebed/client";
-import { useMemo } from "preact/hooks";
+import { useEffect, useMemo, useRef } from "preact/hooks";
 
-import type {
-  WorkspaceSyncAdapter,
-  WorkspaceSyncCommand,
-  WorkspaceSyncResult,
-  WorkspaceSyncSnapshot,
-} from "../../shared/replacement/sync";
+import type { WorkspaceSyncAdapter, WorkspaceSyncSnapshot } from "../../shared/replacement/sync";
+import { createLakebedWorkspaceAdapter } from "./lakebed-adapter-core";
 
 export type LakebedAdapterState = {
   adapter: WorkspaceSyncAdapter;
@@ -15,21 +11,35 @@ export type LakebedAdapterState = {
 };
 
 export function useLakebedWorkspaceAdapter(): LakebedAdapterState {
-  const serializedSnapshot = useQuery<string | null>("replacementWorkspace");
-  const ownerIdentity = useQuery<string>("replacementOwnerIdentity");
+  const serializedWorkspace = useQuery<string>("replacementWorkspace");
   const saveWorkspace = useMutation<[serialized: string], string>("saveReplacementWorkspace");
+  const workspace = serializedWorkspace === undefined
+    ? undefined
+    : JSON.parse(serializedWorkspace) as { ownerIdentity: string; snapshot: WorkspaceSyncSnapshot | null };
+  const serializedSnapshot = workspace === undefined ? undefined : workspace.snapshot ? JSON.stringify(workspace.snapshot) : null;
+  const ownerIdentity = workspace?.ownerIdentity;
+  const snapshotRef = useRef<string | null | undefined>(serializedSnapshot);
+  const saveRef = useRef(saveWorkspace);
+  const listeners = useRef(new Set<() => void>());
+  const previousOwnerIdentity = useRef<string | undefined>(ownerIdentity);
+  snapshotRef.current = serializedSnapshot;
+  saveRef.current = saveWorkspace;
 
-  const adapter = useMemo<WorkspaceSyncAdapter>(() => ({
-    async load(): Promise<WorkspaceSyncSnapshot | null> {
-      return typeof serializedSnapshot === "string"
-        ? JSON.parse(serializedSnapshot) as WorkspaceSyncSnapshot
-        : null;
-    },
-    async save(command: WorkspaceSyncCommand): Promise<WorkspaceSyncResult> {
-      const result = await saveWorkspace(JSON.stringify(command));
-      return JSON.parse(result) as WorkspaceSyncResult;
-    },
-  }), [serializedSnapshot, saveWorkspace]);
+  useEffect(() => {
+    if (ownerIdentity && ownerIdentity === previousOwnerIdentity.current) {
+      for (const listener of listeners.current) listener();
+    }
+    previousOwnerIdentity.current = ownerIdentity;
+  }, [serializedSnapshot, ownerIdentity]);
 
-  return { adapter, loading: serializedSnapshot === undefined || ownerIdentity === undefined, ownerIdentity: ownerIdentity ?? "guest" };
+  const adapter = useMemo<WorkspaceSyncAdapter>(() => createLakebedWorkspaceAdapter({
+    readSnapshot: () => snapshotRef.current,
+    saveCommand: (serialized) => saveRef.current(serialized),
+    subscribe(listener) {
+      listeners.current.add(listener);
+      return () => listeners.current.delete(listener);
+    },
+  }), []);
+
+  return { adapter, loading: workspace === undefined, ownerIdentity: ownerIdentity ?? "guest" };
 }

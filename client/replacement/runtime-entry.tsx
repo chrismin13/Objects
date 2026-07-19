@@ -35,8 +35,8 @@ import {
   type WorkspaceChange,
   type WorkspaceView,
 } from "../../shared/replacement/workspace";
-import type { WorkspaceSyncCommand } from "../../shared/replacement/sync";
-import type { WorkspaceSyncAdapter } from "../../shared/replacement/sync";
+import type { WorkspaceSyncAdapter, WorkspaceSyncConflict } from "../../shared/replacement/sync";
+import { createWorkspaceSyncClient, type WorkspaceSyncClientState } from "../../shared/replacement/sync-client";
 import { changesForIntent, toDoActionForShortcut, touchActionForDistance, updateSelection, type InteractionSource, type SelectionState, type ToDoAction } from "./interactions";
 import { replacementStyles } from "./styles";
 import { destroyWorkspaceToDoSortable, mountWorkspaceToDoSortable } from "../ui/sortable";
@@ -67,8 +67,58 @@ function useNativeDialog(ref: { current: HTMLDialogElement | null }, onClose: ()
   }, []);
 }
 
-function deviceStorageKey(kind: "quick-draft" | "space-preferences" | "pending-capture", identity: string): string {
+function deviceStorageKey(kind: "quick-draft" | "space-preferences" | "pending-capture" | "workspace-sync", identity: string): string {
   return `objects-replacement-${kind}:${identity}`;
+}
+
+function conflictValue(document: WorkspaceDocument | undefined, path: string): unknown {
+  let current: unknown = document;
+  for (const segment of path.split("/")) {
+    if (Array.isArray(current)) {
+      current = current.find((item) => item && typeof item === "object" && ["id", "key", "submissionId"].some((name) => (item as Record<string, unknown>)[name] === segment));
+    } else if (current && typeof current === "object") {
+      current = (current as Record<string, unknown>)[segment];
+    } else return undefined;
+  }
+  return current;
+}
+
+function syncConflictMessage(conflict: WorkspaceSyncConflict, document: WorkspaceDocument | undefined): string {
+  const [collection, entityId, ...details] = conflict.path.split("/");
+  const labels: Record<string, string> = {
+    toDos: "to-do",
+    projects: "project",
+    areas: "area",
+    headings: "heading",
+    spaces: "space",
+    tags: "tag",
+    repeatingTemplates: "repeating template",
+    calendarEvents: "calendar event",
+    settings: "setting",
+  };
+  const entityCollections: Record<string, Array<{ id: string; title?: string }> | undefined> = {
+    toDos: document?.toDos,
+    projects: document?.projects,
+    areas: document?.areas,
+    headings: document?.headings,
+    spaces: document?.spaces,
+    tags: document?.tags,
+    repeatingTemplates: document?.repeatingTemplates,
+    calendarEvents: document?.calendarEvents,
+  };
+  const item = entityId ? entityCollections[collection]?.find((candidate) => candidate.id === entityId) : undefined;
+  const subject = item?.title ? `${labels[collection] ?? "item"} “${item.title}”` : labels[collection] ?? collection;
+  const field = (details.at(-1) ?? entityId ?? "value").replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("-", " ");
+  const savedValue = conflictValue(document, conflict.path);
+  const displayedValue = typeof savedValue === "string" || typeof savedValue === "number" || typeof savedValue === "boolean"
+    ? ` The value now shown is “${String(savedValue).slice(0, 80)}”.`
+    : savedValue === null ? " The value now shown is empty." : "";
+  const result = conflict.resolution === "local-change-kept"
+    ? "This device's value was kept."
+    : conflict.resolution === "permanent-deletion-kept"
+      ? "The permanent deletion was kept."
+      : "The removal or earlier remote result was kept.";
+  return `The ${field} for ${subject} changed on another device. ${result}${displayedValue} Review it if this was not intended.`;
 }
 
 function readDeviceSpacePreferences(identity: string): DeviceSpacePreferences {
@@ -1228,76 +1278,107 @@ function mountWorkspaceKeyboard(options: WorkspaceKeyboardOptions): () => void {
   return () => globalThis.document.removeEventListener("keydown", keydown);
 }
 
-function useWorkspaceDocument(adapter: WorkspaceSyncAdapter, onLoad: (document: WorkspaceDocument) => void) {
+function useWorkspaceDocument(adapter: WorkspaceSyncAdapter, deviceIdentity: string, onLoad: (document: WorkspaceDocument) => void) {
   const [snapshot, setSnapshot] = useState<{ revision: number; document: WorkspaceDocument } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [saving, setSaving] = useState(false);
-  const pending = useRef<{ command: WorkspaceSyncCommand; document: WorkspaceDocument } | null>(null);
+  const [syncState, setSyncState] = useState<WorkspaceSyncClientState>({ snapshot: null, pendingCount: 0, status: "loading", conflicts: [], rejected: [] });
+  const pending = useRef<{ count: number } | null>(null);
+  const clientRef = useRef<ReturnType<typeof createWorkspaceSyncClient> | null>(null);
   const onLoadRef = useRef(onLoad);
   onLoadRef.current = onLoad;
 
   useEffect(() => {
     let active = true;
-    adapter.load().then((next) => {
+    const storageKey = deviceStorageKey("workspace-sync", deviceIdentity);
+    const client = createWorkspaceSyncClient(adapter, {
+      load: () => {
+        try { return localStorage.getItem(storageKey); } catch { return null; }
+      },
+      save: (serialized) => { localStorage.setItem(storageKey, serialized); },
+    }, () => new Date().toISOString());
+    clientRef.current = client;
+    const update = (next: WorkspaceSyncClientState) => {
       if (!active) return;
-      const loadedSnapshot = next ?? { revision: 0, document: newWorkspaceDocument() };
-      setSnapshot(loadedSnapshot);
-      onLoadRef.current(loadedSnapshot.document);
+      setSyncState(next);
+      setSnapshot(next.snapshot);
+      pending.current = next.pendingCount ? { count: next.pendingCount } : null;
+      if (next.status === "offline") {
+        setFeedback({ text: next.pendingCount ? `Offline. ${next.pendingCount} change${next.pendingCount === 1 ? " is" : "s are"} safe on this device and will retry.` : "Offline. The saved Workspace on this device is still available.", error: false });
+      } else if (next.status === "session-expired") {
+        setFeedback({ text: `Your session expired. ${next.pendingCount ? `${next.pendingCount} local change${next.pendingCount === 1 ? " is" : "s are"} safe and waiting. ` : ""}Sign in again to continue syncing.`, error: true });
+      } else if (next.status === "recovered") {
+        setFeedback({ text: "Connection recovered. Local and remote changes are saved.", error: false });
+      } else if (next.status === "conflict") {
+        const conflictMessages = next.conflicts.slice(0, 3).map((conflict) => syncConflictMessage(conflict, next.snapshot?.document));
+        const rejectedMessages = next.rejected.slice(0, 3).flatMap((item) => item.errors);
+        const hiddenCount = Math.max(0, next.conflicts.length + next.rejected.length - conflictMessages.length - rejectedMessages.length);
+        const text = [...conflictMessages, ...rejectedMessages, ...(hiddenCount ? [`${hiddenCount} more sync issue${hiddenCount === 1 ? " needs" : "s need"} review.`] : [])].join(" ");
+        setFeedback({ text: text || "A sync change was rejected safely without partial work.", error: true });
+      }
+    };
+    const unsubscribeState = client.subscribe(update);
+    const unsubscribeRemote = adapter.subscribe?.(() => { void client.refresh(); });
+    const reconnect = () => { void client.refresh(); };
+    const visible = () => { if (document.visibilityState === "visible") void client.refresh(); };
+    window.addEventListener("online", reconnect);
+    document.addEventListener("visibilitychange", visible);
+    void client.initialize(newWorkspaceDocument).then((next) => {
+      if (!active || !next.snapshot) return;
+      update(next);
+      onLoadRef.current(next.snapshot.document);
       setLoaded(true);
       setLoadError(false);
+      if (next.pendingCount && next.status !== "offline" && next.status !== "session-expired") void client.flush();
     }).catch(() => { if (active) setLoadError(true); });
-    return () => { active = false; };
-  }, [adapter]);
+    return () => {
+      active = false;
+      unsubscribeState();
+      unsubscribeRemote?.();
+      window.removeEventListener("online", reconnect);
+      document.removeEventListener("visibilitychange", visible);
+      if (clientRef.current === client) clientRef.current = null;
+    };
+  }, [adapter, deviceIdentity]);
 
-  const saveDocument = async (command: WorkspaceSyncCommand, document: WorkspaceDocument): Promise<boolean> => {
-    setSaving(true);
-    pending.current = { command, document };
-    try {
-      const result = await adapter.save(command);
-      if (result.status === "acknowledged") {
-        document.sync = { revision: result.revision, lastMutationId: command.mutationId, updatedAt: new Date().toISOString() };
-        setSnapshot({ revision: result.revision, document });
-        pending.current = null;
-        return true;
-      }
-      if (result.status === "conflict") setSnapshot(result.snapshot);
-      setFeedback({ text: result.status === "rejected" ? result.errors.join(" ") : "This Workspace changed somewhere else. Your copy was reloaded; please try the action again.", error: true });
-      return false;
-    } catch {
-      setFeedback({ text: "This change could not be saved. Your action is still shown and can be retried safely.", error: true });
-      return false;
-    } finally { setSaving(false); }
+  const stageDocument = async (mutationId: string, document: WorkspaceDocument): Promise<boolean> => {
+    const client = clientRef.current;
+    if (!client) return false;
+    client.stage(document, mutationId);
+    void client.flush();
+    return true;
   };
 
   const retrySave = async () => {
-    if (!pending.current) return;
-    const saved = await saveDocument(pending.current.command, pending.current.document);
-    if (saved) setFeedback({ text: "The change was saved.", error: false });
+    const client = clientRef.current;
+    if (!client) return;
+    const next = await client.refresh();
+    if (!next.pendingCount && next.status !== "session-expired" && next.status !== "offline") setFeedback({ text: "The pending changes were saved.", error: false });
   };
 
   const runChanges = async (changes: WorkspaceChange[]): Promise<boolean> => {
-    if (!snapshot || saving || !changes.length) return false;
-    const staged = workspaceFor(snapshot.document);
+    const current = clientRef.current?.read().snapshot;
+    if (!current || !changes.length) return false;
+    const staged = workspaceFor(current.document);
     const result = changes.length === 1 ? staged.change(changes[0]) : staged.changeMany(changes);
     if (result.status === "rejected") { setFeedback({ text: result.errors.join(" "), error: true }); return false; }
     const document = staged.read();
-    setSnapshot({ revision: snapshot.revision, document });
-    setFeedback({ text: result.outcome.replaceAll("-", " "), error: false, ...(result.undo ? { undo: result.undo, undoDocument: snapshot.document } : {}) });
-    return saveDocument({ expectedRevision: snapshot.revision, mutationId: `workspace-${crypto.randomUUID()}`, document }, document);
+    setFeedback({ text: result.outcome.replaceAll("-", " "), error: false, ...(result.undo ? { undo: result.undo, undoDocument: current.document } : {}) });
+    return stageDocument(`workspace-${crypto.randomUUID()}`, document);
   };
 
   const runChange = (change: WorkspaceChange): Promise<boolean> => runChanges([change]);
   const undo = async (undoInfo: WorkspaceUndo, undoDocument: WorkspaceDocument | undefined) => {
-    if (!snapshot || saving || !undoDocument) return;
+    const current = clientRef.current?.read().snapshot;
+    if (!current || !undoDocument) return;
     const document = JSON.parse(JSON.stringify(undoDocument)) as WorkspaceDocument;
-    setSnapshot({ revision: snapshot.revision, document });
-    const saved = await saveDocument({ expectedRevision: snapshot.revision, mutationId: `undo-${undoInfo.token}-${crypto.randomUUID()}`, document }, document);
+    const saved = await stageDocument(`undo-${undoInfo.token}-${crypto.randomUUID()}`, document);
     setFeedback({ text: saved ? "The change was undone." : "The undo could not be saved yet.", error: !saved });
   };
 
-  return { snapshot, setSnapshot, loaded, loadError, feedback, setFeedback, saving, pending, saveDocument, retrySave, runChanges, runChange, undo };
+  const saving = syncState.status === "saving" || syncState.status === "retrying";
+  return { snapshot, loaded, loadError, feedback, setFeedback, saving, syncState, pending, stageDocument, retrySave, runChanges, runChange, undo };
 }
 
 function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appControls }: { adapter: WorkspaceSyncAdapter; showReminder: (toDo: { id: string; title: string; notes?: string }) => Promise<boolean>; deviceIdentity: string; appControls: ReplacementAppControls }) {
@@ -1310,7 +1391,7 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [activeTagIds, setActiveTagIds] = useState<EntityId[]>([]);
   const [draft, setDraft] = useState(() => localStorage.getItem(quickDraftKey) ?? "");
-  const { snapshot, setSnapshot, loaded, loadError, feedback, setFeedback, saving, pending, saveDocument, retrySave, runChanges, runChange, undo } = useWorkspaceDocument(adapter, (document) => {
+  const { snapshot, loaded, loadError, feedback, setFeedback, saving, syncState, pending, stageDocument, retrySave, runChanges, runChange, undo } = useWorkspaceDocument(adapter, deviceIdentity, (document) => {
     setActiveSpaceId((current) => current ?? selectLaunchSpace(document, devicePreferences, new Date()));
     if (!localStorage.getItem(quickDraftKey) && document.settings.quickDraft?.value) setDraft(document.settings.quickDraft.value);
   });
@@ -1397,7 +1478,7 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
   }, [loaded, snapshot?.revision]);
 
   useEffect(() => {
-    if (!loaded || !snapshot || saving || captureHandled.current) return;
+    if (!loaded || !snapshot || captureHandled.current) return;
     const params = new URLSearchParams(location.search);
     const hasCapture = params.get("capture") === "1" || ["title", "text", "url"].some((name) => params.has(name));
     let capture: CapturedToDoInput | null = null;
@@ -1425,7 +1506,7 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
       history.replaceState(null, "", `${location.pathname}?open=view&view=inbox`);
       setFeedback({ text: "Captured the shared to-do.", error: false });
     });
-  }, [loaded, snapshot?.revision, saving]);
+  }, [loaded, snapshot?.document.captureReceipts.length]);
 
   useEffect(() => {
     if (!loaded || !snapshot) return;
@@ -1478,7 +1559,6 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
   useEffect(() => {
     if (!loaded || !snapshot?.document.settings.notifications) return;
     const checkReminders = () => {
-      if (saving) return;
       const due = snapshot.document.toDos.find((item) => item.outcome === "open" && !item.trashedAt && item.reminder && !item.reminder.sentAt && Date.parse(item.reminder.at) <= Date.now());
       if (!due?.reminder) return;
       void showReminder(due).then((shown) => {
@@ -1488,7 +1568,7 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
     checkReminders();
     const timer = window.setInterval(checkReminders, 30_000);
     return () => window.clearInterval(timer);
-  }, [loaded, saving, snapshot?.revision]);
+  }, [loaded, snapshot?.document.sync.updatedAt]);
 
   const today = localToday();
   const datedView: WorkspaceView = selectedView.kind === "tomorrow" ? { ...selectedView, date: datePlus(today, 1) } : { ...selectedView, date: today } as WorkspaceView;
@@ -1496,14 +1576,14 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
   const workspace = useMemo(() => snapshot ? workspaceFor(snapshot.document) : null, [snapshot]);
 
   useEffect(() => {
-    if (!workspace || !snapshot || saving || repeatingGenerationDate.current === today) return;
+    if (!workspace || !snapshot || repeatingGenerationDate.current === today) return;
     const staged = workspaceFor(snapshot.document);
     const result = staged.change({ type: "generateRepeatingOccurrences", throughDate: today });
     const hasMoreDue = staged.repeatingPreviews("1970-01-01", today, 1).length > 0;
     repeatingGenerationDate.current = hasMoreDue ? null : today;
     if (result.status === "changed" && result.affected.length) void runChange({ type: "generateRepeatingOccurrences", throughDate: today });
     else repeatingGenerationDate.current = today;
-  }, [workspace, snapshot?.revision, saving, today]);
+  }, [workspace, snapshot?.document.sync.updatedAt, today]);
 
   const openActionDialog = (dialog: "move" | "schedule" | "tags") => {
     if (!contextMenu) returnFocus.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
@@ -1540,6 +1620,19 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
   if (!loaded || !workspace || !snapshot) return <ReplacementState title="Loading your Workspace" copy="Checking the private Lakebed copy for this account." />;
 
   const document = snapshot.document;
+  const syncLabel = syncState.status === "offline"
+    ? `Offline${syncState.pendingCount ? ` · ${syncState.pendingCount} pending` : ""}`
+    : syncState.status === "session-expired"
+      ? `Session expired${syncState.pendingCount ? ` · ${syncState.pendingCount} pending` : ""}`
+      : syncState.status === "retrying"
+        ? `Retrying${syncState.pendingCount ? ` · ${syncState.pendingCount} pending` : ""}`
+        : syncState.status === "saving"
+          ? `Saving${syncState.pendingCount ? ` · ${syncState.pendingCount} pending` : ""}`
+          : syncState.status === "recovered"
+            ? "Recovered"
+            : syncState.status === "conflict"
+              ? "Conflict needs attention"
+              : "Workspace";
   const allItems = workspace.view(normalizedView);
   const agendaItems = normalizedView.kind === "today" || normalizedView.kind === "tomorrow" || normalizedView.kind === "upcoming"
     ? agendaForView(
@@ -1585,8 +1678,7 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
       return { ok: false, summary };
     }
     const next = staged.read();
-    setSnapshot({ revision: snapshot.revision, document: next });
-    const saved = await saveDocument({ expectedRevision: snapshot.revision, mutationId: `import-${crypto.randomUUID()}`, document: next }, next);
+    const saved = await stageDocument(`import-${crypto.randomUUID()}`, next);
     const summary = reportText(result.report);
     if (saved) { setFeedback({ text: summary, error: false }); setBackup(""); setConfirmation(""); setBackupOpen(false); }
     return { ok: saved, summary: saved ? summary : "The import is ready but could not be saved. Retry without choosing the file again." };
@@ -1691,9 +1783,9 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
     <main className="replacement-main" inert={(mobile && (sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen || quickFindOpen || repeatTarget !== null ? true : undefined}>
       <div className="replacement-mobile-header"><button type="button" aria-label="Open sidebar" onClick={(event) => { returnFocus.current = event.currentTarget; setSidebarOpen(true); window.setTimeout(() => (shellRef.current?.querySelector(".replacement-mobile-close") as HTMLElement | null)?.focus(), 0); }}>☰</button><strong>Objects</strong><button type="button" aria-label="Open Quick Find" onClick={(event) => { returnFocus.current = event.currentTarget; setQuickFindOpen(true); }}>⌕</button></div>
       <div className="replacement-main-inner">
-        <header><p className="replacement-kicker">{saving ? "Saving…" : "Workspace"}</p><div className="replacement-title-row"><div><h1>{missingTarget ? "Link unavailable" : viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{missingTarget ?? (normalizedView.kind === "repeating" ? `${document.repeatingTemplates.length} Template${document.repeatingTemplates.length === 1 ? "" : "s"}` : (usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length ? `${(usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length} item${(usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length === 1 ? "" : "s"}` : "Nothing here yet")}</p></div><button className="replacement-search" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setQuickFindOpen(true); }}><span>⌕</span><span>{search || "Quick Find"}</span><kbd>⌘K</kbd></button></div>{document.tags.length && normalizedView.kind !== "repeating" && !missingTarget ? <div className="replacement-tag-filters" aria-label="Filter by effective Tags"><button type="button" className={!activeTagIds.length ? "active" : ""} onClick={() => setActiveTagIds([])}>All Tags</button>{document.tags.map((tag) => <button key={tag.id} type="button" className={activeTagIds.includes(tag.id) ? "active" : ""} aria-pressed={activeTagIds.includes(tag.id)} onClick={(event) => setActiveTagIds((current) => event.metaKey || event.ctrlKey ? current.includes(tag.id) ? current.filter((id) => id !== tag.id) : [...current, tag.id] : current.length === 1 && current[0] === tag.id ? [] : [tag.id])}>{tag.title}</button>)}</div> : null}</header>
+        <header><p className="replacement-kicker">{syncLabel}</p><div className="replacement-title-row"><div><h1>{missingTarget ? "Link unavailable" : viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{missingTarget ?? (normalizedView.kind === "repeating" ? `${document.repeatingTemplates.length} Template${document.repeatingTemplates.length === 1 ? "" : "s"}` : (usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length ? `${(usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length} item${(usesAgenda ? agendaItems.length : items.length) + upcomingPreviews.length === 1 ? "" : "s"}` : "Nothing here yet")}</p></div><button className="replacement-search" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setQuickFindOpen(true); }}><span>⌕</span><span>{search || "Quick Find"}</span><kbd>⌘K</kbd></button></div>{document.tags.length && normalizedView.kind !== "repeating" && !missingTarget ? <div className="replacement-tag-filters" aria-label="Filter by effective Tags"><button type="button" className={!activeTagIds.length ? "active" : ""} onClick={() => setActiveTagIds([])}>All Tags</button>{document.tags.map((tag) => <button key={tag.id} type="button" className={activeTagIds.includes(tag.id) ? "active" : ""} aria-pressed={activeTagIds.includes(tag.id)} onClick={(event) => setActiveTagIds((current) => event.metaKey || event.ctrlKey ? current.includes(tag.id) ? current.filter((id) => id !== tag.id) : [...current, tag.id] : current.length === 1 && current[0] === tag.id ? [] : [tag.id])}>{tag.title}</button>)}</div> : null}</header>
         {!missingTarget && normalizedView.kind !== "repeating" ? <EntityTools view={normalizedView} document={document} workspace={workspace} runChange={runChange} selectView={(view) => openDirectTarget(directTargetForView(view), true)} openProjectRepeatEditor={(project) => setRepeatTarget({ kind: "project", project })} openTemplate={(id) => openDirectTarget({ kind: "repeatingTemplate", id }, true)} /> : null}
-        {!missingTarget && normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" && normalizedView.kind !== "repeating" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(quickDraftKey, value); }} onBlur={(event) => { const next = event.relatedTarget; if (draft && (!(next instanceof Node) || !event.currentTarget.form?.contains(next))) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim() || saving}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
+        {!missingTarget && normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" && normalizedView.kind !== "repeating" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(quickDraftKey, value); }} onBlur={(event) => { const next = event.relatedTarget; if (draft && (!(next instanceof Node) || !event.currentTarget.form?.contains(next))) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim()}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
 
         {missingTarget ? <section className="replacement-missing"><div aria-hidden="true">?</div><h2>We could not open this link</h2><p>{missingTarget}</p><button className="replacement-button" type="button" onClick={() => openDirectTarget({ kind: "view", viewKind: "today" }, true)}>Open Today</button></section> : normalizedView.kind === "repeating" ? <RepeatingView document={document} search="" edit={(template) => setRepeatTarget({ kind: "template", template })} create={() => setRepeatTarget({ kind: "direct" })} runChange={runChange} /> : usesAgenda && agendaItems.length ? <section className="replacement-agenda" aria-label={`${viewTitle(normalizedView, document)} agenda`}>
           {agendaItems.map((agendaItem) => agendaItem.kind === "calendarEvent" ? <article className="replacement-calendar-row" key={agendaItem.id}><span className="replacement-calendar-time">{agendaItem.item.allDay ? "All day" : new Date(agendaItem.item.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span><span className="replacement-calendar-line" aria-hidden="true" /><span><strong>{agendaItem.title}</strong><small>{agendaItem.item.calendar} · Calendar event</small></span><button type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setSettingsOpen(true); }}>Edit</button></article> : workspaceRow(agendaItem.item))}
@@ -1746,7 +1838,7 @@ function ReplacementWorkspace({ adapter, showReminder, deviceIdentity, appContro
     {repeatTarget ? <RepeatEditor target={repeatTarget} document={document} today={today} runChange={runChange} close={() => setRepeatTarget(null)} /> : null}
     {!missingTarget ? <button className="replacement-magic-plus" type="button" inert={actionDialog !== null || settingsOpen || quickFindOpen || repeatTarget !== null ? true : undefined} aria-label={normalizedView.kind === "repeating" ? "Add Repeating Template" : "Magic Plus: add to-do"} onClick={() => { if (normalizedView.kind === "repeating") setRepeatTarget({ kind: "direct" }); else { quickInput.current?.focus(); quickInput.current?.scrollIntoView({ behavior: "smooth", block: "center" }); } }}>+</button> : null}
     {selected ? <div inert={actionDialog !== null || settingsOpen || quickFindOpen || repeatTarget !== null ? true : undefined}><Inspector key={`${selected.id}-${snapshot.revision}`} item={selected} document={document} saving={saving} modal={mobile} runChange={runChange} runIntent={runIntent} openRepeatEditor={(item) => setRepeatTarget({ kind: "toDo", toDo: item })} openTemplate={(id) => openDirectTarget({ kind: "repeatingTemplate", id }, true)} close={() => { setSelectedId(null); history.pushState(null, "", directTargetUrl(directTargetForView(normalizedView), `${location.origin}${location.pathname}`)); restoreFocus(); }} /></div> : null}
-    {feedback ? <div className={`replacement-toast${feedback.error ? " error" : ""}`} role="status"><span>{feedback.text}</span>{feedback.error && pending.current ? <button type="button" onClick={() => void retrySave()}>Retry</button> : null}{feedback.undo ? <button type="button" onClick={() => void undo(feedback.undo!, feedback.undoDocument)}>Undo</button> : null}<button type="button" aria-label="Dismiss message" onClick={() => setFeedback(null)}>×</button></div> : null}
+    {feedback ? <div className={`replacement-toast${feedback.error ? " error" : ""}`} role="status"><span>{feedback.text}</span>{(feedback.error || syncState.status === "offline") && pending.current ? <button type="button" onClick={() => void retrySave()}>Retry</button> : null}{feedback.undo ? <button type="button" onClick={() => void undo(feedback.undo!, feedback.undoDocument)}>Undo</button> : null}<button type="button" aria-label="Dismiss message" onClick={() => setFeedback(null)}>×</button></div> : null}
   </div>;
 }
 
