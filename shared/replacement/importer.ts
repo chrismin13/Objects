@@ -145,10 +145,14 @@ function checklistFromLegacy(value: unknown, report: ImportReport, label: string
   return checklist;
 }
 
-function repeatingReminderDefault(toDo: ToDo) {
+function repeatingReminderDefault(toDo: ToDo, firstDate: string) {
   if (!toDo.reminder) return null;
   const time = /T(\d{2}:\d{2})/.exec(toDo.reminder.at)?.[1];
-  if (toDo.schedule.kind === "scheduled" && time) return { kind: "at-time" as const, time };
+  if (time) {
+    const reminderDate = toDo.reminder.at.slice(0, 10);
+    const days = Math.round((Date.parse(`${reminderDate}T00:00:00.000Z`) - Date.parse(`${firstDate}T00:00:00.000Z`)) / 86_400_000);
+    return { kind: "offset" as const, days, time };
+  }
   return { kind: "fixed" as const, at: toDo.reminder.at };
 }
 
@@ -191,6 +195,7 @@ function legacyRepeat(
     pattern: { frequency, interval, weekdays },
     mode: repeat.mode === "afterCompletion" ? "after-completion" as const : "on-schedule" as const,
     state: repeat.paused ? "paused" as const : "active" as const,
+    firstDate: optionalText(item.scheduledFor) ?? nextDate,
     nextDate,
     reminderTime: optionalText(repeat.reminderTime),
     deadlineOffsetDays: typeof repeat.deadlineOffset === "number" ? repeat.deadlineOffset : null,
@@ -471,7 +476,14 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
         headingKey: toDo.location.kind === "heading" ? toDo.location.headingId : null,
         tags: [...toDo.tags],
         checklist: toDo.checklist.map(({ id: _id, ...item }) => item),
-        reminder: repeatingReminderDefault(toDo),
+        schedule: toDo.schedule.kind === "scheduled"
+          ? {
+              kind: "scheduled" as const,
+              offsetDays: Math.round((Date.parse(`${toDo.schedule.date}T00:00:00.000Z`) - Date.parse(`${template.nextDate}T00:00:00.000Z`)) / 86_400_000),
+              evening: toDo.schedule.evening,
+            }
+          : toDo.schedule,
+        reminder: repeatingReminderDefault(toDo, template.firstDate ?? template.nextDate),
         deadline: repeatingDeadlineDefault(toDo),
         order: toDo.order,
       })),

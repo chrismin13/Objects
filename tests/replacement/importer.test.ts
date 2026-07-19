@@ -165,7 +165,8 @@ test("a repeating Project import keeps a reusable Heading and to-do blueprint", 
     toDos: [{
       key: "todo-counters", title: "Wipe counters", notes: "", headingKey: "heading-kitchen",
       tags: [workspace.read().tags[0].id], checklist: [{ title: "Use spray", completed: false, order: 0 }],
-      reminder: { kind: "fixed", at: "2026-07-20T08:30:00.000Z" },
+      schedule: { kind: "anytime" },
+      reminder: { kind: "offset", days: 0, time: "08:30" },
       deadline: { kind: "fixed", date: "2026-07-21" }, order: 0,
     }],
   });

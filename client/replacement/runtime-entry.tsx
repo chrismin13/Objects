@@ -2,7 +2,7 @@ import { Component, render, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import type { ImportReport } from "../../shared/replacement/importer";
-import type { EntityId, HeadingLocation, Project, ProjectLocation, Schedule, ToDo, ToDoLocation, WorkspaceDocument, WorkspaceUndo } from "../../shared/replacement/model";
+import type { EntityId, HeadingLocation, Project, ProjectLocation, RepeatingPattern, RepeatingProjectContents, RepeatingProjectToDoBlueprint, RepeatingTemplate, Schedule, ToDo, ToDoLocation, WorkspaceDocument, WorkspaceUndo } from "../../shared/replacement/model";
 import {
   DELETE_HEADING_CONFIRMATION,
   DELETE_SPACE_CONFIRMATION,
@@ -11,8 +11,10 @@ import {
   FULL_IMPORT_CONFIRMATION,
   PERMANENT_DELETE_CONFIRMATION,
   REMOVE_AREA_CONFIRMATION,
+  DELETE_REPEATING_TEMPLATE_CONFIRMATION,
   createEmptyWorkspace,
   createWorkspace,
+  repeatingRuleSummary,
   type WorkspaceChange,
   type WorkspaceView,
 } from "../../shared/replacement/workspace";
@@ -66,7 +68,7 @@ function datePlus(date: string, days: number): string {
 }
 
 function viewTitle(view: WorkspaceView, document: WorkspaceDocument): string {
-  const standard: Record<string, string> = { today: "Today", thisEvening: "This Evening", tomorrow: "Tomorrow", upcoming: "Upcoming", inbox: "Inbox", anytime: "Anytime", someday: "Someday", deadlines: "Deadlines", logbook: "Logbook", trash: "Trash" };
+  const standard: Record<string, string> = { today: "Today", thisEvening: "This Evening", tomorrow: "Tomorrow", upcoming: "Upcoming", inbox: "Inbox", anytime: "Anytime", someday: "Someday", deadlines: "Deadlines", logbook: "Logbook", trash: "Trash", repeating: "Repeating" };
   if (standard[view.kind]) return standard[view.kind];
   if (!("id" in view)) return "Objects";
   const collection = view.kind === "space" ? document.spaces : view.kind === "area" ? document.areas : view.kind === "project" ? document.projects : document.headings;
@@ -163,13 +165,257 @@ function MarkdownPreview({ value }: { value: string }) {
   return <div className="replacement-markdown">{value.split("\n").map((line, index) => line.startsWith("## ") ? <h3 key={index}>{line.slice(3)}</h3> : line.startsWith("# ") ? <h2 key={index}>{line.slice(2)}</h2> : line.startsWith("- ") ? <li key={index}>{line.slice(2)}</li> : <p key={index}>{line || " "}</p>)}</div>;
 }
 
-function Inspector({ item, document, saving, modal, runChange, runIntent, close }: {
+type RepeatEditorTarget =
+  | { kind: "direct" }
+  | { kind: "template"; template: RepeatingTemplate }
+  | { kind: "toDo"; toDo: ToDo }
+  | { kind: "project"; project: Project };
+
+type RepeatLocation = ToDoLocation | ProjectLocation;
+type RepeatLocationChoice = { key: string; label: string; location: RepeatLocation };
+
+function defaultRepeatLocation(document: WorkspaceDocument, itemKind: "toDo" | "project"): RepeatLocation {
+  const spaceId = document.settings.defaultSpaceId ?? document.spaces[0]?.id ?? "";
+  return itemKind === "toDo" ? { kind: "unfiled", spaceId } : { kind: "space", spaceId };
+}
+
+function repeatLocationChoices(document: WorkspaceDocument, itemKind: "toDo" | "project"): RepeatLocationChoice[] {
+  const choices: RepeatLocationChoice[] = document.spaces.map((space) => ({
+    key: `${itemKind}-space-${space.id}`,
+    label: `${space.title} · ${itemKind === "toDo" ? "Unfiled" : "Space"}`,
+    location: itemKind === "toDo" ? { kind: "unfiled", spaceId: space.id } : { kind: "space", spaceId: space.id },
+  }));
+  for (const area of document.areas) choices.push({ key: `area-${area.id}`, label: `${area.title} · Area`, location: { kind: "area", areaId: area.id } });
+  if (itemKind === "toDo") {
+    for (const project of document.projects) choices.push({ key: `project-${project.id}`, label: `${project.title} · Project`, location: { kind: "project", projectId: project.id } });
+    for (const heading of document.headings) choices.push({ key: `heading-${heading.id}`, label: `${heading.title} · Heading`, location: { kind: "heading", headingId: heading.id } });
+  }
+  return choices;
+}
+
+function repeatLocationKey(location: RepeatLocation, choices: RepeatLocationChoice[]): string {
+  return choices.find((choice) => JSON.stringify(choice.location) === JSON.stringify(location))?.key ?? choices[0]?.key ?? "";
+}
+
+function RepeatLocationSelector({ document, itemKind, location, change }: {
+  document: WorkspaceDocument;
+  itemKind: "toDo" | "project";
+  location: RepeatLocation;
+  change: (location: RepeatLocation) => void;
+}) {
+  const choices = repeatLocationChoices(document, itemKind);
+  return <label>Location<select value={repeatLocationKey(location, choices)} onChange={(event) => {
+    const selected = choices.find((choice) => choice.key === event.currentTarget.value);
+    if (selected) change(selected.location);
+  }}>{choices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}</select></label>;
+}
+
+function updateProjectToDo(contents: RepeatingProjectContents, key: string, changes: Partial<RepeatingProjectToDoBlueprint>): RepeatingProjectContents {
+  return { ...contents, toDos: contents.toDos.map((item) => item.key === key ? { ...item, ...changes } : item) };
+}
+
+function ProjectToDoDefaultsEditor({ toDo, headings, document, change, remove }: {
+  toDo: RepeatingProjectToDoBlueprint;
+  headings: RepeatingProjectContents["headings"];
+  document: WorkspaceDocument;
+  change: (changes: Partial<RepeatingProjectToDoBlueprint>) => void;
+  remove: () => void;
+}) {
+  const [tagNames, setTagNames] = useState(toDo.tags.map((id) => document.tags.find((tag) => tag.id === id)?.title).filter(Boolean).join(", "));
+  const schedule = toDo.schedule ?? { kind: "anytime" as const };
+  const reminder = toDo.reminder;
+  const deadline = toDo.deadline;
+  const updateTags = (value: string) => {
+    setTagNames(value);
+    const names = value.split(",").map((name) => name.trim().toLowerCase()).filter(Boolean);
+    change({ tags: document.tags.filter((tag) => names.includes(tag.title.toLowerCase())).map((tag) => tag.id) });
+  };
+  return <div className="replacement-blueprint-card">
+    <label>Title<input value={toDo.title} onInput={(event) => change({ title: event.currentTarget.value })} /></label>
+    <label>Notes<textarea rows={2} value={toDo.notes} onInput={(event) => change({ notes: event.currentTarget.value })} /></label>
+    <label>Heading<select value={toDo.headingKey ?? ""} onChange={(event) => change({ headingKey: event.currentTarget.value || null })}><option value="">Project root</option>{headings.map((heading) => <option key={heading.key} value={heading.key}>{heading.title}</option>)}</select></label>
+    <label>Tags<input value={tagNames} onInput={(event) => updateTags(event.currentTarget.value)} placeholder="Existing Tags, separated by commas" /></label>
+    <label>Schedule<select value={schedule.kind} onChange={(event) => {
+      const kind = event.currentTarget.value as Schedule["kind"];
+      change({ schedule: kind === "scheduled" ? { kind, offsetDays: 0, evening: false } : { kind } });
+    }}><option value="inbox">Inbox</option><option value="anytime">Anytime</option><option value="someday">Someday</option><option value="scheduled">Relative to Occurrence</option></select></label>
+    {schedule.kind === "scheduled" ? <div className="replacement-repeat-grid"><label>Schedule offset (days)<input type="number" value={schedule.offsetDays} onInput={(event) => change({ schedule: { ...schedule, offsetDays: Number(event.currentTarget.value) } })} /></label><label><input type="checkbox" checked={schedule.evening} onChange={(event) => change({ schedule: { ...schedule, evening: event.currentTarget.checked } })} /> Evening</label></div> : null}
+    <label>Reminder<select value={reminder?.kind ?? "none"} onChange={(event) => change({ reminder: event.currentTarget.value === "none" ? null : { kind: "offset", days: 0, time: "09:00" } })}><option value="none">None</option><option value="offset">Relative to Occurrence</option></select></label>
+    {reminder?.kind === "offset" ? <div className="replacement-repeat-grid"><label>Reminder offset (days)<input type="number" value={reminder.days} onInput={(event) => change({ reminder: { ...reminder, days: Number(event.currentTarget.value) } })} /></label><label>Reminder time<input type="time" value={reminder.time} onInput={(event) => change({ reminder: { ...reminder, time: event.currentTarget.value } })} /></label></div> : null}
+    <label>Deadline<select value={deadline?.kind ?? "none"} onChange={(event) => change({ deadline: event.currentTarget.value === "none" ? null : { kind: "offset", days: 0 } })}><option value="none">None</option><option value="offset">Relative to Occurrence</option></select></label>
+    {deadline?.kind === "offset" ? <label>Deadline offset (days)<input type="number" value={deadline.days} onInput={(event) => change({ deadline: { kind: "offset", days: Number(event.currentTarget.value) } })} /></label> : null}
+    <label>Checklist<textarea rows={2} value={toDo.checklist.map((item) => item.title).join("\n")} onInput={(event) => change({ checklist: event.currentTarget.value.split("\n").map((value, order) => ({ title: value.trim(), completed: false, order })).filter((item) => item.title) })} placeholder="One item per line" /></label>
+    <button type="button" onClick={remove}>Remove to-do</button>
+  </div>;
+}
+
+function ProjectContentsEditor({ contents, document, change }: { contents: RepeatingProjectContents; document: WorkspaceDocument; change: (contents: RepeatingProjectContents) => void }) {
+  return <fieldset className="replacement-project-defaults"><legend>Project contents</legend><p>Each Occurrence gets fresh Projects, Headings, to-dos, and checklist identities.</p>
+    {contents.headings.map((heading) => <div className="replacement-blueprint-row" key={heading.key}><input aria-label="Heading title" value={heading.title} onInput={(event) => change({ ...contents, headings: contents.headings.map((item) => item.key === heading.key ? { ...item, title: event.currentTarget.value } : item) })} /><button type="button" onClick={() => change({ headings: contents.headings.filter((item) => item.key !== heading.key), toDos: contents.toDos.map((item) => item.headingKey === heading.key ? { ...item, headingKey: null } : item) })}>Remove Heading</button></div>)}
+    <button type="button" onClick={() => change({ ...contents, headings: [...contents.headings, { key: `heading-${crypto.randomUUID()}`, title: "New Heading", archived: false, order: contents.headings.length }] })}>Add Heading</button>
+    {contents.toDos.map((toDo) => <ProjectToDoDefaultsEditor key={toDo.key} toDo={toDo} headings={contents.headings} document={document} change={(changes) => change(updateProjectToDo(contents, toDo.key, changes))} remove={() => change({ ...contents, toDos: contents.toDos.filter((item) => item.key !== toDo.key) })} />)}
+    <button type="button" onClick={() => change({ ...contents, toDos: [...contents.toDos, { key: `todo-${crypto.randomUUID()}`, title: "New to-do", notes: "", headingKey: null, tags: [], checklist: [], schedule: { kind: "anytime" }, reminder: null, deadline: null, order: contents.toDos.length }] })}>Add to-do</button>
+  </fieldset>;
+}
+
+function RepeatEditor({ target, document, today, runChange, close }: {
+  target: RepeatEditorTarget;
+  document: WorkspaceDocument;
+  today: string;
+  runChange: (change: WorkspaceChange) => Promise<boolean>;
+  close: () => void;
+}) {
+  const template = target.kind === "template" ? target.template : null;
+  const source = target.kind === "toDo" ? target.toDo : target.kind === "project" ? target.project : null;
+  const conversion = target.kind === "toDo" || target.kind === "project";
+  const [itemKind, setItemKind] = useState<"toDo" | "project">(template?.itemKind ?? (target.kind === "project" ? "project" : "toDo"));
+  const [title, setTitle] = useState(template?.title ?? source?.title ?? "");
+  const [notes, setNotes] = useState(template?.notes ?? source?.notes ?? "");
+  const [mode, setMode] = useState<RepeatingTemplate["mode"]>(template?.mode ?? "on-schedule");
+  const [frequency, setFrequency] = useState<RepeatingPattern["frequency"]>(template?.pattern.frequency ?? "weekly");
+  const [interval, setInterval] = useState(template?.pattern.interval ?? 1);
+  const [weekdays, setWeekdays] = useState<number[]>(template?.pattern.weekdays ?? []);
+  const [firstDate, setFirstDate] = useState(template?.nextDate ?? (source?.schedule.kind === "scheduled" ? source.schedule.date : today));
+  const [reminderTime, setReminderTime] = useState(template?.reminderTime ?? (target.kind === "toDo" ? target.toDo.reminder?.at.slice(11, 16) ?? "" : ""));
+  const [deadlineOffset, setDeadlineOffset] = useState(template?.deadlineOffsetDays?.toString() ?? "");
+  const [checklist, setChecklist] = useState(template?.checklist.map((item) => item.title).join("\n") ?? (target.kind === "toDo" ? target.toDo.checklist.map((item) => item.title).join("\n") : ""));
+  const [tagNames, setTagNames] = useState((template?.tags ?? source?.tags ?? []).map((id) => document.tags.find((tag) => tag.id === id)?.title).filter(Boolean).join(", "));
+  const [location, setLocation] = useState<RepeatLocation>(template?.location ?? defaultRepeatLocation(document, itemKind));
+  const [projectContents, setProjectContents] = useState<RepeatingProjectContents>(() => template?.itemKind === "project"
+    ? JSON.parse(JSON.stringify(template.projectContents)) as RepeatingProjectContents
+    : { headings: [], toDos: [] });
+  const dialog = useRef<OverlayElement>(null);
+  useWebAwesomeOverlay(dialog, close);
+  const pattern: RepeatingPattern = { frequency, interval: Math.max(1, interval), weekdays: frequency === "weekly" ? weekdays : [] };
+  const summary = repeatingRuleSummary(pattern, mode);
+
+  const save = async (event: Event) => {
+    event.preventDefault();
+    if (!title.trim() || !firstDate) return;
+    const tags = tagIdsFromNames(tagNames, document);
+    if (!tags) return;
+    const toDoLocation: ToDoLocation = location.kind === "space" ? { kind: "unfiled", spaceId: location.spaceId } : location;
+    const projectLocation: ProjectLocation = location.kind === "area" || location.kind === "space" ? location
+      : { kind: "space", spaceId: location.kind === "unfiled" ? location.spaceId : document.settings.defaultSpaceId ?? document.spaces[0]?.id ?? "" };
+    let change: WorkspaceChange | null = null;
+    if (target.kind === "template") {
+      change = {
+        type: "updateRepeatingTemplate",
+        id: target.template.id,
+        changes: {
+          title, notes, tags, pattern, mode,
+          ...(firstDate !== target.template.nextDate ? { nextDate: firstDate } : {}),
+          location: target.template.itemKind === "toDo" ? toDoLocation : projectLocation,
+          reminderTime: reminderTime || null,
+          deadlineOffsetDays: deadlineOffset === "" ? null : Number(deadlineOffset),
+          checklist: checklist.split("\n").map((value) => value.trim()).filter(Boolean),
+          ...(target.template.itemKind === "project" ? { projectContents } : {}),
+        },
+      };
+    } else if (target.kind === "toDo") {
+      change = { type: "makeToDoRepeating", id: target.toDo.id, nextDate: firstDate, pattern, mode };
+    } else if (target.kind === "project") {
+      change = { type: "makeProjectRepeating", id: target.project.id, firstDate, pattern, mode };
+    } else if (document.spaces.length) {
+      change = {
+        type: "createRepeatingTemplate",
+        template: itemKind === "toDo" ? {
+          itemKind, title, notes, tags, location: toDoLocation, pattern, mode,
+          firstDate, reminderTime: reminderTime || null,
+          deadlineOffsetDays: deadlineOffset === "" ? null : Number(deadlineOffset),
+          checklist: checklist.split("\n").map((value) => value.trim()).filter(Boolean),
+        } : {
+          itemKind, title, notes, tags, location: projectLocation, pattern, mode, projectContents,
+          firstDate, deadlineOffsetDays: deadlineOffset === "" ? null : Number(deadlineOffset),
+        },
+      };
+    }
+    if (change && await runChange(change)) close();
+  };
+
+  const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return <WaDialog ref={dialog} class="replacement-wa-dialog replacement-repeat-dialog" label="Repeat editor" without-header light-dismiss>
+    <form className="replacement-dialog replacement-repeat-editor" onSubmit={(event) => void save(event)}>
+      <header><div><p className="replacement-kicker">Repeating Template</p><h2>{template ? "Edit future Occurrences" : source ? `Repeat this ${target.kind === "toDo" ? "to-do" : "Project"}` : "New repeating item"}</h2></div><button type="button" aria-label="Close repeat editor" onClick={close}>×</button></header>
+      {target.kind === "direct" ? <label>Item type<select value={itemKind} onChange={(event) => { const kind = event.currentTarget.value as "toDo" | "project"; setItemKind(kind); setLocation(defaultRepeatLocation(document, kind)); }}><option value="toDo">To-do</option><option value="project">Project</option></select></label> : null}
+      {conversion ? <section className="replacement-repeat-source"><strong>{source?.title}</strong><p>Objects will copy this item’s current content and defaults into the Template. Edit the original first if those details need to change.</p></section> : <><label>Title<input autoFocus value={title} onInput={(event) => setTitle(event.currentTarget.value)} required /></label><label>Notes<textarea rows={3} value={notes} onInput={(event) => setNotes(event.currentTarget.value)} /></label></>}
+      {target.kind === "direct" || target.kind === "template" ? <label>Tags<input value={tagNames} onInput={(event) => setTagNames(event.currentTarget.value)} placeholder="Existing Tags, separated by commas" /></label> : null}
+      {target.kind === "direct" || target.kind === "template" ? <RepeatLocationSelector document={document} itemKind={itemKind} location={location} change={setLocation} /> : null}
+      <div className="replacement-repeat-grid"><label>Mode<select value={mode} onChange={(event) => setMode(event.currentTarget.value as RepeatingTemplate["mode"])}><option value="on-schedule">On schedule</option><option value="after-completion">After completion</option></select></label><label>Repeats<select value={frequency} onChange={(event) => setFrequency(event.currentTarget.value as RepeatingPattern["frequency"])}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></label><label>Every<input type="number" min="1" max="999" value={interval} onInput={(event) => setInterval(Number(event.currentTarget.value))} /></label><label>{template ? "Next date" : "First date"}<input type="date" value={firstDate} onInput={(event) => setFirstDate(event.currentTarget.value)} required /></label></div>
+      {frequency === "weekly" ? <fieldset><legend>Weekdays</legend><div className="replacement-weekdays">{weekdayNames.map((name, day) => <label key={name}><input type="checkbox" checked={weekdays.includes(day)} onChange={(event) => setWeekdays((current) => event.currentTarget.checked ? [...current, day].sort() : current.filter((value) => value !== day))} />{name}</label>)}</div></fieldset> : null}
+      <p className="replacement-repeat-explanation">{mode === "on-schedule" ? "On schedule creates each dated Occurrence even if earlier work is still open." : "After completion keeps one open Occurrence and counts from the day you complete or Skip it."}</p>
+      <output className="replacement-repeat-summary" aria-live="polite">{summary}. First shown on {firstDate || "the chosen date"}.</output>
+      {itemKind === "toDo" && !conversion ? <><label>Checklist defaults<textarea rows={3} value={checklist} onInput={(event) => setChecklist(event.currentTarget.value)} placeholder="One item per line" /></label><label>Reminder time<input type="time" value={reminderTime} onInput={(event) => setReminderTime(event.currentTarget.value)} /></label></> : null}
+      {itemKind === "project" && !conversion ? <ProjectContentsEditor contents={projectContents} document={document} change={setProjectContents} /> : null}
+      {!conversion ? <label>Deadline offset in days<input type="number" value={deadlineOffset} onInput={(event) => setDeadlineOffset(event.currentTarget.value)} placeholder="No default" /></label> : null}
+      <p className="replacement-muted">Changes here apply only to future Occurrences. Existing Occurrences keep their own content.</p>
+      <button className="replacement-button" type="submit">{template ? "Save future defaults" : "Start repeating"}</button>
+    </form>
+  </WaDialog>;
+}
+
+function templateLocation(template: RepeatingTemplate, document: WorkspaceDocument): { space: string; parent: string } {
+  const location = template.location;
+  if (location.kind === "unfiled" || location.kind === "space") return { space: document.spaces.find((space) => space.id === location.spaceId)?.title ?? "Missing Space", parent: "None" };
+  if (location.kind === "area") {
+    const area = document.areas.find((item) => item.id === location.areaId);
+    return { space: document.spaces.find((space) => space.id === area?.spaceId)?.title ?? "Missing Space", parent: area?.title ?? "Missing Area" };
+  }
+  const toDo = template as Extract<RepeatingTemplate, { itemKind: "toDo" }>;
+  if (toDo.location.kind === "project") {
+    const projectId = toDo.location.projectId;
+    const project = document.projects.find((item) => item.id === projectId);
+    const projectLocation = project?.location;
+    const areaId = projectLocation?.kind === "area" ? projectLocation.areaId : null;
+    const area = areaId ? document.areas.find((item) => item.id === areaId) : null;
+    const spaceId = projectLocation?.kind === "space" ? projectLocation.spaceId : area?.spaceId;
+    return { space: document.spaces.find((space) => space.id === spaceId)?.title ?? "Missing Space", parent: project?.title ?? "Missing Project" };
+  }
+  const headingId = toDo.location.kind === "heading" ? toDo.location.headingId : "";
+  const heading = document.headings.find((item) => item.id === headingId);
+  if (!heading) return { space: "Missing Space", parent: "Missing Heading" };
+  if (heading.location.kind === "area") {
+    const areaId = heading.location.areaId;
+    const area = document.areas.find((item) => item.id === areaId);
+    return { space: document.spaces.find((space) => space.id === area?.spaceId)?.title ?? "Missing Space", parent: heading.title };
+  }
+  const projectId = heading.location.projectId;
+  const project = document.projects.find((item) => item.id === projectId);
+  const projectLocation = project?.location;
+  const areaId = projectLocation?.kind === "area" ? projectLocation.areaId : null;
+  const area = areaId ? document.areas.find((item) => item.id === areaId) : null;
+  const spaceId = projectLocation?.kind === "space" ? projectLocation.spaceId : area?.spaceId;
+  return { space: document.spaces.find((space) => space.id === spaceId)?.title ?? "Missing Space", parent: heading.title };
+}
+
+function RepeatingView({ document, search, edit, create, runChange }: {
+  document: WorkspaceDocument;
+  search: string;
+  edit: (template: RepeatingTemplate) => void;
+  create: () => void;
+  runChange: (change: WorkspaceChange) => Promise<boolean>;
+}) {
+  const query = search.trim().toLowerCase();
+  const templates = document.repeatingTemplates.filter((template) => !query || `${template.title} ${repeatingRuleSummary(template.pattern, template.mode)}`.toLowerCase().includes(query));
+  const row = (template: RepeatingTemplate) => {
+    const location = templateLocation(template, document);
+    return <article className="replacement-repeat-row" key={template.id}><button type="button" disabled={template.state === "stopped"} title={template.state === "stopped" ? "Stopped Templates are read-only" : "Edit future Occurrences"} onClick={() => edit(template)}><strong><span aria-hidden="true">↻</span> {template.title}</strong><span>{template.itemKind === "toDo" ? "To-do" : "Project"} · {repeatingRuleSummary(template.pattern, template.mode)}</span><small>Next {template.nextDate} · {location.space} · {location.parent}</small></button><div>{template.state !== "stopped" ? <button type="button" onClick={() => void runChange({ type: template.state === "active" ? "pauseRepeatingTemplate" : "resumeRepeatingTemplate", id: template.id })}>{template.state === "active" ? "Pause" : "Resume"}</button> : null}{template.state !== "stopped" ? <button className="danger" type="button" onClick={() => { if (window.confirm("Stop this schedule permanently? Existing Occurrences will not change.")) void runChange({ type: "stopRepeatingTemplate", id: template.id }); }}>Stop</button> : <button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete this stopped Template? Existing work will stay, without its repeat link.")) void runChange({ type: "deleteRepeatingTemplate", id: template.id, confirmation: DELETE_REPEATING_TEMPLATE_CONFIRMATION }); }}>Delete</button>}</div></article>;
+  };
+  const active = templates.filter((template) => template.state === "active");
+  const paused = templates.filter((template) => template.state === "paused");
+  const stopped = templates.filter((template) => template.state === "stopped");
+  return <div className="replacement-repeating-view"><button className="replacement-button" type="button" onClick={create}>New Repeating Template</button>{active.length ? <section><h2>Active</h2>{active.map(row)}</section> : null}{paused.length ? <section><h2>Paused</h2>{paused.map(row)}</section> : null}{stopped.length ? <details><summary>Stopped ({stopped.length})</summary>{stopped.map(row)}</details> : null}{!templates.length ? <section className="replacement-empty"><div aria-hidden="true">↻</div><h2>No repeating schedules</h2><p>Create one directly, or open a to-do or Project and make it repeat.</p></section> : null}</div>;
+}
+
+function Inspector({ item, document, saving, modal, runChange, runIntent, openRepeatEditor, openTemplate, close }: {
   item: ToDo;
   document: WorkspaceDocument;
   saving: boolean;
   modal: boolean;
   runChange: (change: WorkspaceChange) => Promise<boolean>;
   runIntent?: (source: InteractionSource, action: ToDoAction, ids: string[]) => Promise<boolean>;
+  openRepeatEditor: (item: ToDo) => void;
+  openTemplate: (id: string) => void;
   close: () => void;
 }) {
   const [preview, setPreview] = useState(false);
@@ -177,6 +423,7 @@ function Inspector({ item, document, saving, modal, runChange, runIntent, close 
   const tags = item.tags.map((id) => document.tags.find((tag) => tag.id === id)?.title).filter(Boolean).join(", ");
   const noteMatches = noteSearch ? item.notes.split("\n").filter((line) => line.toLowerCase().includes(noteSearch.toLowerCase())) : [];
   const scheduleKind = item.schedule.kind;
+  const repeatingTemplate = item.occurrence ? document.repeatingTemplates.find((template) => template.id === item.occurrence!.templateId) ?? null : null;
 
   const update = (changes: Extract<WorkspaceChange, { type: "updateToDo" }>["changes"]) => runChange({ type: "updateToDo", id: item.id, changes });
   return <aside className="replacement-inspector" role={modal ? "dialog" : undefined} aria-modal={modal ? "true" : undefined} aria-label="To-do inspector" aria-busy={saving}>
@@ -196,9 +443,12 @@ function Inspector({ item, document, saving, modal, runChange, runIntent, close 
     <label>Deadline<input data-inspector-deadline type="date" value={item.deadline ?? ""} onChange={(event) => void update({ deadline: event.currentTarget.value || null })} /></label>
     <label>Tags<input defaultValue={tags} onBlur={(event) => void runChange({ type: "setToDoTags", id: item.id, titles: event.currentTarget.value.split(",") })} placeholder="work, urgent" /></label>
 
+    {item.occurrence ? <section className="replacement-occurrence-card"><strong><span aria-hidden="true">↻</span> Repeating Occurrence</strong><p>{repeatingTemplate ? repeatingRuleSummary(repeatingTemplate.pattern, repeatingTemplate.mode) : "Its Repeating Template was deleted."}</p><dl><div><dt>Current date</dt><dd>{item.occurrence.scheduledDate}</dd></div>{repeatingTemplate ? <div><dt>Next date</dt><dd>{repeatingTemplate.nextDate}</dd></div> : null}</dl>{repeatingTemplate ? <button type="button" onClick={() => openTemplate(repeatingTemplate.id)}>Open Template</button> : null}</section> : null}
+
     <div className="replacement-actions">
       {item.trashedAt ? <><button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "restore" }, [item.id]) : runChange({ type: "restoreToDo", id: item.id }))}>Restore</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete this to-do? This cannot be undone.")) void runChange({ type: "permanentlyDeleteToDo", id: item.id, confirmation: PERMANENT_DELETE_CONFIRMATION }).then(close); }}>Delete forever</button></> : <>
-        {item.outcome === "open" ? <><button className="replacement-button" type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "complete" }, [item.id]) : runChange({ type: "completeToDo", id: item.id }))}>Complete</button><button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "cancel" }, [item.id]) : runChange({ type: "cancelToDo", id: item.id }))}>Cancel</button></> : <><button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "reopen" }, [item.id]) : runChange({ type: "reopenToDo", id: item.id }))}>Reopen</button>{!item.logbookAt ? <button type="button" onClick={() => void runChange({ type: "logToDo", id: item.id })}>Move to Logbook</button> : null}</>}
+        {item.outcome === "open" ? <><button className="replacement-button" type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "complete" }, [item.id]) : runChange({ type: "completeToDo", id: item.id }))}>Complete</button><button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "cancel" }, [item.id]) : runChange({ type: "cancelToDo", id: item.id }))}>Cancel</button>{item.occurrence ? <button type="button" onClick={() => void runChange({ type: "skipOccurrence", itemKind: "toDo", id: item.id })}>Skip</button> : null}</> : <><button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "reopen" }, [item.id]) : runChange({ type: "reopenToDo", id: item.id }))}>Reopen</button>{!item.logbookAt ? <button type="button" onClick={() => void runChange({ type: "logToDo", id: item.id })}>Move to Logbook</button> : null}</>}
+        {!item.occurrence && item.outcome === "open" ? <button type="button" onClick={() => openRepeatEditor(item)}>Make repeating…</button> : null}
         <button type="button" onClick={() => void (runIntent ? runIntent("inspector", { type: "duplicate" }, [item.id]) : runChange({ type: "duplicateToDo", id: item.id }))}>Duplicate</button>
         <button type="button" onClick={() => void navigator.clipboard.writeText(`${location.origin}${location.pathname}?todo=${item.id}`)}>Copy link</button>
         {navigator.share ? <button type="button" onClick={() => void navigator.share({ title: item.title, text: item.notes, url: `${location.origin}${location.pathname}?todo=${item.id}` })}>Share</button> : null}
@@ -226,12 +476,14 @@ function chooseLocation<T>(label: string, choices: Array<LocationChoice<T>>, cur
   return choice?.location ?? null;
 }
 
-function EntityTools({ view, document, workspace, runChange, selectView }: {
+function EntityTools({ view, document, workspace, runChange, selectView, openProjectRepeatEditor, openTemplate }: {
   view: WorkspaceView;
   document: WorkspaceDocument;
   workspace: ReturnType<typeof workspaceFor>;
   runChange: (change: WorkspaceChange) => Promise<boolean>;
   selectView: (view: WorkspaceView) => void;
+  openProjectRepeatEditor: (project: Project) => void;
+  openTemplate: (id: string) => void;
 }) {
   const askTitle = (label: string, current = "") => window.prompt(`${label} title`, current)?.trim() ?? "";
   const createSpace = () => {
@@ -275,6 +527,7 @@ function EntityTools({ view, document, workspace, runChange, selectView }: {
   const space = view.kind === "space" ? document.spaces.find((item) => item.id === view.id) : null;
   const area = view.kind === "area" ? document.areas.find((item) => item.id === view.id) : null;
   const project = view.kind === "project" ? document.projects.find((item) => item.id === view.id) : null;
+  const projectRepeatingTemplate = project?.occurrence ? document.repeatingTemplates.find((item) => item.id === project.occurrence!.templateId) ?? null : null;
   const heading = view.kind === "heading" ? document.headings.find((item) => item.id === view.id) : null;
 
   const editSpace = () => {
@@ -372,7 +625,8 @@ function EntityTools({ view, document, workspace, runChange, selectView }: {
     <div className="replacement-tool-row"><button data-new-list type="button" onClick={createSpace}>New Space</button><button type="button" onClick={createArea}>New Area</button><button type="button" onClick={createProject}>New Project</button><button data-new-heading type="button" onClick={createHeading}>New Heading</button><button type="button" onClick={createTag}>New Tag</button></div>
     {space ? <div className="replacement-tool-row"><strong>{space.title}</strong><button type="button" onClick={editSpace}>Edit</button><button type="button" onClick={() => void runChange({ type: "updateSpace", id: space.id, changes: { pinned: !space.pinned } })}>{space.pinned ? "Unpin" : "Pin"}</button><button type="button" disabled={space.order === 0} onClick={() => void runChange({ type: "reorderSpace", id: space.id, toIndex: space.order - 1 })}>Move up</button><button type="button" disabled={space.order === document.spaces.length - 1} onClick={() => void runChange({ type: "reorderSpace", id: space.id, toIndex: space.order + 1 })}>Move down</button><button className="danger" type="button" onClick={deleteSpace}>Delete</button></div> : null}
     {area ? <div className="replacement-tool-row"><strong>{area.title}</strong><button type="button" onClick={editArea}>Edit or move</button><button className="danger" type="button" onClick={removeArea}>Remove</button></div> : null}
-    {project ? <div className="replacement-tool-row"><strong>{workspace.projectProgress(project.id)?.percent ?? 0}% complete</strong><button type="button" onClick={editProject}>Edit or move</button><button type="button" onClick={() => void runChange({ type: "duplicateProject", id: project.id })}>Duplicate</button>{project.outcome === "open" ? <><button type="button" onClick={() => closeProject("completed")}>Complete</button><button type="button" onClick={() => closeProject("canceled")}>Cancel</button></> : <button type="button" onClick={() => void runChange({ type: "restoreProject", id: project.id })}>Restore Outcome</button>}{project.trashedAt ? <><button type="button" onClick={() => void runChange({ type: "restoreProjectFromTrash", id: project.id })}>Restore from Trash</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete this Project and all of its contents?")) void runChange({ type: "permanentlyDeleteProject", id: project.id, confirmation: PERMANENT_DELETE_CONFIRMATION }); }}>Delete forever</button></> : <button className="danger" type="button" onClick={() => void runChange({ type: "trashProject", id: project.id })}>Move to Trash</button>}</div> : null}
+    {project ? <div className="replacement-tool-row"><strong>{workspace.projectProgress(project.id)?.percent ?? 0}% complete{project.occurrence ? " · ↻ Occurrence" : ""}</strong><button type="button" onClick={editProject}>Edit or move</button><button type="button" onClick={() => void runChange({ type: "duplicateProject", id: project.id })}>Duplicate</button>{project.occurrence ? <><button type="button" onClick={() => openTemplate(project.occurrence!.templateId)}>Open Template</button>{project.outcome === "open" ? <button type="button" onClick={() => void runChange({ type: "skipOccurrence", itemKind: "project", id: project.id })}>Skip</button> : null}</> : project.outcome === "open" ? <button type="button" onClick={() => openProjectRepeatEditor(project)}>Make repeating…</button> : null}{project.outcome === "open" ? <><button type="button" onClick={() => closeProject("completed")}>Complete</button><button type="button" onClick={() => closeProject("canceled")}>Cancel</button></> : <button type="button" onClick={() => void runChange({ type: "restoreProject", id: project.id })}>Restore Outcome</button>}{project.trashedAt ? <><button type="button" onClick={() => void runChange({ type: "restoreProjectFromTrash", id: project.id })}>Restore from Trash</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete this Project and all of its contents?")) void runChange({ type: "permanentlyDeleteProject", id: project.id, confirmation: PERMANENT_DELETE_CONFIRMATION }); }}>Delete forever</button></> : <button className="danger" type="button" onClick={() => void runChange({ type: "trashProject", id: project.id })}>Move to Trash</button>}</div> : null}
+    {project?.occurrence ? <section className="replacement-project-occurrence"><strong>↻ Repeating Project Occurrence</strong><span>{projectRepeatingTemplate ? repeatingRuleSummary(projectRepeatingTemplate.pattern, projectRepeatingTemplate.mode) : "Its Repeating Template was deleted."}</span><span>Current date {project.occurrence.scheduledDate}{projectRepeatingTemplate ? ` · Next date ${projectRepeatingTemplate.nextDate}` : ""}</span>{projectRepeatingTemplate ? <button type="button" onClick={() => openTemplate(projectRepeatingTemplate.id)}>Open Template</button> : null}</section> : null}
     {heading ? <div className="replacement-tool-row"><strong>{heading.title}</strong><button type="button" onClick={editHeading}>Edit or move</button><button type="button" onClick={() => void runChange({ type: "duplicateHeading", id: heading.id })}>Duplicate</button><button type="button" onClick={() => void runChange(heading.archivedAt ? { type: "restoreHeading", id: heading.id } : { type: "archiveHeading", id: heading.id })}>{heading.archivedAt ? "Restore" : "Archive"}</button><button type="button" onClick={() => void runChange({ type: "convertHeadingToProject", id: heading.id })}>Convert to Project</button><button className="danger" type="button" onClick={() => { if (window.confirm("Delete this Heading and keep its to-dos in the parent?")) void runChange({ type: "deleteHeading", id: heading.id, confirmation: DELETE_HEADING_CONFIRMATION }); }}>Delete</button></div> : null}
     {document.tags.length ? <details><summary>Manage Tags</summary><div className="replacement-tool-list">{document.tags.map((tag) => <div key={tag.id}><span>{tag.title}</span><button type="button" onClick={() => { const title = askTitle("Tag", tag.title); if (title) void runChange({ type: "updateTag", id: tag.id, title }); }}>Rename</button><button className="danger" type="button" onClick={() => { if (window.confirm(`Delete ${tag.title} from every item?`)) void runChange({ type: "deleteTag", id: tag.id, confirmation: DELETE_TAG_CONFIRMATION }); }}>Delete</button></div>)}</div></details> : null}
   </section>;
@@ -429,7 +683,7 @@ function WorkspaceItemRow({
       ? <button className="replacement-complete" type="button" aria-label={`Complete ${item.title}`} onClick={() => void runIntent("row", { type: "complete" }, [item.id])} />
       : <span className={`replacement-outcome ${item.outcome}`} aria-label={item.outcome} />}
     <button className="replacement-row-body" type="button" onClick={(event) => isToDo ? selectRow(event, item.id) : selectProject(item.id)}>
-      <strong>{item.title}</strong>
+      <strong>{item.title}{item.occurrence ? <span className="replacement-repeat-marker" title="Repeating Occurrence" aria-label="Repeating Occurrence"> ↻</span> : null}</strong>
       <span>{isToDo ? toDo.schedule.kind === "scheduled" ? `${toDo.schedule.date}${toDo.schedule.evening ? " · This Evening" : ""}` : toDo.schedule.kind : "Project"}{item.deadline ? ` · Deadline ${item.deadline}` : ""}</span>
     </button>
     {isToDo ? <button
@@ -785,6 +1039,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [actionDialog, setActionDialog] = useState<"move" | "schedule" | "tags" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [repeatTarget, setRepeatTarget] = useState<RepeatEditorTarget | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 720px)").matches);
   const [systemDark, setSystemDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -795,6 +1050,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const touchGesture = useRef<{ id: string; x: number; y: number; timer: number } | null>(null);
   const drawerGesture = useRef<{ x: number; y: number } | null>(null);
   const dailyLogbookDate = useRef<string | null>(null);
+  const repeatingGenerationDate = useRef<string | null>(null);
   const notificationSnoozeHandled = useRef(false);
 
   const restoreFocus = () => {
@@ -868,6 +1124,16 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const normalizedView: WorkspaceView = { ...datedView, tagIds: activeTagIds } as WorkspaceView;
   const workspace = useMemo(() => snapshot ? workspaceFor(snapshot.document) : null, [snapshot]);
 
+  useEffect(() => {
+    if (!workspace || !snapshot || saving || repeatingGenerationDate.current === today) return;
+    const staged = workspaceFor(snapshot.document);
+    const result = staged.change({ type: "generateRepeatingOccurrences", throughDate: today });
+    const hasMoreDue = staged.repeatingPreviews("1970-01-01", today, 1).length > 0;
+    repeatingGenerationDate.current = hasMoreDue ? null : today;
+    if (result.status === "changed" && result.affected.length) void runChange({ type: "generateRepeatingOccurrences", throughDate: today });
+    else repeatingGenerationDate.current = today;
+  }, [workspace, snapshot?.revision, saving, today]);
+
   const openActionDialog = (dialog: "move" | "schedule" | "tags") => {
     if (!contextMenu) returnFocus.current = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
     setContextMenu(null);
@@ -905,12 +1171,15 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
   const document = snapshot.document;
   const allItems = workspace.view(normalizedView);
   const items = search.trim() ? allItems.filter((item) => item.title.toLowerCase().includes(search.trim().toLowerCase()) || item.notes.toLowerCase().includes(search.trim().toLowerCase())) : allItems;
+  const upcomingPreviews = normalizedView.kind === "upcoming"
+    ? workspace.nextRepeatingPreviews(datePlus(today, 1)).filter((preview) => !search.trim() || preview.title.toLowerCase().includes(search.trim().toLowerCase()))
+    : [];
   const itemSections = groupWorkspaceItems(items, normalizedView, document, workspace);
   const visibleToDoIds = items.filter((item): item is ToDo => "checklist" in item).map((item) => item.id);
   const selected = selectedId ? document.toDos.find((item) => item.id === selectedId) ?? null : null;
   const activeSpace = document.spaces.find((space) => space.id === activeSpaceId) ?? document.spaces.find((space) => space.id === document.settings.defaultSpaceId) ?? null;
   const darkAppearance = document.settings.theme === "dark" || (document.settings.theme === "system" && systemDark);
-  const nav = (view: WorkspaceView, label: string) => <button type="button" className={`replacement-nav-row${selectedView.kind === view.kind && (!("id" in view) || ("id" in selectedView && selectedView.id === view.id)) ? " active" : ""}`} onClick={() => { setSelectedView(view); setSelectedId(null); setSelection({ ids: [], anchorId: null }); setSidebarOpen(false); setActiveSpaceId(workspace.spaceIdForView(view) ?? activeSpaceId); }} onDragOver={(event) => { if (moveActionForView(view)) event.preventDefault(); }} onDrop={(event) => { const ids = event.dataTransfer.getData("application/x-objects-todos").split(",").filter(Boolean); const action = moveActionForView(view); if (ids.length && action) { event.preventDefault(); void runIntent("drag", action, ids); } }}><span>{label}</span><span>{workspace.view(view).length}</span></button>;
+  const nav = (view: WorkspaceView, label: string) => <button type="button" className={`replacement-nav-row${selectedView.kind === view.kind && (!("id" in view) || ("id" in selectedView && selectedView.id === view.id)) ? " active" : ""}`} onClick={() => { setSelectedView(view); setSelectedId(null); setSelection({ ids: [], anchorId: null }); setSidebarOpen(false); setActiveSpaceId(workspace.spaceIdForView(view) ?? activeSpaceId); }} onDragOver={(event) => { if (moveActionForView(view)) event.preventDefault(); }} onDrop={(event) => { const ids = event.dataTransfer.getData("application/x-objects-todos").split(",").filter(Boolean); const action = moveActionForView(view); if (ids.length && action) { event.preventDefault(); void runIntent("drag", action, ids); } }}><span>{label}</span><span>{view.kind === "repeating" ? document.repeatingTemplates.length : workspace.view(view).length}</span></button>;
 
   const submitQuickEntry = async () => {
     const value = draft.trim();
@@ -988,7 +1257,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
     }}
     onPointerCancel={() => { drawerGesture.current = null; }}
   >
-    <aside className="replacement-sidebar" aria-label="Lists" aria-hidden={mobile && !sidebarOpen} inert={(mobile && (!sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen ? true : undefined}>
+    <aside className="replacement-sidebar" aria-label="Lists" aria-hidden={mobile && !sidebarOpen} inert={(mobile && (!sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen || repeatTarget !== null ? true : undefined}>
       <div className="replacement-brand"><span className="replacement-brand-mark" aria-hidden="true">O</span>Objects <button className="replacement-mobile-close" type="button" aria-label="Close sidebar" onClick={() => { setSidebarOpen(false); restoreFocus(); }}>×</button></div>
       {activeSpace ? <button className="replacement-spaces-pill" type="button" aria-label={`Open ${activeSpace.title} Space`} onClick={() => { setSelectedView({ kind: "space", id: activeSpace.id, date: today }); setSelectedId(null); setSidebarOpen(false); }}><span style={{ background: activeSpace.color }} aria-hidden="true" /><strong>{activeSpace.title}</strong><small>Space</small></button> : null}
       <nav className="replacement-nav">
@@ -1009,19 +1278,19 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
           window.setTimeout(() => shellRef.current?.querySelector<HTMLInputElement>(".replacement-file")?.focus(), 0);
         }
       }}>Import backup</button>
-      <button className="replacement-sidebar-action" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setSettingsOpen(true); if (mobile) setSidebarOpen(false); }}>Settings</button>
+      <div className="replacement-sidebar-footer"><button className="replacement-sidebar-action" type="button" onClick={(event) => { returnFocus.current = event.currentTarget; setSettingsOpen(true); if (mobile) setSidebarOpen(false); }}>Settings</button><button className="replacement-sidebar-action replacement-repeating-icon" type="button" aria-label="Open Repeating" title="Repeating" onClick={() => { setSelectedView({ kind: "repeating", date: today }); setSelectedId(null); setSidebarOpen(false); }}>↻</button></div>
     </aside>
 
-    <main className="replacement-main" inert={(mobile && (sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen ? true : undefined}>
+    <main className="replacement-main" inert={(mobile && (sidebarOpen || Boolean(selected))) || actionDialog !== null || settingsOpen || repeatTarget !== null ? true : undefined}>
       <div className="replacement-mobile-header"><button type="button" aria-label="Open sidebar" onClick={(event) => { returnFocus.current = event.currentTarget; setSidebarOpen(true); window.setTimeout(() => (shellRef.current?.querySelector(".replacement-mobile-close") as HTMLElement | null)?.focus(), 0); }}>☰</button><strong>Objects</strong><button type="button" aria-label="Focus Quick Find" onClick={() => (shellRef.current?.querySelector(".replacement-search") as HTMLInputElement | null)?.focus()}>⌕</button></div>
       <div className="replacement-main-inner">
-        <header><p className="replacement-kicker">{saving ? "Saving…" : "Workspace"}</p><div className="replacement-title-row"><div><h1>{viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{items.length ? `${items.length} item${items.length === 1 ? "" : "s"}` : "Nothing here yet"}</p></div><label className="replacement-search-label"><span>Quick Find</span><input className="replacement-search" type="search" value={search} onInput={(event) => setSearch(event.currentTarget.value)} placeholder="Search this list" /></label></div>{document.tags.length ? <div className="replacement-tag-filters" aria-label="Filter by effective Tags"><button type="button" className={!activeTagIds.length ? "active" : ""} onClick={() => setActiveTagIds([])}>All Tags</button>{document.tags.map((tag) => <button key={tag.id} type="button" className={activeTagIds.includes(tag.id) ? "active" : ""} aria-pressed={activeTagIds.includes(tag.id)} onClick={(event) => setActiveTagIds((current) => event.metaKey || event.ctrlKey ? current.includes(tag.id) ? current.filter((id) => id !== tag.id) : [...current, tag.id] : current.length === 1 && current[0] === tag.id ? [] : [tag.id])}>{tag.title}</button>)}</div> : null}</header>
-        <EntityTools view={normalizedView} document={document} workspace={workspace} runChange={runChange} selectView={(view) => { setSelectedView(view); setSelectedId(null); }} />
+        <header><p className="replacement-kicker">{saving ? "Saving…" : "Workspace"}</p><div className="replacement-title-row"><div><h1>{viewTitle(normalizedView, document)}</h1><p className="replacement-subtitle">{normalizedView.kind === "repeating" ? `${document.repeatingTemplates.length} Template${document.repeatingTemplates.length === 1 ? "" : "s"}` : items.length + upcomingPreviews.length ? `${items.length + upcomingPreviews.length} item${items.length + upcomingPreviews.length === 1 ? "" : "s"}` : "Nothing here yet"}</p></div><label className="replacement-search-label"><span>Quick Find</span><input className="replacement-search" type="search" value={search} onInput={(event) => setSearch(event.currentTarget.value)} placeholder="Search this list" /></label></div>{search.trim() && "repeating".includes(search.trim().toLowerCase()) && normalizedView.kind !== "repeating" ? <button className="replacement-quick-route" type="button" onClick={() => setSelectedView({ kind: "repeating", date: today })}>Open Repeating</button> : null}{document.tags.length && normalizedView.kind !== "repeating" ? <div className="replacement-tag-filters" aria-label="Filter by effective Tags"><button type="button" className={!activeTagIds.length ? "active" : ""} onClick={() => setActiveTagIds([])}>All Tags</button>{document.tags.map((tag) => <button key={tag.id} type="button" className={activeTagIds.includes(tag.id) ? "active" : ""} aria-pressed={activeTagIds.includes(tag.id)} onClick={(event) => setActiveTagIds((current) => event.metaKey || event.ctrlKey ? current.includes(tag.id) ? current.filter((id) => id !== tag.id) : [...current, tag.id] : current.length === 1 && current[0] === tag.id ? [] : [tag.id])}>{tag.title}</button>)}</div> : null}</header>
+        {normalizedView.kind !== "repeating" ? <EntityTools view={normalizedView} document={document} workspace={workspace} runChange={runChange} selectView={(view) => { setSelectedView(view); setSelectedId(null); }} openProjectRepeatEditor={(project) => setRepeatTarget({ kind: "project", project })} openTemplate={(id) => { const template = document.repeatingTemplates.find((item) => item.id === id); if (template) setRepeatTarget({ kind: "template", template }); }} /> : null}
         {backupOpen ? <section className="replacement-import" aria-labelledby="replacement-import-title"><h2 id="replacement-import-title">Import the current portable backup</h2><p>Type <strong>{FULL_IMPORT_CONFIRMATION}</strong> before replacing this Workspace.</p><div className="replacement-import-controls"><input className="replacement-file" type="file" accept="application/json,.json" aria-label="Choose Objects JSON backup" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void file.text().then(setBackup); }} /><input className="replacement-confirmation" value={confirmation} onInput={(event) => setConfirmation(event.currentTarget.value)} placeholder={FULL_IMPORT_CONFIRMATION} aria-label="Full import confirmation" /><button className="replacement-button" type="button" disabled={!backup || saving} onClick={() => void importBackup()}>Import backup</button></div></section> : null}
 
-        {normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(QUICK_DRAFT_KEY, value); }} onBlur={(event) => { const next = event.relatedTarget; if (draft && (!(next instanceof Node) || !event.currentTarget.form?.contains(next))) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim() || saving}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
+        {normalizedView.kind !== "trash" && normalizedView.kind !== "logbook" && normalizedView.kind !== "deadlines" && normalizedView.kind !== "repeating" ? <form className="replacement-quick-entry" onSubmit={(event) => { event.preventDefault(); void submitQuickEntry(); }}><input ref={quickInput} value={draft} onInput={(event) => { const value = event.currentTarget.value; setDraft(value); localStorage.setItem(QUICK_DRAFT_KEY, value); }} onBlur={(event) => { const next = event.relatedTarget; if (draft && (!(next instanceof Node) || !event.currentTarget.form?.contains(next))) void runChange({ type: "saveQuickDraft", value: draft, view: normalizedView }); }} placeholder={`New to-do in ${viewTitle(normalizedView, document)}`} aria-label="New to-do" /><button className="replacement-button" type="submit" disabled={!draft.trim() || saving}>Add</button><p>Try “Call Sam tomorrow at 2pm due Friday #people”.</p></form> : null}
 
-        {items.length ? <div className="replacement-sections">
+        {normalizedView.kind === "repeating" ? <RepeatingView document={document} search={search} edit={(template) => setRepeatTarget({ kind: "template", template })} create={() => setRepeatTarget({ kind: "direct" })} runChange={runChange} /> : items.length || upcomingPreviews.length ? <div className="replacement-sections">
           {[...itemSections].map(([sectionKey, section]) => <section className="replacement-section" key={sectionKey} aria-label={section.title ?? `${viewTitle(normalizedView, document)} items`}>
           {section.title ? <h2>{section.title}</h2> : null}
           <div className="replacement-list" data-section={sectionKey}>
@@ -1049,6 +1318,7 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
           />)}
           </div>
           </section>)}
+          {upcomingPreviews.length ? <section className="replacement-section" aria-label="Future repeating previews"><h2>Repeating previews</h2><div className="replacement-list">{upcomingPreviews.map((preview) => <article className="replacement-row replacement-preview-row" key={preview.id}><span className="replacement-preview-icon" aria-hidden="true">↻</span><div className="replacement-row-body" aria-disabled="true"><strong>{preview.title}</strong><span>{preview.scheduledDate} · {preview.itemKind === "toDo" ? "To-do" : "Project"} preview · Becomes actionable when due</span></div><button className="replacement-preview-label" type="button" onClick={() => { const template = document.repeatingTemplates.find((item) => item.id === preview.templateId); setSelectedView({ kind: "repeating", date: today }); if (template) setRepeatTarget({ kind: "template", template }); }}>Template</button></article>)}</div></section> : null}
         </div> : <section className="replacement-empty"><div aria-hidden="true">✓</div><h2>{normalizedView.kind === "trash" ? "Trash is empty" : normalizedView.kind === "logbook" ? "No history yet" : "All clear"}</h2><p>{normalizedView.kind === "trash" ? "Removed to-dos will wait here until you restore or permanently delete them." : "Use inline entry or Magic Plus to add a to-do."}</p></section>}
 
         {normalizedView.kind === "trash" && items.length && activeSpaceId ? <button className="replacement-danger-button" type="button" onClick={() => { if (window.confirm("Permanently delete every to-do in the active Space's Trash?")) void runChange({ type: "emptyTrash", spaceId: activeSpaceId, confirmation: EMPTY_TRASH_CONFIRMATION }); }}>Empty active Space’s Trash</button> : null}
@@ -1085,8 +1355,9 @@ function ReplacementWorkspace({ adapter, showReminder }: { adapter: WorkspaceSyn
       close={closeActionDialog}
     /> : null}
     {settingsOpen ? <WorkspaceSettingsDialog settings={document.settings} runChange={runChange} close={() => { setSettingsOpen(false); restoreFocus(); }} /> : null}
-    <button className="replacement-magic-plus" type="button" inert={actionDialog !== null || settingsOpen ? true : undefined} aria-label="Magic Plus: add to-do" onClick={() => { quickInput.current?.focus(); quickInput.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }}>+</button>
-    {selected ? <div inert={actionDialog !== null || settingsOpen ? true : undefined}><Inspector key={`${selected.id}-${snapshot.revision}`} item={selected} document={document} saving={saving} modal={mobile} runChange={runChange} runIntent={runIntent} close={() => { setSelectedId(null); restoreFocus(); }} /></div> : null}
+    {repeatTarget ? <RepeatEditor target={repeatTarget} document={document} today={today} runChange={runChange} close={() => setRepeatTarget(null)} /> : null}
+    <button className="replacement-magic-plus" type="button" inert={actionDialog !== null || settingsOpen || repeatTarget !== null ? true : undefined} aria-label={normalizedView.kind === "repeating" ? "Add Repeating Template" : "Magic Plus: add to-do"} onClick={() => { if (normalizedView.kind === "repeating") setRepeatTarget({ kind: "direct" }); else { quickInput.current?.focus(); quickInput.current?.scrollIntoView({ behavior: "smooth", block: "center" }); } }}>+</button>
+    {selected ? <div inert={actionDialog !== null || settingsOpen || repeatTarget !== null ? true : undefined}><Inspector key={`${selected.id}-${snapshot.revision}`} item={selected} document={document} saving={saving} modal={mobile} runChange={runChange} runIntent={runIntent} openRepeatEditor={(item) => setRepeatTarget({ kind: "toDo", toDo: item })} openTemplate={(id) => { const template = document.repeatingTemplates.find((item) => item.id === id); if (template) { setSelectedView({ kind: "repeating", date: today }); setSelectedId(null); setRepeatTarget({ kind: "template", template }); } }} close={() => { setSelectedId(null); restoreFocus(); }} /></div> : null}
     {feedback ? <div className={`replacement-toast${feedback.error ? " error" : ""}`} role="status"><span>{feedback.text}</span>{feedback.error && pending.current ? <button type="button" onClick={() => void retrySave()}>Retry</button> : null}{feedback.undo ? <button type="button" onClick={() => void undo(feedback.undo!, feedback.undoDocument)}>Undo</button> : null}<button type="button" aria-label="Dismiss message" onClick={() => setFeedback(null)}>×</button></div> : null}
   </div>;
 }

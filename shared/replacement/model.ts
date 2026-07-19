@@ -133,6 +133,7 @@ export type RepeatingProjectHeadingBlueprint = {
 
 export type RepeatingReminderDefault =
   | { kind: "at-time"; time: string }
+  | { kind: "offset"; days: number; time: string }
   | { kind: "fixed"; at: IsoDateTime };
 
 export type RepeatingDeadlineDefault =
@@ -146,6 +147,7 @@ export type RepeatingProjectToDoBlueprint = {
   headingKey: string | null;
   tags: EntityId[];
   checklist: Array<Omit<ChecklistItem, "id">>;
+  schedule?: Exclude<Schedule, { kind: "scheduled" }> | { kind: "scheduled"; offsetDays: number; evening: boolean };
   reminder: RepeatingReminderDefault | null;
   deadline: RepeatingDeadlineDefault | null;
   order: number;
@@ -165,6 +167,7 @@ type RepeatingTemplateBase = {
   pattern: RepeatingPattern;
   mode: "on-schedule" | "after-completion";
   state: "active" | "paused" | "stopped";
+  firstDate?: IsoDate;
   nextDate: IsoDate;
   reminderTime: string | null;
   deadlineOffsetDays: number | null;
@@ -175,6 +178,14 @@ export type RepeatingTemplate = RepeatingTemplateBase & (
   | { itemKind: "toDo"; location: ToDoLocation; projectContents: null }
   | { itemKind: "project"; location: ProjectLocation; projectContents: RepeatingProjectContents }
 );
+
+export type RepeatingPreview = {
+  id: string;
+  templateId: EntityId;
+  itemKind: RepeatingTemplate["itemKind"];
+  title: string;
+  scheduledDate: IsoDate;
+};
 
 export type ProjectClosure = {
   id: EntityId;

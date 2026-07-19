@@ -10,7 +10,10 @@ import type {
   Outcome,
   Project,
   ProjectLocation,
+  RepeatingPattern,
+  RepeatingPreview,
   RepeatingProjectContents,
+  RepeatingTemplate,
   Schedule,
   Space,
   Tag,
@@ -29,6 +32,8 @@ export const DELETE_SPACE_CONFIRMATION = "DELETE SPACE";
 export const REMOVE_AREA_CONFIRMATION = "REMOVE AREA";
 export const DELETE_HEADING_CONFIRMATION = "DELETE HEADING";
 export const DELETE_TAG_CONFIRMATION = "DELETE TAG";
+export const DELETE_REPEATING_TEMPLATE_CONFIRMATION = "DELETE REPEATING TEMPLATE";
+export const REPEATING_BATCH_LIMIT = 100;
 
 export type WorkspaceDependencies = {
   now: () => IsoDateTime;
@@ -40,6 +45,25 @@ export type ProjectChanges = Partial<Pick<Project, "title" | "notes" | "location
 export type AreaChanges = Partial<Pick<Area, "title" | "spaceId" | "color" | "tags">>;
 export type HeadingChanges = Partial<Pick<Heading, "title" | "location">>;
 export type SpaceChanges = Partial<Pick<Space, "title" | "color" | "pinned">>;
+
+export type RepeatingTemplateDraft = {
+  title: string;
+  notes?: string;
+  tags?: EntityId[];
+  checklist?: string[];
+  pattern: RepeatingPattern;
+  mode: RepeatingTemplate["mode"];
+  firstDate: string;
+  reminderTime?: string | null;
+  deadlineOffsetDays?: number | null;
+} & (
+  | { itemKind: "toDo"; location: ToDoLocation }
+  | { itemKind: "project"; location: ProjectLocation; projectContents?: RepeatingProjectContents }
+);
+
+export type RepeatingTemplateChanges = Partial<Pick<RepeatingTemplate,
+  "title" | "notes" | "tags" | "pattern" | "mode" | "nextDate" | "reminderTime" | "deadlineOffsetDays" | "projectContents"
+>> & { location?: ToDoLocation | ProjectLocation; checklist?: string[] };
 
 export type WorkspaceChange =
   | { type: "createSpace"; title: string; color: string; pinned?: boolean }
@@ -76,7 +100,16 @@ export type WorkspaceChange =
   | { type: "updateChecklistItem"; toDoId: EntityId; itemId: EntityId; changes: Partial<Pick<ChecklistItem, "title" | "completed">> }
   | { type: "removeChecklistItem"; toDoId: EntityId; itemId: EntityId }
   | { type: "reorderToDos"; movedIds: EntityId[]; orderedIds: EntityId[]; destination?: { location?: ToDoLocation; schedule?: Schedule } }
-  | { type: "makeToDoRepeating"; id: EntityId; nextDate: string }
+  | { type: "makeToDoRepeating"; id: EntityId; nextDate: string; pattern?: RepeatingPattern; mode?: RepeatingTemplate["mode"] }
+  | { type: "makeProjectRepeating"; id: EntityId; firstDate: string; pattern: RepeatingPattern; mode: RepeatingTemplate["mode"] }
+  | { type: "createRepeatingTemplate"; template: RepeatingTemplateDraft }
+  | { type: "generateRepeatingOccurrences"; throughDate: string; batchSize?: number }
+  | { type: "skipOccurrence"; itemKind: "toDo" | "project"; id: EntityId }
+  | { type: "updateRepeatingTemplate"; id: EntityId; changes: RepeatingTemplateChanges }
+  | { type: "pauseRepeatingTemplate"; id: EntityId }
+  | { type: "resumeRepeatingTemplate"; id: EntityId }
+  | { type: "stopRepeatingTemplate"; id: EntityId }
+  | { type: "deleteRepeatingTemplate"; id: EntityId; confirmation: string }
   | { type: "completeToDo"; id: EntityId }
   | { type: "cancelToDo"; id: EntityId }
   | { type: "reopenToDo"; id: EntityId }
@@ -102,6 +135,8 @@ export type Workspace = {
   effectiveTagIdsForToDo(id: EntityId): EntityId[];
   effectiveTagIdsForProject(id: EntityId): EntityId[];
   projectProgress(id: EntityId): ProjectProgress | null;
+  repeatingPreviews(fromDate: string, throughDate: string, limit?: number): RepeatingPreview[];
+  nextRepeatingPreviews(fromDate: string): RepeatingPreview[];
   validate(): string[];
   importPortableBackup(serialized: string, confirmation: string): WorkspaceImportResult;
 };
@@ -124,7 +159,7 @@ export type WorkspaceImportResult =
     };
 
 export type WorkspaceView = (
-  | { kind: "today" | "thisEvening" | "tomorrow" | "upcoming" | "inbox" | "anytime" | "someday" | "deadlines" | "trash" | "logbook"; date: string }
+  | { kind: "today" | "thisEvening" | "tomorrow" | "upcoming" | "inbox" | "anytime" | "someday" | "deadlines" | "trash" | "logbook" | "repeating"; date: string }
   | { kind: "space" | "area" | "project" | "heading"; id: EntityId; date: string }
 ) & { tagIds?: EntityId[] };
 
@@ -175,6 +210,51 @@ function addDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00.000Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
+}
+
+function daysBetween(left: string, right: string): number {
+  return Math.round((Date.parse(`${right}T00:00:00.000Z`) - Date.parse(`${left}T00:00:00.000Z`)) / 86_400_000);
+}
+
+function lastDayOfMonth(year: number, monthIndex: number): number {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+}
+
+export function nextRepeatingDate(currentDate: string, pattern: RepeatingPattern, firstDate = currentDate): string {
+  if (!isIsoDate(currentDate) || !isIsoDate(firstDate) || !Number.isInteger(pattern.interval) || pattern.interval < 1) return currentDate;
+  if (pattern.frequency === "daily") return addDays(currentDate, pattern.interval);
+  if (pattern.frequency === "weekly") {
+    const weekdays = [...new Set(pattern.weekdays)].filter((day) => Number.isInteger(day) && day >= 0 && day <= 6).sort((left, right) => left - right);
+    if (!weekdays.length) return addDays(currentDate, pattern.interval * 7);
+    const currentWeekday = new Date(`${currentDate}T00:00:00.000Z`).getUTCDay();
+    const laterThisWeek = weekdays.find((weekday) => weekday > currentWeekday);
+    if (laterThisWeek !== undefined) return addDays(currentDate, laterThisWeek - currentWeekday);
+    return addDays(currentDate, 7 * pattern.interval - currentWeekday + weekdays[0]);
+  }
+  const current = new Date(`${currentDate}T00:00:00.000Z`);
+  const anchor = new Date(`${firstDate}T00:00:00.000Z`);
+  if (pattern.frequency === "monthly") {
+    const monthIndex = current.getUTCMonth() + pattern.interval;
+    const year = current.getUTCFullYear() + Math.floor(monthIndex / 12);
+    const month = ((monthIndex % 12) + 12) % 12;
+    const day = Math.min(anchor.getUTCDate(), lastDayOfMonth(year, month));
+    return new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
+  }
+  const year = current.getUTCFullYear() + pattern.interval;
+  const month = anchor.getUTCMonth();
+  const day = Math.min(anchor.getUTCDate(), lastDayOfMonth(year, month));
+  return new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
+}
+
+export function repeatingRuleSummary(pattern: RepeatingPattern, mode: RepeatingTemplate["mode"]): string {
+  const interval = pattern.interval;
+  const unit = pattern.frequency === "daily" ? "day" : pattern.frequency === "weekly" ? "week" : pattern.frequency === "monthly" ? "month" : "year";
+  const cadence = interval === 1 ? `Every ${unit}` : `Every ${interval} ${unit}s`;
+  const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const days = pattern.frequency === "weekly" && pattern.weekdays.length
+    ? ` on ${[...new Set(pattern.weekdays)].sort().map((day) => weekdayNames[day]).join(", ")}`
+    : "";
+  return `${cadence}${days}${mode === "after-completion" ? " after completion or Skip" : " on schedule"}`;
 }
 
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -362,6 +442,177 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     };
   }
 
+  function patternIsValid(pattern: RepeatingPattern): boolean {
+    return ["daily", "weekly", "monthly", "yearly"].includes(pattern.frequency)
+      && Number.isInteger(pattern.interval)
+      && pattern.interval >= 1
+      && pattern.weekdays.every((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+  }
+
+  function projectContentsErrors(contents: RepeatingProjectContents): string[] {
+    const errors: string[] = [];
+    const headingKeys = new Set<string>();
+    for (const heading of contents.headings) {
+      if (!heading.key || headingKeys.has(heading.key)) errors.push("Project Heading identities must be present and unique.");
+      if (!heading.title.trim()) errors.push("Project Heading titles cannot be empty.");
+      headingKeys.add(heading.key);
+    }
+    const toDoKeys = new Set<string>();
+    for (const toDo of contents.toDos) {
+      if (!toDo.key || toDoKeys.has(toDo.key)) errors.push("Project to-do identities must be present and unique.");
+      if (!toDo.title.trim()) errors.push("Project to-do titles cannot be empty.");
+      if (toDo.headingKey && !headingKeys.has(toDo.headingKey)) errors.push("A Project to-do points to a missing Heading.");
+      if (toDo.tags.some((tagId) => !document.tags.some((tag) => tag.id === tagId))) errors.push("A Project to-do uses a Tag that no longer exists.");
+      if (toDo.checklist.some((item) => !item.title.trim())) errors.push("Project to-do checklist titles cannot be empty.");
+      if (toDo.schedule?.kind === "scheduled" && !Number.isInteger(toDo.schedule.offsetDays)) errors.push("Project to-do Schedule offsets must be whole numbers.");
+      if (toDo.reminder?.kind === "at-time" && !isTime(toDo.reminder.time)) errors.push("Choose a valid Project to-do Reminder time.");
+      if (toDo.reminder?.kind === "offset" && (!Number.isInteger(toDo.reminder.days) || !isTime(toDo.reminder.time))) errors.push("Project to-do Reminder offsets must use a whole number and valid time.");
+      if (toDo.reminder?.kind === "fixed" && !isIsoDateTime(toDo.reminder.at)) errors.push("Choose a valid fixed Project to-do Reminder.");
+      if (toDo.deadline?.kind === "offset" && !Number.isInteger(toDo.deadline.days)) errors.push("Project to-do Deadline offsets must be whole numbers.");
+      if (toDo.deadline?.kind === "fixed" && !isIsoDate(toDo.deadline.date)) errors.push("Choose a valid fixed Project to-do Deadline.");
+      toDoKeys.add(toDo.key);
+    }
+    return [...new Set(errors)];
+  }
+
+  function createToDoOccurrence(template: Extract<RepeatingTemplate, { itemKind: "toDo" }>, scheduledDate: string): ToDo {
+    return {
+      id: dependencies.createId("toDo"),
+      title: template.title,
+      notes: template.notes,
+      checklist: template.checklist.map((item, order) => ({
+        ...copyDocument(item),
+        id: dependencies.createId("checklistItem"),
+        completed: false,
+        order,
+      })),
+      location: copyDocument(template.location),
+      schedule: { kind: "scheduled", date: scheduledDate, evening: false },
+      reminder: template.reminderTime ? { at: `${scheduledDate}T${template.reminderTime}:00.000Z`, sentAt: null } : null,
+      deadline: template.deadlineOffsetDays === null ? null : addDays(scheduledDate, template.deadlineOffsetDays),
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      tags: [...template.tags],
+      occurrence: { templateId: template.id, scheduledDate },
+      createdAt: dependencies.now(),
+      completedAt: null,
+      order: document.toDos.length,
+    };
+  }
+
+  function projectContentsFromProject(projectId: EntityId, firstDate: string): RepeatingProjectContents {
+    const headings = document.headings
+      .filter((heading) => heading.location.kind === "project" && heading.location.projectId === projectId)
+      .map((heading) => ({ key: heading.id, title: heading.title, archived: Boolean(heading.archivedAt), order: heading.order }));
+    const headingIds = new Set(headings.map((heading) => heading.key));
+    const toDos = projectToDos(projectId).map((toDo) => ({
+      key: toDo.id,
+      title: toDo.title,
+      notes: toDo.notes,
+      headingKey: toDo.location.kind === "heading" && headingIds.has(toDo.location.headingId) ? toDo.location.headingId : null,
+      tags: [...toDo.tags],
+      checklist: toDo.checklist.map(({ title, order }) => ({ title, completed: false, order })),
+      schedule: toDo.schedule.kind === "scheduled"
+        ? { kind: "scheduled" as const, offsetDays: daysBetween(firstDate, toDo.schedule.date), evening: toDo.schedule.evening }
+        : copyDocument(toDo.schedule),
+      reminder: toDo.reminder ? {
+        kind: "offset" as const,
+        days: daysBetween(firstDate, toDo.reminder.at.slice(0, 10)),
+        time: toDo.reminder.at.slice(11, 16),
+      } : null,
+      deadline: toDo.deadline ? { kind: "offset" as const, days: daysBetween(firstDate, toDo.deadline) } : null,
+      order: toDo.order,
+    }));
+    return { headings, toDos };
+  }
+
+  function createProjectOccurrence(template: Extract<RepeatingTemplate, { itemKind: "project" }>, scheduledDate: string): AffectedEntity[] {
+    const project: Project = {
+      id: dependencies.createId("project"),
+      title: template.title,
+      notes: template.notes,
+      location: copyDocument(template.location),
+      schedule: { kind: "scheduled", date: scheduledDate, evening: false },
+      deadline: template.deadlineOffsetDays === null ? null : addDays(scheduledDate, template.deadlineOffsetDays),
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      tags: [...template.tags],
+      occurrence: { templateId: template.id, scheduledDate },
+      completedAt: null,
+      order: document.projects.length,
+    };
+    document.projects.push(project);
+    const headingIds = new Map<string, string>();
+    const headings = template.projectContents.headings.map((blueprint, index): Heading => {
+      const id = dependencies.createId("heading");
+      headingIds.set(blueprint.key, id);
+      return {
+        id,
+        title: blueprint.title,
+        location: { kind: "project", projectId: project.id },
+        archivedAt: blueprint.archived ? dependencies.now() : null,
+        order: document.headings.length + index,
+      };
+    });
+    document.headings.push(...headings);
+    const toDos = template.projectContents.toDos.map((blueprint, index): ToDo => {
+      const schedule: Schedule = blueprint.schedule?.kind === "scheduled"
+        ? { kind: "scheduled", date: addDays(scheduledDate, blueprint.schedule.offsetDays), evening: blueprint.schedule.evening }
+        : copyDocument(blueprint.schedule ?? { kind: "anytime" });
+      const reminderDate = schedule.kind === "scheduled" ? schedule.date : scheduledDate;
+      return {
+        id: dependencies.createId("toDo"),
+        title: blueprint.title,
+        notes: blueprint.notes,
+        checklist: blueprint.checklist.map((item, order) => ({
+          ...copyDocument(item), id: dependencies.createId("checklistItem"), completed: false, order,
+        })),
+        location: blueprint.headingKey && headingIds.has(blueprint.headingKey)
+          ? { kind: "heading", headingId: headingIds.get(blueprint.headingKey)! }
+          : { kind: "project", projectId: project.id },
+        schedule,
+        reminder: blueprint.reminder?.kind === "at-time"
+          ? { at: `${reminderDate}T${blueprint.reminder.time}:00.000Z`, sentAt: null }
+          : blueprint.reminder?.kind === "offset"
+            ? { at: `${addDays(scheduledDate, blueprint.reminder.days)}T${blueprint.reminder.time}:00.000Z`, sentAt: null }
+          : blueprint.reminder?.kind === "fixed" ? { at: blueprint.reminder.at, sentAt: null } : null,
+        deadline: blueprint.deadline?.kind === "offset"
+          ? addDays(scheduledDate, blueprint.deadline.days)
+          : blueprint.deadline?.kind === "fixed" ? blueprint.deadline.date : null,
+        outcome: "open",
+        trashedAt: null,
+        logbookAt: null,
+        tags: [...blueprint.tags],
+        occurrence: null,
+        createdAt: dependencies.now(),
+        completedAt: null,
+        order: document.toDos.length + index,
+      };
+    });
+    document.toDos.push(...toDos);
+    return [
+      { kind: "project", id: project.id },
+      ...headings.map((heading) => ({ kind: "heading" as const, id: heading.id })),
+      ...toDos.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+    ];
+  }
+
+  function occurrenceExists(template: RepeatingTemplate, scheduledDate: string): boolean {
+    const collection = template.itemKind === "toDo" ? document.toDos : document.projects;
+    return collection.some((item) => item.occurrence?.templateId === template.id && item.occurrence.scheduledDate === scheduledDate);
+  }
+
+  function advanceAfterCompletionSchedule(item: ToDo | Project): RepeatingTemplate | null {
+    if (!item.occurrence) return null;
+    const template = document.repeatingTemplates.find((candidate) => candidate.id === item.occurrence!.templateId);
+    if (!template || template.mode !== "after-completion" || template.state === "stopped") return null;
+    const completedDate = dependencies.now().slice(0, 10);
+    template.nextDate = nextRepeatingDate(completedDate, template.pattern, completedDate);
+    return template;
+  }
+
   function projectLocationExists(location: ProjectLocation): boolean {
     return location.kind === "space"
       ? document.spaces.some((space) => space.id === location.spaceId)
@@ -474,6 +725,56 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     return { total, open, completed, canceled, percent: total ? Math.round((completed / total) * 100) : 0 };
   }
 
+  function repeatingPreviewDates(template: RepeatingTemplate, fromDate: string, throughDate: string | null, limit: number): string[] {
+    if (template.state !== "active" || !patternIsValid(template.pattern) || !isIsoDate(template.nextDate)) return [];
+    const collection = template.itemKind === "toDo" ? document.toDos : document.projects;
+    const hasOpenAfterCompletionOccurrence = template.mode === "after-completion"
+      && collection.some((item) => item.occurrence?.templateId === template.id && item.outcome === "open" && !item.trashedAt);
+    if (hasOpenAfterCompletionOccurrence) return [];
+    const dates: string[] = [];
+    let date = template.nextDate;
+    for (let guard = 0; guard < REPEATING_BATCH_LIMIT && dates.length < limit; guard += 1) {
+      if (throughDate && date > throughDate) break;
+      if (date >= fromDate && !occurrenceExists(template, date)) dates.push(date);
+      if (template.mode === "after-completion") break;
+      const next = nextRepeatingDate(date, template.pattern, template.firstDate ?? template.nextDate);
+      if (next <= date) break;
+      date = next;
+    }
+    return dates;
+  }
+
+  function repeatingPreview(template: RepeatingTemplate, scheduledDate: string): RepeatingPreview {
+    return {
+      id: `preview:${template.id}:${scheduledDate}`,
+      templateId: template.id,
+      itemKind: template.itemKind,
+      title: template.title,
+      scheduledDate,
+    };
+  }
+
+  function repeatingPreviews(fromDate: string, throughDate: string, limit = REPEATING_BATCH_LIMIT): RepeatingPreview[] {
+    if (!isIsoDate(fromDate) || !isIsoDate(throughDate) || throughDate < fromDate || !Number.isInteger(limit) || limit < 1) return [];
+    const previews: RepeatingPreview[] = [];
+    for (const template of document.repeatingTemplates) {
+      const remaining = limit - previews.length;
+      previews.push(...repeatingPreviewDates(template, fromDate, throughDate, remaining).map((date) => repeatingPreview(template, date)));
+      if (previews.length >= limit) break;
+    }
+    return previews.sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate) || left.title.localeCompare(right.title)).slice(0, limit);
+  }
+
+  function nextRepeatingPreviews(fromDate: string): RepeatingPreview[] {
+    if (!isIsoDate(fromDate)) return [];
+    const previews: RepeatingPreview[] = [];
+    for (const template of document.repeatingTemplates) {
+      const [date] = repeatingPreviewDates(template, fromDate, null, 1);
+      if (date) previews.push(repeatingPreview(template, date));
+    }
+    return previews.sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate) || left.title.localeCompare(right.title));
+  }
+
   function validate(): string[] {
     const errors: string[] = [];
     const ids = new Set<string>();
@@ -555,11 +856,16 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
           : document.areas.some((area) => area.id === location.areaId);
       }
       if (!hasValidLocation) errors.push(`Repeating Template “${template.id}” has no valid Location.`);
+      if (template.firstDate && !isIsoDate(template.firstDate)) errors.push(`Repeating Template “${template.id}” has an invalid first date.`);
       if (!isIsoDate(template.nextDate)) errors.push(`Repeating Template “${template.id}” has an invalid next date.`);
       if (!isIsoDateTime(template.createdAt)) errors.push(`Repeating Template “${template.id}” has an invalid creation date.`);
+      if (!["daily", "weekly", "monthly", "yearly"].includes(template.pattern.frequency)) errors.push(`Repeating Template “${template.id}” has an invalid frequency.`);
       if (!Number.isInteger(template.pattern.interval) || template.pattern.interval < 1) errors.push(`Repeating Template “${template.id}” has an invalid interval.`);
       if (template.pattern.weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) errors.push(`Repeating Template “${template.id}” has an invalid weekday.`);
+      if (!["on-schedule", "after-completion"].includes(template.mode)) errors.push(`Repeating Template “${template.id}” has an invalid mode.`);
+      if (!["active", "paused", "stopped"].includes(template.state)) errors.push(`Repeating Template “${template.id}” has an invalid state.`);
       if (template.reminderTime && !isTime(template.reminderTime)) errors.push(`Repeating Template “${template.id}” has an invalid reminder time.`);
+      if (template.deadlineOffsetDays !== null && !Number.isInteger(template.deadlineOffsetDays)) errors.push(`Repeating Template “${template.id}” has an invalid Deadline offset.`);
       for (const tagId of template.tags) if (!document.tags.some((tag) => tag.id === tagId)) errors.push(`Repeating Template “${template.id}” has an unknown Tag.`);
       const projectContents = template.projectContents as RepeatingProjectContents | null;
       if (template.itemKind === "project" && !projectContents) errors.push(`Repeating Project Template “${template.id}” has no Project contents.`);
@@ -569,9 +875,11 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         for (const toDo of projectContents.toDos) {
           if (toDo.headingKey && !headingKeys.has(toDo.headingKey)) errors.push(`Repeating Project Template “${template.id}” has a to-do with an unknown Heading.`);
           if (toDo.reminder?.kind === "at-time" && !isTime(toDo.reminder.time)) errors.push(`Repeating Project Template “${template.id}” has an invalid child Reminder.`);
+          if (toDo.reminder?.kind === "offset" && (!Number.isInteger(toDo.reminder.days) || !isTime(toDo.reminder.time))) errors.push(`Repeating Project Template “${template.id}” has an invalid child Reminder offset.`);
           if (toDo.reminder?.kind === "fixed" && !isIsoDateTime(toDo.reminder.at)) errors.push(`Repeating Project Template “${template.id}” has an invalid child Reminder.`);
           if (toDo.deadline?.kind === "offset" && !Number.isInteger(toDo.deadline.days)) errors.push(`Repeating Project Template “${template.id}” has an invalid child Deadline.`);
           if (toDo.deadline?.kind === "fixed" && !isIsoDate(toDo.deadline.date)) errors.push(`Repeating Project Template “${template.id}” has an invalid child Deadline.`);
+          if (toDo.schedule?.kind === "scheduled" && !Number.isInteger(toDo.schedule.offsetDays)) errors.push(`Repeating Project Template “${template.id}” has an invalid child Schedule offset.`);
         }
       }
     }
@@ -616,6 +924,7 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         const effectiveTags = "checklist" in item ? effectiveTagIdsForToDo(item.id) : effectiveTagIdsForProject(item.id);
         return view.tagIds.every((tagId) => effectiveTags.includes(tagId));
       };
+      if (view.kind === "repeating") return [];
       if (view.kind === "deadlines") {
         return [...document.toDos, ...document.projects]
           .filter((item) => item.outcome === "open" && !item.trashedAt && !item.logbookAt && item.deadline && matchesTagFilter(item))
@@ -666,6 +975,10 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     effectiveTagIdsForProject,
 
     projectProgress,
+
+    repeatingPreviews,
+
+    nextRepeatingPreviews,
 
     spaceIdForView,
 
@@ -765,6 +1078,174 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
           affected.push({ kind: "checklist" in item ? "toDo" : "project", id: item.id });
         }
         return finishChange(previous, "daily-logbook-updated", affected);
+      }
+
+      if (change.type === "createRepeatingTemplate") {
+        const draft = change.template;
+        const title = draft.title.trim();
+        if (!title || title.length > 500) return fail(["Enter a Repeating Template title between 1 and 500 characters."]);
+        if (!isIsoDate(draft.firstDate)) return fail(["Choose a valid first Occurrence date."]);
+        if (!patternIsValid(draft.pattern)) return fail(["Choose a valid repetition rule."]);
+        if (draft.reminderTime && !isTime(draft.reminderTime)) return fail(["Choose a valid Reminder time."]);
+        if (draft.deadlineOffsetDays !== undefined && draft.deadlineOffsetDays !== null && !Number.isInteger(draft.deadlineOffsetDays)) return fail(["Choose a whole-number Deadline offset."]);
+        const tags = [...new Set(draft.tags ?? [])];
+        if (tags.some((tagId) => !document.tags.some((tag) => tag.id === tagId))) return fail(["A selected Tag no longer exists."]);
+        if (draft.itemKind === "project") {
+          const errors = projectContentsErrors(draft.projectContents ?? { headings: [], toDos: [] });
+          if (errors.length) return fail(errors);
+        }
+        const id = dependencies.createId("repeatingTemplate");
+        const base = {
+          id,
+          title,
+          notes: draft.notes?.trim() ?? "",
+          tags,
+          checklist: (draft.checklist ?? []).map((itemTitle, order): ChecklistItem => ({
+            id: dependencies.createId("checklistItem"), title: itemTitle.trim(), completed: false, order,
+          })),
+          pattern: copyDocument(draft.pattern),
+          mode: draft.mode,
+          state: "active" as const,
+          firstDate: draft.firstDate,
+          nextDate: draft.firstDate,
+          reminderTime: draft.reminderTime ?? null,
+          deadlineOffsetDays: draft.deadlineOffsetDays ?? null,
+          createdAt: dependencies.now(),
+        };
+        if (base.checklist.some((item) => !item.title)) return fail(["Checklist item titles cannot be empty."]);
+        const template: RepeatingTemplate = draft.itemKind === "toDo"
+          ? { ...base, itemKind: "toDo", location: copyDocument(draft.location), projectContents: null }
+          : { ...base, itemKind: "project", location: copyDocument(draft.location), projectContents: copyDocument(draft.projectContents ?? { headings: [], toDos: [] }) };
+        if (template.itemKind === "toDo" ? !locationExists(template.location) : !projectLocationExists(template.location)) return fail(["The selected Repeating Template Location no longer exists."]);
+        document.repeatingTemplates.push(template);
+        return finishChange(previous, "repeating-template-created", [{ kind: "repeatingTemplate", id }], `Delete “${title}”`);
+      }
+
+      if (change.type === "generateRepeatingOccurrences") {
+        if (!isIsoDate(change.throughDate)) return fail(["Choose a valid date for generating Occurrences."]);
+        const requestedSize = change.batchSize ?? REPEATING_BATCH_LIMIT;
+        if (!Number.isInteger(requestedSize) || requestedSize < 1) return fail(["Choose a positive batch size."]);
+        const batchSize = Math.min(requestedSize, REPEATING_BATCH_LIMIT);
+        const affected: AffectedEntity[] = [];
+        let generated = 0;
+        for (const template of document.repeatingTemplates) {
+          if (template.state !== "active") continue;
+          if (!patternIsValid(template.pattern) || !isIsoDate(template.nextDate)) return fail([`Repeating Template “${template.title}” has a damaged rule.`]);
+          for (let step = 0; template.nextDate <= change.throughDate && generated < batchSize && step < REPEATING_BATCH_LIMIT; step += 1) {
+            const scheduledDate = template.nextDate;
+            const collection = template.itemKind === "toDo" ? document.toDos : document.projects;
+            const hasOpenOccurrence = template.mode === "after-completion"
+              && collection.some((item) => item.occurrence?.templateId === template.id && item.outcome === "open" && !item.trashedAt);
+            if (hasOpenOccurrence) break;
+            if (!occurrenceExists(template, scheduledDate)) {
+              if (template.itemKind === "toDo") {
+                const toDo = createToDoOccurrence(template, scheduledDate);
+                document.toDos.push(toDo);
+                affected.push({ kind: "toDo", id: toDo.id });
+              } else {
+                affected.push(...createProjectOccurrence(template, scheduledDate));
+              }
+              generated += 1;
+            }
+            const next = nextRepeatingDate(scheduledDate, template.pattern, template.firstDate ?? scheduledDate);
+            if (next <= scheduledDate) return fail([`Repeating Template “${template.title}” could not advance safely.`]);
+            if (template.mode === "on-schedule") template.nextDate = next;
+            affected.push({ kind: "repeatingTemplate", id: template.id });
+            if (template.mode === "after-completion") break;
+          }
+          if (generated >= batchSize) break;
+        }
+        return finishChange(previous, generated ? "repeating-occurrences-generated" : "repeating-occurrences-current", affected);
+      }
+
+      if (change.type === "updateRepeatingTemplate") {
+        const template = document.repeatingTemplates.find((item) => item.id === change.id);
+        if (!template) return failAs("not-found", ["The Repeating Template no longer exists."]);
+        if (template.state === "stopped") return fail(["A stopped Repeating Template is read-only."]);
+        const changes = change.changes;
+        if (changes.title !== undefined) {
+          const title = changes.title.trim();
+          if (!title || title.length > 500) return fail(["Enter a Repeating Template title between 1 and 500 characters."]);
+          template.title = title;
+        }
+        if (changes.notes !== undefined) template.notes = changes.notes;
+        if (changes.tags !== undefined) {
+          if (changes.tags.some((tagId) => !document.tags.some((tag) => tag.id === tagId))) return fail(["A selected Tag no longer exists."]);
+          template.tags = [...new Set(changes.tags)];
+        }
+        if (changes.pattern !== undefined) {
+          if (!patternIsValid(changes.pattern)) return fail(["Choose a valid repetition rule."]);
+          template.pattern = copyDocument(changes.pattern);
+        }
+        if (changes.mode !== undefined) template.mode = changes.mode;
+        if (changes.nextDate !== undefined) {
+          if (!isIsoDate(changes.nextDate)) return fail(["Choose a valid next Occurrence date."]);
+          template.nextDate = changes.nextDate;
+          template.firstDate = changes.nextDate;
+        }
+        if (changes.reminderTime !== undefined) {
+          if (changes.reminderTime && !isTime(changes.reminderTime)) return fail(["Choose a valid Reminder time."]);
+          template.reminderTime = changes.reminderTime;
+        }
+        if (changes.deadlineOffsetDays !== undefined) {
+          if (changes.deadlineOffsetDays !== null && !Number.isInteger(changes.deadlineOffsetDays)) return fail(["Choose a whole-number Deadline offset."]);
+          template.deadlineOffsetDays = changes.deadlineOffsetDays;
+        }
+        if (changes.checklist !== undefined) {
+          const checklist = changes.checklist.map((title, order): ChecklistItem => ({
+            id: dependencies.createId("checklistItem"), title: title.trim(), completed: false, order,
+          }));
+          if (checklist.some((item) => !item.title)) return fail(["Checklist item titles cannot be empty."]);
+          template.checklist = checklist;
+        }
+        if (changes.location !== undefined) {
+          if (template.itemKind === "toDo") {
+            const location = changes.location as ToDoLocation;
+            if (!locationExists(location)) return fail(["The selected to-do Location no longer exists."]);
+            template.location = copyDocument(location);
+          } else {
+            const location = changes.location as ProjectLocation;
+            if (!projectLocationExists(location)) return fail(["The selected Project Location no longer exists."]);
+            template.location = copyDocument(location);
+          }
+        }
+        if (changes.projectContents !== undefined) {
+          if (template.itemKind !== "project" || !changes.projectContents) return fail(["Only a repeating Project can contain Project defaults."]);
+          const errors = projectContentsErrors(changes.projectContents);
+          if (errors.length) return fail(errors);
+          template.projectContents = copyDocument(changes.projectContents);
+        }
+        return finishChange(previous, "repeating-template-updated", [{ kind: "repeatingTemplate", id: template.id }], `Undo changes to “${template.title}”`);
+      }
+
+      if (change.type === "pauseRepeatingTemplate" || change.type === "resumeRepeatingTemplate" || change.type === "stopRepeatingTemplate") {
+        const template = document.repeatingTemplates.find((item) => item.id === change.id);
+        if (!template) return failAs("not-found", ["The Repeating Template no longer exists."]);
+        if (template.state === "stopped") return fail(["A stopped Repeating Template cannot be changed."]);
+        if (change.type === "pauseRepeatingTemplate") {
+          if (template.state === "paused") return fail(["This Repeating Template is already paused."]);
+          template.state = "paused";
+          return finishChange(previous, "repeating-template-paused", [{ kind: "repeatingTemplate", id: template.id }], `Resume “${template.title}”`);
+        }
+        if (change.type === "resumeRepeatingTemplate") {
+          if (template.state !== "paused") return fail(["Only a paused Repeating Template can resume."]);
+          template.state = "active";
+          return finishChange(previous, "repeating-template-resumed", [{ kind: "repeatingTemplate", id: template.id }], `Pause “${template.title}”`);
+        }
+        template.state = "stopped";
+        return finishChange(previous, "repeating-template-stopped", [{ kind: "repeatingTemplate", id: template.id }]);
+      }
+
+      if (change.type === "deleteRepeatingTemplate") {
+        if (change.confirmation !== DELETE_REPEATING_TEMPLATE_CONFIRMATION) return failAs("confirmation-required", [`Type ${DELETE_REPEATING_TEMPLATE_CONFIRMATION} to permanently delete this Repeating Template.`]);
+        const template = document.repeatingTemplates.find((item) => item.id === change.id);
+        if (!template) return failAs("not-found", ["The Repeating Template no longer exists."]);
+        if (template.state !== "stopped") return fail(["Stop this Repeating Template before permanently deleting it."]);
+        for (const toDo of document.toDos) if (toDo.occurrence?.templateId === template.id) toDo.occurrence = null;
+        for (const project of document.projects) if (project.occurrence?.templateId === template.id) project.occurrence = null;
+        document.repeatingTemplates = document.repeatingTemplates.filter((item) => item.id !== template.id);
+        document.permanentDeletions.push({ entityKind: "repeatingTemplate", entityId: template.id, deletedAt: dependencies.now() });
+        return finishChange(previous, "repeating-template-permanently-deleted", [{ kind: "repeatingTemplate", id: template.id }]);
       }
       if (change.type === "emptyTrash") {
         if (change.confirmation !== EMPTY_TRASH_CONFIRMATION) return failAs("confirmation-required", [`Type ${EMPTY_TRASH_CONFIRMATION} to permanently delete this Space's Trash.`]);
@@ -1012,9 +1493,11 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
           id: dependencies.createId("projectClosure"), projectId: project.id,
           projectOutcome: change.outcome, changedToDoIds: openToDos.map((toDo) => toDo.id), closedAt: now,
         });
+        const repeatingTemplate = change.outcome === "completed" ? advanceAfterCompletionSchedule(project) : null;
         return finishChange(previous, change.outcome === "completed" ? "project-completed" : "project-canceled", [
           { kind: "project", id: project.id },
           ...openToDos.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+          ...(repeatingTemplate ? [{ kind: "repeatingTemplate" as const, id: repeatingTemplate.id }] : []),
         ], `Restore “${project.title}”`);
       }
       if (change.type === "restoreProject") {
@@ -1302,6 +1785,8 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         if (toDo.trashedAt || toDo.outcome !== "open") return fail(["Restore or reopen this to-do before making it repeat."]);
         if (toDo.occurrence) return fail(["This to-do already belongs to a repeating schedule."]);
         if (!isIsoDate(change.nextDate)) return fail(["Choose a valid next repetition date."]);
+        const pattern = change.pattern ?? { frequency: "weekly" as const, interval: 1, weekdays: [] };
+        if (!patternIsValid(pattern)) return fail(["Choose a valid repetition rule."]);
         const templateId = dependencies.createId("repeatingTemplate");
         document.repeatingTemplates.push({
           id: templateId,
@@ -1310,19 +1795,95 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
           notes: toDo.notes,
           location: toDo.location,
           tags: [...toDo.tags],
-          checklist: copyDocument(toDo.checklist),
-          pattern: { frequency: "weekly", interval: 1, weekdays: [] },
-          mode: "on-schedule",
+          checklist: toDo.checklist.map((item, order) => ({ ...copyDocument(item), completed: false, order })),
+          pattern: copyDocument(pattern),
+          mode: change.mode ?? "on-schedule",
           state: "active",
+          firstDate: change.nextDate,
           nextDate: change.nextDate,
           reminderTime: toDo.reminder?.at.slice(11, 16) ?? null,
-          deadlineOffsetDays: null,
+          deadlineOffsetDays: toDo.deadline ? daysBetween(change.nextDate, toDo.deadline) : null,
           projectContents: null,
           createdAt: dependencies.now(),
         });
         toDo.occurrence = { templateId, scheduledDate: change.nextDate };
         assignToDoSchedule(toDo, { kind: "scheduled", date: change.nextDate, evening: false });
         return finishChange(previous, "to-do-repetition-created", [{ kind: "toDo", id: toDo.id }, { kind: "repeatingTemplate", id: templateId }]);
+      }
+
+      if (change.type === "makeProjectRepeating") {
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        if (project.trashedAt || project.outcome !== "open") return fail(["Restore or reopen this Project before making it repeat."]);
+        if (project.occurrence) return fail(["This Project already belongs to a repeating schedule."]);
+        if (!isIsoDate(change.firstDate)) return fail(["Choose a valid first Occurrence date."]);
+        if (!patternIsValid(change.pattern)) return fail(["Choose a valid repetition rule."]);
+        const templateId = dependencies.createId("repeatingTemplate");
+        document.repeatingTemplates.push({
+          id: templateId,
+          itemKind: "project",
+          title: project.title,
+          notes: project.notes,
+          location: copyDocument(project.location),
+          tags: [...project.tags],
+          checklist: [],
+          pattern: copyDocument(change.pattern),
+          mode: change.mode,
+          state: "active",
+          firstDate: change.firstDate,
+          nextDate: change.firstDate,
+          reminderTime: null,
+          deadlineOffsetDays: project.deadline ? daysBetween(change.firstDate, project.deadline) : null,
+          projectContents: projectContentsFromProject(project.id, change.firstDate),
+          createdAt: dependencies.now(),
+        });
+        project.occurrence = { templateId, scheduledDate: change.firstDate };
+        project.schedule = { kind: "scheduled", date: change.firstDate, evening: false };
+        return finishChange(previous, "project-repetition-created", [
+          { kind: "project", id: project.id },
+          { kind: "repeatingTemplate", id: templateId },
+        ]);
+      }
+
+      if (change.type === "skipOccurrence") {
+        if (change.itemKind === "project") {
+          const project = document.projects.find((item) => item.id === change.id);
+          if (!project) return failAs("not-found", ["The Project Occurrence no longer exists."]);
+          if (!project.occurrence) return fail(["Only a Project Occurrence can be skipped."]);
+          if (project.trashedAt || project.outcome !== "open") return fail(["Only an open Project Occurrence outside Trash can be skipped."]);
+          const now = dependencies.now();
+          const openToDos = projectToDos(project.id).filter((toDo) => toDo.outcome === "open" && !toDo.trashedAt);
+          for (const toDo of openToDos) {
+            toDo.outcome = "canceled";
+            toDo.completedAt = now;
+            toDo.logbookAt = now;
+          }
+          project.outcome = "canceled";
+          project.completedAt = now;
+          project.logbookAt = now;
+          document.projectClosures.push({
+            id: dependencies.createId("projectClosure"), projectId: project.id,
+            projectOutcome: "canceled", changedToDoIds: openToDos.map((toDo) => toDo.id), closedAt: now,
+          });
+          const template = advanceAfterCompletionSchedule(project);
+          return finishChange(previous, "project-occurrence-skipped", [
+            { kind: "project", id: project.id },
+            ...openToDos.map((toDo) => ({ kind: "toDo" as const, id: toDo.id })),
+            ...(template ? [{ kind: "repeatingTemplate" as const, id: template.id }] : []),
+          ], `Undo Skip of “${project.title}”`);
+        }
+        const occurrence = findToDo(change.id);
+        if (!occurrence) return failAs("not-found", ["The Occurrence no longer exists."]);
+        if (!occurrence.occurrence) return fail(["Only an Occurrence can be skipped."]);
+        if (occurrence.trashedAt || occurrence.outcome !== "open") return fail(["Only an open Occurrence outside Trash can be skipped."]);
+        occurrence.outcome = "canceled";
+        occurrence.completedAt = dependencies.now();
+        occurrence.logbookAt = dependencies.now();
+        const template = advanceAfterCompletionSchedule(occurrence);
+        return finishChange(previous, "occurrence-skipped", [
+          { kind: "toDo", id: occurrence.id },
+          ...(template ? [{ kind: "repeatingTemplate" as const, id: template.id }] : []),
+        ], `Undo Skip of “${occurrence.title}”`);
       }
 
       const id = "id" in change ? change.id : "toDoId" in change ? change.toDoId : null;
@@ -1411,8 +1972,12 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         toDo.outcome = change.type === "completeToDo" ? "completed" : "canceled";
         toDo.completedAt = dependencies.now();
         if (document.settings.logCompletedItems === "immediately") toDo.logbookAt = dependencies.now();
+        const template = change.type === "completeToDo" ? advanceAfterCompletionSchedule(toDo) : null;
         const outcome = change.type === "completeToDo" ? "to-do-completed" : "to-do-canceled";
-        return finishChange(previous, outcome, [{ kind: "toDo", id: toDo.id }], `Reopen “${toDo.title}”`);
+        return finishChange(previous, outcome, [
+          { kind: "toDo", id: toDo.id },
+          ...(template ? [{ kind: "repeatingTemplate" as const, id: template.id }] : []),
+        ], `Reopen “${toDo.title}”`);
       }
       if (change.type === "reopenToDo") {
         if (toDo.outcome === "open") return fail(["This to-do is already open."]);
