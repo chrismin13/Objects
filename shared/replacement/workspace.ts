@@ -75,13 +75,16 @@ export type WorkspaceChange =
   | { type: "addChecklistItem"; toDoId: EntityId; title: string }
   | { type: "updateChecklistItem"; toDoId: EntityId; itemId: EntityId; changes: Partial<Pick<ChecklistItem, "title" | "completed">> }
   | { type: "removeChecklistItem"; toDoId: EntityId; itemId: EntityId }
+  | { type: "reorderToDos"; movedIds: EntityId[]; orderedIds: EntityId[]; destination?: { location?: ToDoLocation; schedule?: Schedule } }
+  | { type: "makeToDoRepeating"; id: EntityId; nextDate: string }
   | { type: "completeToDo"; id: EntityId }
   | { type: "cancelToDo"; id: EntityId }
   | { type: "reopenToDo"; id: EntityId }
   | { type: "duplicateToDo"; id: EntityId }
   | { type: "logToDo"; id: EntityId }
-  | { type: "runDailyLogbook" }
+  | { type: "runDailyLogbook"; spaceId?: EntityId }
   | { type: "setLogbookPolicy"; policy: LogbookPolicy }
+  | { type: "setTheme"; theme: WorkspaceDocument["settings"]["theme"] }
   | { type: "trashToDo"; id: EntityId }
   | { type: "restoreToDo"; id: EntityId }
   | { type: "permanentlyDeleteToDo"; id: EntityId; confirmation: string }
@@ -91,6 +94,7 @@ export type WorkspaceChange =
 export type Workspace = {
   read(): WorkspaceDocument;
   change(change: WorkspaceChange): WorkspaceChangeResult;
+  changeMany(changes: WorkspaceChange[]): WorkspaceChangeResult;
   undo(token: string): WorkspaceChangeResult;
   view(view: WorkspaceView): Array<ToDo | Project>;
   spaceIdForView(view: WorkspaceView): EntityId | null;
@@ -323,6 +327,18 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
 
   function findToDo(id: EntityId): ToDo | null {
     return document.toDos.find((item) => item.id === id) ?? null;
+  }
+
+  function assignToDoSchedule(toDo: ToDo, schedule: Schedule): void {
+    if (
+      toDo.schedule.kind === "scheduled"
+      && schedule.kind === "scheduled"
+      && toDo.reminder?.at.slice(0, 10) === toDo.schedule.date
+    ) {
+      toDo.reminder.at = `${schedule.date}${toDo.reminder.at.slice(10)}`;
+      toDo.reminder.sentAt = null;
+    }
+    toDo.schedule = schedule;
   }
 
   function duplicateToDoRecord(toDo: ToDo, location: ToDoLocation, order: number, title = toDo.title): ToDo {
@@ -728,10 +744,23 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         document.settings.logCompletedItems = change.policy;
         return finishChange(previous, "logbook-policy-updated", []);
       }
+      if (change.type === "setTheme") {
+        document.settings.theme = change.theme;
+        return finishChange(previous, "theme-updated", []);
+      }
       if (change.type === "runDailyLogbook") {
         const affected: AffectedEntity[] = [];
         for (const item of [...document.toDos, ...document.projects]) {
           if (item.outcome === "open" || item.logbookAt || item.trashedAt) continue;
+          let itemSpaceId: EntityId | undefined;
+          if ("checklist" in item) itemSpaceId = locationOfToDo(item.id)?.spaceId;
+          else {
+            const projectLocation = item.location;
+            itemSpaceId = projectLocation.kind === "space"
+              ? projectLocation.spaceId
+              : document.areas.find((area) => area.id === projectLocation.areaId)?.spaceId;
+          }
+          if (change.spaceId && itemSpaceId !== change.spaceId) continue;
           item.logbookAt = dependencies.now();
           affected.push({ kind: "checklist" in item ? "toDo" : "project", id: item.id });
         }
@@ -1242,6 +1271,60 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         return finishChange(previous, "to-do-created", [{ kind: "toDo", id: toDo.id }], `Delete “${toDo.title}”`);
       }
 
+      if (change.type === "reorderToDos") {
+        const movedIds = [...new Set(change.movedIds)];
+        const orderedIds = [...new Set(change.orderedIds)];
+        if (!movedIds.length || orderedIds.length !== change.orderedIds.length) return fail(["Choose valid to-dos to move and order."]);
+        if (movedIds.some((id) => !document.toDos.some((item) => item.id === id)) || orderedIds.some((id) => !document.toDos.some((item) => item.id === id))) return failAs("not-found", ["A to-do being moved no longer exists."]);
+        if (change.destination?.location && !locationExists(change.destination.location)) return fail(["The selected to-do Location no longer exists."]);
+        if (change.destination?.schedule?.kind === "scheduled" && !isIsoDate(change.destination.schedule.date)) return fail(["Choose a valid Schedule date."]);
+        for (const toDo of document.toDos) {
+          if (!movedIds.includes(toDo.id)) continue;
+          if (change.destination?.location) toDo.location = change.destination.location;
+          if (change.destination?.schedule) assignToDoSchedule(toDo, change.destination.schedule);
+        }
+        const orderedSet = new Set(orderedIds);
+        const ordered = orderedIds.map((id) => document.toDos.find((item) => item.id === id)!);
+        let orderedIndex = 0;
+        document.toDos = document.toDos.slice().sort((left, right) => left.order - right.order).map((item) => {
+          if (!orderedSet.has(item.id)) return item;
+          const replacement = ordered[orderedIndex];
+          orderedIndex += 1;
+          return replacement;
+        });
+        document.toDos.forEach((item, order) => { item.order = order; });
+        return finishChange(previous, "to-dos-reordered", movedIds.map((id) => ({ kind: "toDo", id })), "Undo moving selected to-dos");
+      }
+
+      if (change.type === "makeToDoRepeating") {
+        const toDo = findToDo(change.id);
+        if (!toDo) return failAs("not-found", ["The to-do no longer exists."]);
+        if (toDo.trashedAt || toDo.outcome !== "open") return fail(["Restore or reopen this to-do before making it repeat."]);
+        if (toDo.occurrence) return fail(["This to-do already belongs to a repeating schedule."]);
+        if (!isIsoDate(change.nextDate)) return fail(["Choose a valid next repetition date."]);
+        const templateId = dependencies.createId("repeatingTemplate");
+        document.repeatingTemplates.push({
+          id: templateId,
+          itemKind: "toDo",
+          title: toDo.title,
+          notes: toDo.notes,
+          location: toDo.location,
+          tags: [...toDo.tags],
+          checklist: copyDocument(toDo.checklist),
+          pattern: { frequency: "weekly", interval: 1, weekdays: [] },
+          mode: "on-schedule",
+          state: "active",
+          nextDate: change.nextDate,
+          reminderTime: toDo.reminder?.at.slice(11, 16) ?? null,
+          deadlineOffsetDays: null,
+          projectContents: null,
+          createdAt: dependencies.now(),
+        });
+        toDo.occurrence = { templateId, scheduledDate: change.nextDate };
+        assignToDoSchedule(toDo, { kind: "scheduled", date: change.nextDate, evening: false });
+        return finishChange(previous, "to-do-repetition-created", [{ kind: "toDo", id: toDo.id }, { kind: "repeatingTemplate", id: templateId }]);
+      }
+
       const id = "id" in change ? change.id : "toDoId" in change ? change.toDoId : null;
       const toDo = id ? findToDo(id) : null;
       if (!toDo) return failAs("not-found", ["The to-do no longer exists."]);
@@ -1263,11 +1346,7 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         }
         if (changes.schedule !== undefined) {
           if (changes.schedule.kind === "scheduled" && !isIsoDate(changes.schedule.date)) return fail(["Choose a valid Schedule date."]);
-          if (toDo.schedule.kind === "scheduled" && changes.schedule.kind === "scheduled" && toDo.reminder?.at.slice(0, 10) === toDo.schedule.date) {
-            toDo.reminder.at = `${changes.schedule.date}${toDo.reminder.at.slice(10)}`;
-            toDo.reminder.sentAt = null;
-          }
-          toDo.schedule = changes.schedule;
+          assignToDoSchedule(toDo, changes.schedule);
         }
         if (changes.reminder !== undefined) {
           if (changes.reminder && (!isIsoDateTime(changes.reminder.at) || (changes.reminder.sentAt && !isIsoDateTime(changes.reminder.sentAt)))) return fail(["Choose a valid Reminder."]);
@@ -1372,6 +1451,26 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       }
 
       return fail(["This to-do change is not supported."]);
+    },
+
+    changeMany(changes) {
+      if (!changes.length) return reject(["Choose at least one Workspace change."]);
+      const previous = copyDocument(document);
+      const affected: AffectedEntity[] = [];
+      const temporaryUndoTokens: string[] = [];
+      for (const change of changes) {
+        const result = this.change(change);
+        if (result.status === "rejected") {
+          document = previous;
+          for (const token of temporaryUndoTokens) undoEntries.delete(token);
+          return result;
+        }
+        affected.push(...result.affected);
+        if (result.undo) temporaryUndoTokens.push(result.undo.token);
+      }
+      for (const token of temporaryUndoTokens) undoEntries.delete(token);
+      const uniqueAffected = [...new Map(affected.map((item) => [`${item.kind}:${item.id}`, item])).values()];
+      return finishChange(previous, "to-dos-updated", uniqueAffected, "Undo changes to selected to-dos");
     },
 
     undo(token) {

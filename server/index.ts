@@ -166,7 +166,7 @@ function parseRecord(serialized: string): JsonRecord {
 }
 
 function replacementOwner(ctx: any): string {
-  if (!ctx.auth.isAuthenticated || !ctx.auth.userId) throw new Error("Authentication required");
+  if (!ctx.auth.userId) throw new Error("Authentication required");
   return ctx.auth.userId;
 }
 

@@ -75,6 +75,18 @@ test("unfinished quick entry text is saved, restored, and cleared explicitly", (
   assert.equal(workspace.read().settings.quickDraft, null);
 });
 
+test("a to-do can enter a weekly repeating schedule through Workspace", () => {
+  const workspace = setup();
+  const id = changedId(workspace.change({ type: "createToDo", title: "Plan the week" }));
+
+  const result = workspace.change({ type: "makeToDoRepeating", id, nextDate: "2026-07-26" });
+
+  assert.equal(result.status, "changed");
+  assert.equal(workspace.read().repeatingTemplates[0]?.title, "Plan the week");
+  assert.deepEqual(toDo(workspace, id).schedule, { kind: "scheduled", date: "2026-07-26", evening: false });
+  assert.equal(toDo(workspace, id).occurrence?.templateId, workspace.read().repeatingTemplates[0]?.id);
+});
+
 test("the inspector edit path updates fields and manages independent checklist items", () => {
   const workspace = setup();
   const id = changedId(workspace.change({ type: "createToDo", title: "Plan trip" }));
@@ -151,6 +163,15 @@ test("immediate, daily, and manual Logbook policies remain distinct", () => {
   workspace.change({ type: "runDailyLogbook" });
   assert.equal(toDo(workspace, dailyId).logbookAt, NOW);
   assert.deepEqual(workspace.view({ kind: "today", date: "2026-07-19" }), []);
+
+  const workSpaceId = changedId(workspace.change({ type: "createSpace", title: "Work", color: "#5577dd" }));
+  const workId = changedId(workspace.change({ type: "createToDo", title: "Work only", location: { kind: "unfiled", spaceId: workSpaceId } }));
+  const personalId = changedId(workspace.change({ type: "createToDo", title: "Personal only" }));
+  workspace.change({ type: "cancelToDo", id: workId });
+  workspace.change({ type: "cancelToDo", id: personalId });
+  workspace.change({ type: "runDailyLogbook", spaceId: "space-personal" });
+  assert.equal(toDo(workspace, personalId).logbookAt, NOW);
+  assert.equal(toDo(workspace, workId).logbookAt, null);
 
   const manualId = changedId(workspace.change({ type: "createToDo", title: "Manual" }));
   workspace.change({ type: "setLogbookPolicy", policy: "manually" });
