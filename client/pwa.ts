@@ -163,13 +163,13 @@ export async function requestNotificationAccess(): Promise<NotificationPermissio
   return permission;
 }
 
-export async function showTaskReminder(task: { id: string; title: string; notes?: string }): Promise<boolean> {
+export async function showTaskReminder(task: { id: string; title: string; notes?: string }, options: { replacement?: boolean } = {}): Promise<boolean> {
   if (!("Notification" in window) || Notification.permission !== "granted") return false;
-  const options: NotificationOptions = {
+  const notificationOptions: NotificationOptions = {
     body: task.notes || "Scheduled in Objects",
     icon: "/favicon.svg",
     tag: `objects-task-${task.id}`,
-    data: { url: `/?task=${encodeURIComponent(task.id)}` },
+    data: { url: options.replacement ? `/?replacement=1&todo=${encodeURIComponent(task.id)}` : `/?task=${encodeURIComponent(task.id)}` },
     actions: [
       { action: "snooze-10", title: "Snooze 10 min" },
       { action: "snooze-30", title: "Snooze 30 min" },
@@ -180,9 +180,9 @@ export async function showTaskReminder(task: { id: string; title: string; notes?
   try {
     const ready = registration ?? await registrationPromise;
     if (ready?.active) {
-      await ready.showNotification(task.title, options);
+      await ready.showNotification(task.title, notificationOptions);
     } else {
-      new Notification(task.title, options);
+      new Notification(task.title, notificationOptions);
     }
     return true;
   } catch {

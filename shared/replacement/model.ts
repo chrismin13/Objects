@@ -242,6 +242,7 @@ export type WorkspaceDocument = {
 
 export type WorkspaceEntityKind =
   | "toDo"
+  | "checklistItem"
   | "project"
   | "area"
   | "heading"
