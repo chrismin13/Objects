@@ -1,4 +1,9 @@
-import { sortableCompressed } from "./packed";
+import { runtimeCompressed } from "./packed";
+
+export type ObjectsRuntime = {
+  mountObjects(serializedState: string, options: Record<string, unknown>): () => void;
+  syncObjectsState(serializedState: string): void;
+};
 
 function decodeBase64(value: string): Uint8Array {
   const binary = atob(value);
@@ -7,17 +12,16 @@ function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
-async function loadSortable() {
-  const compressed = decodeBase64(sortableCompressed);
+async function loadRuntime(): Promise<ObjectsRuntime> {
+  const compressed = decodeBase64(runtimeCompressed);
   const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip"));
   const source = await new Response(stream).text();
   const moduleUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
   try {
-    const module = await import(moduleUrl);
-    return module.default;
+    return await import(moduleUrl) as ObjectsRuntime;
   } finally {
     URL.revokeObjectURL(moduleUrl);
   }
 }
 
-export const sortableReady = loadSortable();
+export const objectsRuntimeReady = loadRuntime();

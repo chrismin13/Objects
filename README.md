@@ -26,8 +26,8 @@ Live app: [objects.lakebed.app](https://objects.lakebed.app)
 - Responsive desktop/mobile layouts and light, dark, and system themes
 - Installable PWA with standalone display and an offline application shell
 - JSON backup and guarded import
-- Stable URL capture and deep links for personal automation
-- An authenticated, retry-safe `POST /api/tasks` Lakebed endpoint
+- URL automation for add/show/search flows through parameters such as `title`, `notes`, `when`, `deadline`, `tags`, `checklist`, `list`, `status`, `view`, and `search`
+- An authenticated `POST /api/tasks` Lakebed endpoint
 
 ## Authentication and privacy
 
@@ -93,42 +93,11 @@ Open the hosted app and use **Settings → App**, the browser’s **Install app*
 
 Notification permission is requested only from the Settings button. Reminders use persistent service-worker notifications so they work on mobile browsers as well as desktop browsers, and tapping a notification opens its task. The reminder timer itself runs while Objects is open. Reliable delivery after the app is fully closed would require a hosted Web Push scheduler, which Lakebed capsules do not currently provide; browsers do not offer a portable, reliable local background timer.
 
-## Automation links and HTTP capture
-
-Open a capture link while signed in:
-
-```text
-/?capture=1&title=Call%20Maya&notes=Ask%20about%20the%20plan&when=tomorrow&tags=People,Focused
-```
-
-Capture links accept `title`, shared `text`, `url`, `notes`, `space`, `area`, `project`, `heading`, `tags`, `checklist`, `when`, `scheduledFor`, `evening`, `reminder`, and `deadline`. Location values are stable item IDs. `when` accepts `inbox`, `anytime`, `someday`, `today`, `tomorrow`, `this evening`, or a date in `YYYY-MM-DD` form. Objects adds a `submission` ID to browser capture links so a reload or temporary save failure does not create the same to-do twice.
-
-Direct links use these stable shapes:
-
-```text
-/?open=view&view=today
-/?open=space&id=SPACE_ID
-/?open=area&id=AREA_ID
-/?open=project&id=PROJECT_ID
-/?open=heading&id=HEADING_ID
-/?open=tag&id=TAG_ID
-/?open=toDo&id=TODO_ID
-/?open=repeatingTemplate&id=TEMPLATE_ID
-```
-
-Authenticated tools can send the same capture fields as JSON to `POST /api/tasks`. Send either an `Idempotency-Key` header or a `submissionId` JSON field. For relative dates such as `today` or `tomorrow`, also send an IANA `timeZone` field such as `Europe/Athens`, or the same value in an `X-Time-Zone` header. UTC is used when no time zone is supplied. Retry with the same idempotency value after a timeout or `409` response. The endpoint returns the existing to-do instead of creating a duplicate.
-
 ## Data model
 
-Objects stores each account's portable Workspace in private, owner-scoped Lakebed rows. Client edits are sent as compact field-level changes. Lakebed applies each change as one transaction, records its mutation identity, and returns the merged Workspace. Retrying an old or uncertain mutation identity returns the current saved Workspace instead of running that mutation again.
+Objects stores Spaces, areas, projects, headings, calendar events, tasks, and checklist items as separate owner-scoped rows. Client edits are sent as field-level patches, Lakebed mutations apply them transactionally, and live query results are merged with any unsaved local draft instead of replacing the active editor. Permanent deletions create tombstones so a stale client cannot recreate an item.
 
-The app keeps an account-scoped copy and pending-change queue in device storage. A local action appears immediately and remains available after a reload or temporary loss of the session. When the connection returns, Objects sends the pending changes in order. It does not cache private Lakebed API or authentication responses in the service worker.
-
-Multi-device conflicts follow one fixed rule. Changes to different fields are combined. If two devices changed the same field from the same older value, the later submitted local change is kept and Objects shows conflict feedback. If one device permanently deleted an item, the durable deletion marker always wins over a stale edit. Repeating Occurrences and capture receipts are also checked by their schedule or submission identity so concurrent retries create one result.
-
-Until an account has a matching migration marker, Objects rebuilds its retained legacy `workspaceChunks` or normalized rows and passes that data through the same tested importer as a manual backup. It safely merges replacement-only work, then saves the complete result through normal sync. The retained rows remain a read-only migration backup; the replacement renderer and mutation path never use them directly. Data can still be exported as one portable JSON backup from Settings at any time.
-
-The final story-by-story evidence and cutover record is in [docs/replacement-parity-audit.md](docs/replacement-parity-audit.md).
+Deployments created before the normalized schema are migrated automatically from the legacy `workspaceChunks` document on first load. The legacy rows are retained as a migration backup but are no longer used after the per-user `workspaceMeta` row exists. Data can still be exported as one portable JSON backup from Settings at any time.
 
 ## Notes
 
