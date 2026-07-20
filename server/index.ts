@@ -5,7 +5,13 @@ import {
   type WorkspaceSyncSnapshot,
 } from "../shared/replacement/sync";
 import { dateInTimeZone } from "../shared/replacement/dates";
-import { captureIntoSnapshot } from "../shared/replacement/http-capture";
+import { captureIntoSnapshot, selectCaptureBase } from "../shared/replacement/http-capture";
+import { parsePortableBackup } from "../shared/replacement/importer";
+import {
+  assembleLegacyWorkspace,
+  mergeMigratedLegacySnapshot,
+  type LegacyMigrationIdentity,
+} from "../shared/replacement/legacy-storage";
 import { createEmptyWorkspace } from "../shared/replacement/workspace";
 
 const MAX_REPLACEMENT_WORKSPACE_SIZE = 2_000_000;
@@ -209,6 +215,108 @@ function newServerWorkspace(now: string) {
   return document;
 }
 
+async function collectLegacyEntities(tableRef: any, ownerId: string) {
+  return tableRef
+    .withIndex("by_owner_entity", (range: any) => range.eq("ownerId", ownerId))
+    .order("asc")
+    .collect();
+}
+
+async function retainedLegacyWorkspace(ctx: any, ownerId: string): Promise<string | null> {
+  const meta = await ctx.db.workspaceMeta
+    .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
+    .first();
+  if (meta) {
+    const spaces = await collectLegacyEntities(ctx.db.spaces, ownerId);
+    const areas = await collectLegacyEntities(ctx.db.areas, ownerId);
+    const projects = await collectLegacyEntities(ctx.db.projects, ownerId);
+    const headings = await collectLegacyEntities(ctx.db.headings, ownerId);
+    const calendarEvents = await collectLegacyEntities(ctx.db.calendarEvents, ownerId);
+    const tasks = await collectLegacyEntities(ctx.db.tasks, ownerId);
+    const checklistItems = await ctx.db.checklistItems
+      .withIndex("by_owner_entity", (range: any) => range.eq("ownerId", ownerId))
+      .order("asc")
+      .collect();
+    return assembleLegacyWorkspace({
+      version: meta.version,
+      updatedAt: meta.stateUpdatedAt,
+      mutationId: meta.lastMutationId,
+      settingsData: meta.settingsData,
+      spaces,
+      areas,
+      projects,
+      headings,
+      calendarEvents,
+      tasks,
+      checklistItems,
+    });
+  }
+
+  const chunks = await ctx.db.workspaceChunks
+    .withIndex("by_owner_part", (range: any) => range.eq("ownerId", ownerId))
+    .order("asc")
+    .collect();
+  if (!chunks.length) return null;
+  const latestByPart = new Map<string, any>();
+  for (const chunk of chunks) {
+    const current = latestByPart.get(chunk.part);
+    if (!current || String(chunk.updatedAt ?? "") > String(current.updatedAt ?? "")) latestByPart.set(chunk.part, chunk);
+  }
+  return [...latestByPart.values()]
+    .sort((left, right) => left.part.localeCompare(right.part))
+    .map((chunk) => chunk.data)
+    .join("");
+}
+
+function migratedLegacySnapshot(serialized: string): {
+  snapshot: WorkspaceSyncSnapshot;
+  report: unknown;
+  source: LegacyMigrationIdentity;
+} {
+  let updatedAt = "1970-01-01T00:00:00.000Z";
+  let mutationId = "legacy-retained-workspace";
+  try {
+    const source = JSON.parse(serialized) as { updatedAt?: unknown; syncMutationId?: unknown };
+    if (typeof source.updatedAt === "string" && !Number.isNaN(Date.parse(source.updatedAt))) updatedAt = source.updatedAt;
+    if (typeof source.syncMutationId === "string" && source.syncMutationId) mutationId = source.syncMutationId;
+  } catch {
+    // The importer below returns the useful validation error.
+  }
+  let sequence = 0;
+  const parsed = parsePortableBackup(serialized, {
+    now: () => updatedAt,
+    createId: (kind) => `migrated-${kind}-${String(++sequence).padStart(6, "0")}`,
+  });
+  if (!parsed.ok) {
+    const details = parsed.report.messages.map((message) => message.message).join(" ");
+    throw new Error(`The retained Workspace could not be migrated. ${details}`.trim());
+  }
+  return {
+    snapshot: { revision: 0, document: parsed.document },
+    report: parsed.report,
+    source: { updatedAt, mutationId },
+  };
+}
+
+async function preparedReplacementSnapshot(ctx: any, ownerId: string): Promise<{
+  snapshot: WorkspaceSyncSnapshot | null;
+  migrationReport: unknown;
+  migrationRequired: boolean;
+}> {
+  const saved = await replacementSnapshot(ctx, ownerId);
+  const legacy = await retainedLegacyWorkspace(ctx, ownerId);
+  if (!legacy) return { snapshot: saved, migrationReport: null, migrationRequired: false };
+  const migrated = migratedLegacySnapshot(legacy);
+  const existingMarker = saved?.document.sync.legacyMigration;
+  const migrationRequired = existingMarker?.updatedAt !== migrated.source.updatedAt
+    || existingMarker.mutationId !== migrated.source.mutationId;
+  return {
+    snapshot: mergeMigratedLegacySnapshot(saved, migrated.snapshot, migrated.source),
+    migrationReport: migrationRequired ? migrated.report : null,
+    migrationRequired,
+  };
+}
+
 export default capsule({
   name: "objects",
   favicon: "favicon.svg",
@@ -270,8 +378,13 @@ export default capsule({
   queries: {
     replacementWorkspace: query(async (ctx) => {
       const ownerId = replacementOwner(ctx);
-      const snapshot = await replacementSnapshot(ctx, ownerId);
-      return JSON.stringify({ ownerIdentity: ownerId, snapshot });
+      const prepared = await preparedReplacementSnapshot(ctx, ownerId);
+      return JSON.stringify({
+        ownerIdentity: ownerId,
+        snapshot: prepared.snapshot,
+        migrationReport: prepared.migrationReport,
+        migrationRequired: prepared.migrationRequired,
+      });
     })
   },
 
@@ -279,7 +392,7 @@ export default capsule({
     saveReplacementWorkspace: mutation(async (ctx, serialized: string) => {
       const ownerId = replacementOwner(ctx);
       const command = parseReplacementCommand(serialized);
-      const current = await replacementSnapshot(ctx, ownerId);
+      const current = (await preparedReplacementSnapshot(ctx, ownerId)).snapshot;
       const known = await ctx.db.replacementMutationReceipts
         .withIndex("by_owner_mutation", (range: any) => range.eq("ownerId", ownerId).eq("mutationId", command.mutationId))
         .first();
@@ -329,10 +442,10 @@ export default capsule({
         } catch {
           return json({ ok: false, errors: ["timeZone must be an IANA time-zone name such as Europe/Athens."] }, { status: 400 });
         }
-        const current = await replacementSnapshot(ctx, ownerId);
-        const initial = current?.document ?? newServerWorkspace(now);
+        const current = (await preparedReplacementSnapshot(ctx, ownerId)).snapshot;
+        const base = selectCaptureBase(current, null, () => newServerWorkspace(now));
         let sequence = 0;
-        const captured = captureIntoSnapshot(current, initial, input, {
+        const captured = captureIntoSnapshot(base.current, base.initial, input, {
           now,
           today,
           createId: (kind) => `${kind}-${Date.now().toString(36)}-${++sequence}-${Math.random().toString(36).slice(2, 8)}`,

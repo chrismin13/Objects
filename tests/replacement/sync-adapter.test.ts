@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createLakebedWorkspaceAdapter, scopeWorkspaceAdapter } from "../../client/replacement/lakebed-adapter-core.ts";
+import {
+  createLakebedWorkspaceAdapter,
+  migrationCommandForQuery,
+  parseLakebedWorkspaceQuery,
+  scopeWorkspaceAdapter,
+} from "../../client/replacement/lakebed-adapter-core.ts";
 import { createEmptyWorkspace } from "../../shared/replacement/workspace.ts";
 import {
   createInMemorySyncStore,
@@ -87,6 +92,34 @@ test("the serialized Lakebed adapter follows the shared sync contract", async ()
   });
 
   await runAdapterContract(adapter);
+});
+
+test("the Lakebed query stays loading while its serialized result is empty", () => {
+  const loaded = { ownerIdentity: "guest:alice", snapshot: null };
+  assert.equal(parseLakebedWorkspaceQuery(undefined), undefined);
+  assert.equal(parseLakebedWorkspaceQuery(null), undefined);
+  assert.equal(parseLakebedWorkspaceQuery(""), undefined);
+  assert.equal(parseLakebedWorkspaceQuery([]), undefined);
+  assert.deepEqual(parseLakebedWorkspaceQuery(loaded), loaded);
+  assert.deepEqual(
+    parseLakebedWorkspaceQuery('{"ownerIdentity":"guest:alice","snapshot":null}'),
+    { ownerIdentity: "guest:alice", snapshot: null },
+  );
+});
+
+test("a prepared legacy merge becomes one normal sync command", () => {
+  const document = createEmptyWorkspace("2026-07-20T09:00:00.000Z");
+  document.sync.legacyMigration = { updatedAt: "2026-07-19T11:55:16.000Z", mutationId: "legacy-final-save" };
+  const command = migrationCommandForQuery({
+    ownerIdentity: "google:owner",
+    snapshot: { revision: 8, document },
+    migrationRequired: true,
+  });
+
+  assert.equal(command?.expectedRevision, 8);
+  assert.equal(command?.mutationId, "legacy-migration-2026-07-19T11:55:16.000Z-legacy-final-save");
+  assert.equal(command?.document, document);
+  assert.equal(migrationCommandForQuery({ ownerIdentity: "google:owner", snapshot: { revision: 8, document } }), null);
 });
 
 test("the Lakebed adapter cannot cross an unconfirmed account boundary", async () => {

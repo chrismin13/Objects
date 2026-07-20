@@ -8,6 +8,17 @@ export type HttpCaptureResult =
   | { status: "invalid"; errors: string[] }
   | { status: "conflict" };
 
+export function selectCaptureBase(
+  current: WorkspaceSyncSnapshot | null,
+  migrated: WorkspaceSyncSnapshot | null,
+  createFresh: () => WorkspaceDocument,
+): { current: WorkspaceSyncSnapshot | null; initial: WorkspaceDocument } {
+  return {
+    current,
+    initial: current?.document ?? migrated?.document ?? createFresh(),
+  };
+}
+
 export function captureIntoSnapshot(
   current: WorkspaceSyncSnapshot | null,
   initialDocument: WorkspaceDocument,

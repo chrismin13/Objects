@@ -78,6 +78,33 @@ function correction(report: ImportReport, message: string) {
   report.messages.push({ kind: "corrected", message });
 }
 
+function occurrencePreference(item: ToDo): number {
+  const outcome = item.outcome === "completed" ? 40 : item.outcome === "canceled" ? 30 : 10;
+  return outcome + (item.logbookAt ? 4 : 0) - (item.trashedAt ? 8 : 0);
+}
+
+function deduplicateToDoOccurrences(toDos: ToDo[], report: ImportReport): void {
+  const winnerByDate = new Map<string, ToDo>();
+  const removed = new Set<ToDo>();
+  for (const toDo of toDos) {
+    if (!toDo.occurrence) continue;
+    const key = `${toDo.occurrence.templateId}:${toDo.occurrence.scheduledDate}`;
+    const existing = winnerByDate.get(key);
+    if (!existing) {
+      winnerByDate.set(key, toDo);
+      continue;
+    }
+    if (occurrencePreference(toDo) >= occurrencePreference(existing)) {
+      removed.add(existing);
+      winnerByDate.set(key, toDo);
+    } else {
+      removed.add(toDo);
+    }
+    correction(report, `Removed a duplicate Repeating occurrence for ${toDo.occurrence.scheduledDate}.`);
+  }
+  if (removed.size) toDos.splice(0, toDos.length, ...toDos.filter((toDo) => !removed.has(toDo)));
+}
+
 function skip(report: ImportReport, message: string) {
   report.skipped += 1;
   report.messages.push({ kind: "skipped", message });
@@ -474,6 +501,8 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
       correction(report, `To-do “${toDo.title}”: removed a missing Repeating Template connection.`);
     }
   }
+
+  deduplicateToDoOccurrences(toDos, report);
 
   for (const project of projects) {
     if (!project.occurrence) continue;

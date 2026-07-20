@@ -949,6 +949,15 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
       if (!isIsoDateTime(marker.deletedAt)) errors.push(`Permanent-deletion marker for “${marker.entityId}” has an invalid date.`);
     }
     if (!isIsoDateTime(document.sync.updatedAt)) errors.push("Workspace sync metadata has an invalid update date.");
+    if (
+      document.sync.legacyMigration
+      && (
+        !isIsoDateTime(document.sync.legacyMigration.updatedAt)
+        || typeof document.sync.legacyMigration.mutationId !== "string"
+        || !document.sync.legacyMigration.mutationId
+        || document.sync.legacyMigration.mutationId.length > 500
+      )
+    ) errors.push("Workspace legacy migration metadata is invalid.");
     return errors;
   }
 

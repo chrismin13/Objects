@@ -1,5 +1,7 @@
 # UI migration plan
 
+This is the historical inventory and comparison target for the rewrite. The final application no longer includes Web Awesome or the imperative renderer. See [replacement-parity-audit.md](replacement-parity-audit.md) for the shipped architecture, story evidence, and cutover record.
+
 This document is the parity contract for simplifying the Objects client. The application at commit `bb976b8` is the behavioral and visual baseline. No feature may be removed, substantially redesigned, or replaced with a weaker interaction without explicit product approval.
 
 ## Goals

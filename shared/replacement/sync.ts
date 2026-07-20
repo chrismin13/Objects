@@ -514,7 +514,7 @@ export function resolveSyncCommand(
   if (ruleErrors.length) return { result: { status: "rejected", errors: ruleErrors }, next: null };
 
   const revision = currentRevision + 1;
-  nextDocument.sync = { revision, lastMutationId: command.mutationId, updatedAt };
+  nextDocument.sync = { ...nextDocument.sync, revision, lastMutationId: command.mutationId, updatedAt };
   const next = { revision, document: nextDocument };
   return { result: acknowledgement(command.mutationId, next, conflicts), next };
 }

@@ -6,7 +6,7 @@ import { resolveAppearance, selectLaunchSpace, shouldRememberManualSpace } from 
 import { captureInputFromRecord, captureInputFromUrl } from "../../shared/replacement/capture.ts";
 import { createInMemorySyncStore } from "../../shared/replacement/sync.ts";
 import { dateInTimeZone } from "../../shared/replacement/dates.ts";
-import { captureIntoSnapshot } from "../../shared/replacement/http-capture.ts";
+import { captureIntoSnapshot, selectCaptureBase } from "../../shared/replacement/http-capture.ts";
 
 function settingsDocument() {
   const document = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
@@ -178,6 +178,47 @@ test("the HTTP capture seam uses Workspace validation and returns the saved item
     title: "Wrong owner", submissionId: "http-43", areaId: "another-account-area",
   }, dependencies);
   assert.equal(foreignLocation.status, "invalid");
+});
+
+test("the first HTTP capture starts from retained migrated data", () => {
+  const migrated = settingsDocument();
+  migrated.toDos.push({
+    id: "todo-retained",
+    title: "Retained work",
+    notes: "",
+    location: { kind: "unfiled", spaceId: "space-personal" },
+    schedule: { kind: "inbox" },
+    reminder: null,
+    deadline: null,
+    outcome: "open",
+    completedAt: null,
+    trashedAt: null,
+    logbookAt: null,
+    tags: [],
+    checklist: [],
+    occurrence: null,
+    order: 0,
+    createdAt: "2026-07-18T09:00:00.000Z",
+  });
+  const migratedSnapshot = { revision: 0, document: migrated };
+
+  const base = selectCaptureBase(null, migratedSnapshot, () => {
+    throw new Error("Fresh data must not replace a retained Workspace");
+  });
+  const captured = captureIntoSnapshot(base.current, base.initial, {
+    title: "Captured after cutover",
+    submissionId: "cutover-capture-1",
+  }, {
+    now: "2026-07-20T09:00:00.000Z",
+    today: "2026-07-20",
+    createId: (() => { let next = 0; return (kind: string) => `${kind}-${++next}`; })(),
+  });
+
+  assert.equal(captured.status, "created");
+  assert.deepEqual(captured.next?.document.toDos.map((toDo) => toDo.title), [
+    "Retained work",
+    "Captured after cutover",
+  ]);
 });
 
 test("malformed capture data and another account's Location are rejected without partial work", () => {

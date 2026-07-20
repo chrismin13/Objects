@@ -233,6 +233,10 @@ export type SyncMetadata = {
   revision: number;
   lastMutationId: string | null;
   updatedAt: IsoDateTime;
+  legacyMigration?: {
+    updatedAt: IsoDateTime;
+    mutationId: string;
+  };
 };
 
 export type CaptureReceipt = {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { assembleLegacyWorkspace, mergeMigratedLegacySnapshot } from "../../shared/replacement/legacy-storage.ts";
 import { createEmptyWorkspace, createWorkspace, exportPortableBackup, FULL_IMPORT_CONFIRMATION } from "../../shared/replacement/workspace.ts";
 
 function deterministicWorkspace() {
@@ -173,6 +174,107 @@ test("a representative current backup imports with corrections and a clear repor
   assert.equal(imported.repeatingTemplates[0].mode, "on-schedule");
   assert.deepEqual(imported.repeatingTemplates[0].pattern.weekdays, [1, 5]);
   assert.deepEqual(workspace.validate(), []);
+});
+
+test("retained normalized rows reassemble into the same portable legacy import", () => {
+  const serialized = assembleLegacyWorkspace({
+    version: "7",
+    updatedAt: "2026-07-18T12:00:00.000Z",
+    mutationId: "legacy-save-1",
+    settingsData: JSON.stringify({ theme: "light", tags: ["Focused"], defaultSpaceId: "space-work", spaceSchedule: { rules: [] } }),
+    spaces: [{ entityId: "space-work", data: JSON.stringify({ title: "Work", color: "#5577dd", pinned: true, order: 0 }) }],
+    areas: [{ entityId: "area-client", data: JSON.stringify({ title: "Client", spaceId: "space-work", color: "#448866", tags: ["Focused"], order: 0 }) }],
+    projects: [{ entityId: "project-launch", data: JSON.stringify({ title: "Launch", areaId: "area-client", spaceId: "space-work", status: "open", bucket: "anytime", tags: [], order: 0 }) }],
+    headings: [{ entityId: "heading-final", data: JSON.stringify({ title: "Final", projectId: "project-launch", order: 0 }) }],
+    calendarEvents: [],
+    tasks: [{ entityId: "todo-review", data: JSON.stringify({ title: "Review", headingId: "heading-final", projectId: "project-launch", areaId: "area-client", spaceId: "space-work", status: "open", bucket: "today", scheduledFor: "2026-07-20", tags: ["Focused"], order: 0 }) }],
+    checklistItems: [{ entityId: "check-copy", taskId: "todo-review", position: "000000", data: JSON.stringify({ title: "Read copy", done: true }) }],
+  });
+
+  const raw = JSON.parse(serialized);
+  assert.equal(raw.tasks[0].id, "todo-review");
+  assert.deepEqual(raw.tasks[0].checklist, [{ id: "check-copy", title: "Read copy", done: true }]);
+
+  const workspace = deterministicWorkspace();
+  const result = workspace.importPortableBackup(serialized, FULL_IMPORT_CONFIRMATION);
+  assert.equal(result.status, "changed");
+  assert.deepEqual(result.report.imported, {
+    spaces: 1, areas: 1, projects: 1, headings: 1, tags: 1, toDos: 1,
+    repeatingTemplates: 0, calendarEvents: 0,
+  });
+  assert.deepEqual(workspace.read().toDos[0].location, { kind: "heading", headingId: "heading-final" });
+  assert.equal(workspace.read().toDos[0].checklist[0].title, "Read copy");
+});
+
+test("retained data merges into an existing replacement snapshot exactly once", () => {
+  const legacy = createEmptyWorkspace("2026-07-18T12:00:00.000Z");
+  legacy.settings.theme = "dark";
+  legacy.spaces.push({ id: "space-legacy", title: "Legacy", color: "#5577dd", pinned: true, order: 0 });
+  legacy.settings.defaultSpaceId = "space-legacy";
+  legacy.toDos.push({
+    id: "todo-legacy", title: "Retained work", notes: "", checklist: [],
+    location: { kind: "unfiled", spaceId: "space-legacy" }, schedule: { kind: "inbox" },
+    reminder: null, deadline: null, outcome: "open", trashedAt: null, logbookAt: null,
+    tags: [], occurrence: null, createdAt: "2026-07-18T12:00:00.000Z", completedAt: null, order: 0,
+  });
+  const current = createEmptyWorkspace("2026-07-19T21:00:00.000Z");
+  current.spaces.push({ id: "space-new", title: "New", color: "#e49b3c", pinned: true, order: 0 });
+  current.settings.defaultSpaceId = "space-new";
+  current.toDos.push({
+    id: "todo-new", title: "Replacement-only work", notes: "", checklist: [],
+    location: { kind: "unfiled", spaceId: "space-new" },
+    schedule: { kind: "scheduled", date: "2026-07-20", evening: false },
+    reminder: null, deadline: null, outcome: "open", trashedAt: null, logbookAt: null,
+    tags: [], occurrence: null, createdAt: "2026-07-19T21:00:00.000Z", completedAt: null, order: 0,
+  });
+  const source = { updatedAt: "2026-07-19T11:55:16.000Z", mutationId: "legacy-final-save" };
+
+  const merged = mergeMigratedLegacySnapshot(
+    { revision: 8, document: current },
+    { revision: 0, document: legacy },
+    source,
+  );
+  const repeated = mergeMigratedLegacySnapshot(merged, { revision: 0, document: legacy }, source);
+
+  assert.equal(merged.revision, 8);
+  assert.deepEqual(merged.document.toDos.map((toDo) => toDo.title).sort(), ["Replacement-only work", "Retained work"]);
+  assert.deepEqual(merged.document.spaces.map((space) => space.id).sort(), ["space-legacy", "space-new"]);
+  assert.equal(merged.document.settings.theme, "dark");
+  assert.equal(merged.document.settings.defaultSpaceId, "space-legacy");
+  assert.deepEqual(merged.document.sync.legacyMigration, source);
+  assert.deepEqual(repeated, merged);
+});
+
+test("legacy repetition keeps one meaningful Outcome for a duplicated Template date", () => {
+  const workspace = deterministicWorkspace();
+  const backup = {
+    version: 7,
+    updatedAt: "2026-07-19T12:00:00.000Z",
+    settings: { theme: "system", tags: [], defaultSpaceId: "space-home", spaceSchedule: { rules: [] } },
+    spaces: [{ id: "space-home", title: "Home", color: "#e49b3c", pinned: true, order: 0 }],
+    areas: [], projects: [], headings: [], calendarEvents: [],
+    tasks: [
+      {
+        id: "todo-repeat", title: "Water plants", status: "open", bucket: "upcoming", scheduledFor: "2026-07-15",
+        spaceId: "space-home", tags: [], checklist: [], createdAt: "2026-07-15T08:00:00.000Z", order: 0,
+        repeat: { mode: "fixed", frequency: "daily", interval: 1, nextDate: "2026-07-20" },
+      },
+      {
+        id: "todo-completed", title: "Water plants", status: "completed", bucket: "upcoming", scheduledFor: "2026-07-15",
+        spaceId: "space-home", tags: [], checklist: [], createdAt: "2026-07-15T09:00:00.000Z",
+        completedAt: "2026-07-15T10:00:00.000Z", loggedAt: "2026-07-15T11:00:00.000Z", order: 1,
+        repeat: null, repeatTemplateId: "todo-repeat",
+      },
+    ],
+  };
+
+  const result = workspace.importPortableBackup(JSON.stringify(backup), FULL_IMPORT_CONFIRMATION);
+
+  assert.equal(result.status, "changed");
+  assert.equal(workspace.read().toDos.length, 1);
+  assert.equal(workspace.read().toDos[0].id, "todo-completed");
+  assert.equal(workspace.read().toDos[0].outcome, "completed");
+  assert.ok(result.report.messages.some((message) => message.message.includes("duplicate Repeating occurrence")));
 });
 
 test("nested invalid dates and times reject the full import without replacing existing data", () => {
