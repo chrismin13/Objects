@@ -84,11 +84,11 @@ export function SettingsDialog({
     <div class="settings-workspace">
       <p class="settings-intro">Make Objects fit your workflow and connect it to the rest of your system.</p>
       <WaTabGroup class="objects-tabs settings-tabs">
-        <WaTab slot="nav" panel="general">General</WaTab>
+        <WaTab slot="nav" panel="general" active>General</WaTab>
         <WaTab slot="nav" panel="app">App</WaTab>
         <WaTab slot="nav" panel="data">Data</WaTab>
 
-        <WaTabPanel name="general">
+        <WaTabPanel name="general" active>
           <div class="settings-panel">
             <section class="settings-card">
               <h3>Lakebed account</h3>

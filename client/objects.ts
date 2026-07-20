@@ -42,7 +42,7 @@ const icons = {
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>',
   repeat: '<path d="m17 1 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.09A1.7 1.7 0 0 0 8.94 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.57 15a1.7 1.7 0 0 0-1.56-1H3v-4h.09A1.7 1.7 0 0 0 4.6 8.94a1.7 1.7 0 0 0-.34-1.88L4.2 7l2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.57 1.7 1.7 0 0 0 10 3.09V3h4v.09A1.7 1.7 0 0 0 15.06 4.6a1.7 1.7 0 0 0 1.88-.34L17 4.2 19.83 7l-.06.06A1.7 1.7 0 0 0 19.43 9 1.7 1.7 0 0 0 20.91 10H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"/>',
-  heading: '<path d="M6 4v16M18 4v16M6 12h12"/>',
+  heading: '<path d="M4 6h10M4 12h10M4 18h10"/><path d="M19 8v8M15 12h8"/>',
   download: '<path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"/>',
   upload: '<path d="M12 17V5m0 0 5 5m-5-5-5 5M5 21h14"/>',
   markdown: '<path d="M3 6h18v12H3zM6 15V9l3 3 3-3v6M17 9v6m-2-2 2 2 2-2"/>',
@@ -915,7 +915,7 @@ function bindStaticEvents() {
   $('#repeating-button').innerHTML = icon('repeat');
   $('#settings-button').innerHTML = icon('settings');
   $('#space-settings-button').innerHTML = icon('clock');
-  $('#search-button').addEventListener('click', () => openSearch());
+  $('#search-button').addEventListener('click', () => openAfterSidebarClose(openSearch));
   $('#mobile-search').addEventListener('click', () => openSearch());
   $('#magic-add').addEventListener('click', () => beginQuickAdd(true));
   $('#magic-add').addEventListener('dragstart', (event) => {
@@ -929,10 +929,10 @@ function bindStaticEvents() {
     $('#magic-add').classList.remove('dragging');
     handleDragEnd();
   });
-  $('#new-list-button').addEventListener('click', () => openNewListModal());
+  $('#new-list-button').addEventListener('click', () => openAfterSidebarClose(openNewListModal));
   $('#repeating-button').addEventListener('click', () => setView('repeating'));
-  $('#settings-button').addEventListener('click', openSettings);
-  $('#space-settings-button').addEventListener('click', openSpaceSettings);
+  $('#settings-button').addEventListener('click', () => openAfterSidebarClose(openSettings));
+  $('#space-settings-button').addEventListener('click', () => openAfterSidebarClose(openSpaceSettings));
   $('#theme-button').addEventListener('click', cycleTheme);
   $('#sidebar-open').addEventListener('click', openSidebar);
   $('#sidebar-close').addEventListener('click', closeSidebar);
@@ -952,7 +952,7 @@ function bindStaticEvents() {
   $('#space-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-space-id]');
     if (button) setActiveSpace(button.dataset.spaceId);
-    else if (event.target.closest('[data-space-overflow]')) openSpaceSwitcher();
+    else if (event.target.closest('[data-space-overflow]')) openAfterSidebarClose(openSpaceSwitcher);
   });
   sidebar.addEventListener('dragstart', (event) => {
     const list = event.target.closest('[data-list-kind]');
@@ -1217,8 +1217,9 @@ function openSidebar() {
   app.classList.add('sidebar-open');
   if (matchMedia('(max-width: 820px)').matches) {
     const drawer = createMobileDrawer('mobile-sidebar-drawer', 'Lists', 'start', sidebarPanel);
+    delete drawer.dataset.restoreFocus;
     app.classList.add('library-sidebar-open');
-    showMobileDrawer(drawer, () => finalizeSidebarClose());
+    showMobileDrawer(drawer, () => finalizeSidebarClose({ restoreFocus: drawer.dataset.restoreFocus !== 'false' }));
   }
   syncSidebarAccessibility();
   setTimeout(() => $('#sidebar-close')?.focus(), 20);
@@ -1227,10 +1228,22 @@ function openSidebar() {
 function closeSidebar(options = {}) {
   const drawer = $('#mobile-sidebar-drawer');
   if (drawer?.hasAttribute('open')) {
+    drawer.dataset.restoreFocus = options.restoreFocus === false ? 'false' : 'true';
     drawer.removeAttribute('open');
     return;
   }
   finalizeSidebarClose(options);
+}
+
+function openAfterSidebarClose(open) {
+  if (matchMedia('(max-width: 820px)').matches && app.classList.contains('sidebar-open')) {
+    const drawer = $('#mobile-sidebar-drawer');
+    if (drawer) drawer.dataset.restoreFocus = 'false';
+    closeSidebar({ restoreFocus: false });
+    window.setTimeout(open, 180);
+    return;
+  }
+  open();
 }
 
 function syncMobileDrawerLayout() {
@@ -1564,13 +1577,14 @@ function renderContent() {
     if (ui.view.type === 'repeating') return (a.repeat?.nextDate || '').localeCompare(b.repeat?.nextDate || '');
     return a.order - b.order;
   });
-  const headerActions = `${ui.view.type === 'today' ? `<button class="icon-button" data-action="toggle-group" aria-label="Group Today by list">${icon('layers')}</button>` : ''}${ui.view.type === 'trash' && (view.tasks.length || view.projects.length) ? `<button class="button" data-action="empty-trash">Empty Trash</button>` : ''}${ui.view.type === 'project' ? `${view.project?.status === 'open' && !view.project?.repeat?.stopped ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button>` : ''}<button class="icon-button" data-action="project-menu" aria-label="Project options">${icon('more')}</button>` : ''}${ui.view.type === 'area' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button><button class="icon-button" data-action="area-menu" aria-label="Area options">${icon('more')}</button>` : ''}`;
+  const headerActions = `${ui.view.type === 'today' ? `<button class="icon-button" data-action="toggle-group" aria-label="Group Today by list" title="Group Today by list">${icon('layers')}</button>` : ''}${ui.view.type === 'trash' && (view.tasks.length || view.projects.length) ? `<button class="button" data-action="empty-trash">Empty Trash</button>` : ''}${ui.view.type === 'project' ? `${view.project?.status === 'open' && !view.project?.repeat?.stopped ? `<button class="icon-button" data-action="new-heading" aria-label="New heading" title="New heading">${icon('heading')}</button>` : ''}<button class="icon-button" data-action="project-menu" aria-label="Project options" title="Project options">${icon('more')}</button>` : ''}${ui.view.type === 'area' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading" title="New heading">${icon('heading')}</button><button class="icon-button" data-action="area-menu" aria-label="Area options" title="Area options">${icon('more')}</button>` : ''}`;
   const deadline = view.deadline ? ` · Deadline ${formatDate(view.deadline, { month: 'short', day: 'numeric' })}` : '';
   const progress = view.project ? projectProgress(view.project.id) : null;
   const sections = buildSections(sorted);
   const tags = [...new Set([...(view.tasks || []).flatMap((task) => effectiveTags(task)), ...(view.projects || []).flatMap((project) => effectiveProjectTags(project))])].sort();
   const calendar = ['today', 'upcoming', 'tomorrow'].includes(ui.view.type) && ui.state.settings.showCalendar ? renderCalendarEvents(ui.view.type) : '';
   const projectSection = visibleProjects.length ? `<section class="section"><div class="section-header"><h2>Projects</h2></div>${renderProjectCards(visibleProjects)}</section>` : '';
+  const sectionList = sections.some((section) => section.tasks.length || section.heading || section.agenda) ? `<div class="section-list">${sections.map(renderSection).join('')}</div>` : '';
   const repeatingManagement = ui.view.type === 'repeating' ? renderRepeatingManagement(sorted, view.repeatingProjects || []) : '';
 
   content.innerHTML = `<div class="content-inner" data-view-type="${esc(ui.view.type)}">
@@ -1582,7 +1596,7 @@ function renderContent() {
       ${tags.length && ['project', 'area'].includes(ui.view.type) ? `<div class="filter-bar" aria-label="Filter by tags"><button class="chip ${!ui.activeTags.size ? 'active' : ''}" data-filter-tag="">All</button>${tags.map((tag) => `<button class="chip ${ui.activeTags.has(tag) ? 'active' : ''}" data-filter-tag="${esc(tag)}" aria-pressed="${ui.activeTags.has(tag)}">${esc(tag)}</button>`).join('')}</div>` : ''}
     </header>
     ${calendar}
-    ${ui.view.type === 'repeating' ? repeatingManagement : `${projectSection}${view.repeatingProjects?.length ? `<section class="section"><div class="section-header"><h2>Repeating projects</h2></div>${renderProjectCards(view.repeatingProjects)}</section>` : ''}${sections.length ? `<div class="section-list">${sections.map(renderSection).join('')}</div>` : projectSection || view.repeatingProjects?.length ? '' : renderEmpty(view)}`}
+    ${ui.view.type === 'repeating' ? repeatingManagement : `${projectSection}${view.repeatingProjects?.length ? `<section class="section"><div class="section-header"><h2>Repeating projects</h2></div>${renderProjectCards(view.repeatingProjects)}</section>` : ''}${sectionList || projectSection || view.repeatingProjects?.length ? sectionList : renderEmpty(view)}`}
   </div>${renderSelectionToolbar()}`;
   if (ui.view.type !== 'repeating' && !(ui.view.type === 'project' && view.project?.repeat?.stopped)) mountTaskSortables(content, {
     crossSection: ['today', 'upcoming', 'project', 'area'].includes(ui.view.type),
@@ -1792,7 +1806,7 @@ function renderTask(task) {
   return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${bulkSelected ? 'bulk-selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="${!projectTemplateItem}" aria-selected="${bulkSelected}">
     <button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${projectTemplateItem ? 'Edit Template item' : checked ? 'Restore' : 'Complete'} ${esc(task.title)}"><span class="check-visual">${checked ? icon('check') : ''}</span></button>
     <div class="task-main" data-action="select-task" role="button" tabindex="0" aria-label="Open details for ${esc(task.title)}"><span class="task-title">${star}${esc(task.title)}</span>${task.notes ? `<div class="task-notes-preview">${esc(task.notes)}</div>` : ''}${meta.length ? `<div class="task-meta">${meta.join('')}</div>` : ''}</div>
-    ${projectTemplateItem ? '' : `<button class="task-select ${bulkSelected ? 'active' : ''}" type="button" data-action="select-bulk" aria-label="${bulkSelected ? 'Remove' : 'Add'} ${esc(task.title)} ${bulkSelected ? 'from' : 'to'} selection">${bulkSelected ? icon('check') : icon('circle')}</button>`}
+    ${projectTemplateItem ? '' : `<button class="task-select ${bulkSelected ? 'active' : ''}" type="button" data-action="select-bulk" aria-label="${bulkSelected ? 'Remove' : 'Add'} ${esc(task.title)} ${bulkSelected ? 'from' : 'to'} selection">${bulkSelected ? icon('check') : ''}</button>`}
     ${icon('chevron', 'task-chevron')}
   </li>`;
 }
@@ -2509,7 +2523,7 @@ function renderInspector(force = false) {
   const occurrenceDate = task.scheduledFor ? formatDate(task.scheduledFor, { weekday: 'long', month: 'long', day: 'numeric' }) : 'its scheduled date';
   inspector.innerHTML = `<div class="inspector-scroll" data-task-id="${esc(task.id)}">
     <div class="inspector-top"><span class="inspector-status">${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating Template' : task.workspaceTemplateId ? 'Repeating Project Template item' : task.repeatTemplateId ? 'Occurrence' : 'To-do'}</span><wa-button class="inspector-close-button" size="s" appearance="plain" data-inspector-action="close" data-drawer="close" aria-label="Close details">${icon('x')}</wa-button></div>
-    <input id="inspector-title" class="inspector-title" type="text" data-field="title" value="${esc(task.title)}" placeholder="To-do title" ${stoppedTemplate ? 'disabled' : ''}>
+    <textarea id="inspector-title" class="inspector-title" data-field="title" rows="1" placeholder="To-do title" ${stoppedTemplate ? 'disabled' : ''}>${esc(task.title)}</textarea>
     ${task.workspaceTemplateId ? `<div class="occurrence-notice">${icon('repeat')}<div><strong>Part of a Repeating Project Template</strong><p>Changes here affect future Project Occurrences only.${stoppedTemplate ? ' This stopped Template is read-only.' : ''}</p></div></div>` : ''}
     ${task.repeatTemplateId ? `<div class="occurrence-notice">${icon('repeat')}<div><strong>Part of a repeating schedule</strong><p>${occurrenceTemplate ? `Created by “${esc(occurrenceTemplate.title)}”` : 'Created by a Repeating Template'} for ${esc(occurrenceDate)}. Editing this to-do changes only this Occurrence.</p>${occurrenceTemplate ? '<button class="checklist-add" type="button" data-inspector-action="open-repeat-template">Open Repeating Template</button>' : ''}</div></div>` : ''}
     ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)" ${stoppedTemplate ? 'disabled' : ''}>${esc(task.notes)}</textarea>`}
@@ -2529,6 +2543,7 @@ function renderInspector(force = false) {
     <div class="inspector-actions">${task.repeat ? `<button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button>${stoppedTemplate ? `<button class="danger-button" data-inspector-action="delete-repeat-template">${icon('trash')} Delete Repeating Template</button>` : ''}` : task.workspaceTemplateId ? `${stoppedTemplate ? '' : `<button class="danger-button" data-inspector-action="remove-template-item">${icon('trash')} Remove from Template</button>`}` : `${!isTrashed(task) ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === 'open' && task.repeatTemplateId ? '<button class="button" data-inspector-action="skip-occurrence">Skip Occurrence</button>' : task.status === 'open' ? '<button class="button" data-inspector-action="cancel">Cancel to-do</button>' : ''}` : ''}${isTrashed(task) ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}`}</div>
   </div>`;
   const nextPane = $('.inspector-scroll', inspector);
+  resizeInspectorTitle($('#inspector-title', inspector));
   nextPane?.addEventListener('input', handleInspectorInput);
   nextPane?.addEventListener('change', handleInspectorChange);
   nextPane?.addEventListener('click', handleInspectorClick);
@@ -2626,6 +2641,14 @@ function updateNoteFind(direction = 0, focusNote = false) {
   }
 }
 
+function resizeInspectorTitle(title) {
+  if (!title) return;
+  title.style.height = '0px';
+  const height = Math.min(title.scrollHeight, 132);
+  title.style.height = `${height}px`;
+  title.style.overflowY = title.scrollHeight > 132 ? 'auto' : 'hidden';
+}
+
 function handleInspectorInput(event) {
   const task = currentTask();
   if (!task) return;
@@ -2636,6 +2659,7 @@ function handleInspectorInput(event) {
   }
   const field = event.target.dataset.field;
   if (field === 'title' || field === 'notes') task[field] = event.target.value;
+  if (field === 'title') resizeInspectorTitle(event.target);
   const checkRow = event.target.closest('[data-check-id]');
   if (checkRow && event.target.dataset.checkField === 'title') {
     const item = task.checklist.find((check) => check.id === checkRow.dataset.checkId);
@@ -2828,7 +2852,8 @@ function handleInspectorClick(event) {
 
 function openRepeatingTemplateEditor(task) {
   const nextDate = task.repeat?.nextDate || task.scheduledFor || addDays(localDay(), 7);
-  const initial = task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false };
+  const nextWeekday = new Date(`${nextDate}T12:00:00`).getDay();
+  const initial = task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [Number.isNaN(nextWeekday) ? 1 : nextWeekday], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false };
   modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   modalUsesPreact = true;
   renderPreact(h(RepeatingTemplateDialog, {
@@ -3002,7 +3027,7 @@ function searchItems(query, searchEverything = false) {
   const q = query.toLowerCase().trim();
   const lists = [
     ['today','Today','star'], ['inbox','Inbox','inbox'], ['upcoming','Upcoming','calendar'], ['anytime','Anytime','layers'], ['someday','Someday','archive'], ['logbook','Logbook','check'], ['trash','Trash','trash']
-  ].map(([type,title,iconName]) => ({ kind:'view', type, title, meta:'List', icon:iconName }));
+  ].map(([type,title,iconName]) => ({ kind:'view', type, title, meta:'', icon:iconName }));
   const special = [
     ['tomorrow','Tomorrow','calendar'], ['deadlines','Deadlines','flag'], ['repeating','Repeating','repeat'], ['allProjects','All Projects','list'], ['loggedProjects','Logged Projects','check']
   ].map(([type,title,iconName]) => ({ kind:'view', type, title, meta:'Special list', icon:iconName }));
@@ -3707,10 +3732,12 @@ async function flushSave() {
 }
 
 function showToast(message, actionLabel, action) {
+  const region = $('#toast-region');
+  while (region.children.length >= 2) region.firstElementChild?.remove();
   const toast = document.createElement('div');
   toast.className = 'toast';
   toast.innerHTML = `<span>${esc(message)}</span>${actionLabel ? `<button type="button">${esc(actionLabel)}</button>` : ''}`;
   if (actionLabel) $('button', toast).addEventListener('click', () => { action(); toast.remove(); });
-  $('#toast-region').append(toast);
+  region.append(toast);
   setTimeout(() => toast.remove(), 4200);
 }

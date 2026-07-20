@@ -20,8 +20,9 @@ function TagsEditor({ value, onChange, label = "Tags" }: { value: string[]; onCh
 }
 
 function WeekdayPicker({ value, onChange }: { value: number[]; onChange(value: number[]): void }) {
-  const days = ["S", "M", "T", "W", "T", "F", "S"];
-  return <div class="entity-weekdays" aria-label="Repeat days">{days.map((label, day) => <button type="button" class={value.includes(day) ? "active" : ""} aria-label={`Repeat on ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day]}`} aria-pressed={value.includes(day)} onClick={() => onChange(value.includes(day) ? value.filter((candidate) => candidate !== day) : [...value, day].sort())}>{label}</button>)}</div>;
+  const days = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return <div class="entity-weekdays" aria-label="Repeat days">{days.map((label, day) => <button type="button" class={value.includes(day) ? "active" : ""} aria-label={`Repeat on ${names[day]}`} aria-pressed={value.includes(day)} onClick={() => onChange(value.includes(day) ? value.filter((candidate) => candidate !== day) : [...value, day].sort())}>{label}</button>)}</div>;
 }
 
 function SpacePinCheckbox({ space, disabled, onChange }: { space: Space; disabled: boolean; onChange(checked: boolean): void }) {
@@ -31,12 +32,15 @@ function SpacePinCheckbox({ space, disabled, onChange }: { space: Space; disable
 }
 
 function RepeatEditor({ value, fallbackDate, onChange, showStop = true }: { value: RepeatRule | null; fallbackDate: string; onChange(value: RepeatRule | null): void; showStop?: boolean }) {
-  if (!value) return <WaButton size="s" appearance="plain" onClick={() => onChange({ mode: "fixed", frequency: "weekly", interval: 1, weekdays: [], nextDate: fallbackDate, paused: false })}>Make repeating…</WaButton>;
+  const fallbackWeekday = new Date(`${fallbackDate}T12:00:00`).getDay();
+  const defaultWeekdays = [Number.isNaN(fallbackWeekday) ? 1 : fallbackWeekday];
+  if (!value) return <WaButton size="s" appearance="outlined" onClick={() => onChange({ mode: "fixed", frequency: "weekly", interval: 1, weekdays: defaultWeekdays, nextDate: fallbackDate, paused: false })}>Make repeating…</WaButton>;
   const update = <K extends keyof RepeatRule>(key: K, next: RepeatRule[K]) => onChange({ ...value, [key]: next });
+  const setFrequency = (frequency: RepeatRule["frequency"]) => onChange({ ...value, frequency, weekdays: frequency === "weekly" && !value.weekdays?.length ? defaultWeekdays : value.weekdays });
   return <div class="entity-repeat-editor">
     <div class="entity-form-grid">
       <WaSelect label="Schedule" value={value.mode} onChange={(event: Event) => update("mode", eventValue(event) as RepeatRule["mode"])}><WaOption value="fixed">On schedule</WaOption><WaOption value="afterCompletion">After completion</WaOption></WaSelect>
-      <WaSelect label="Frequency" value={value.frequency} onChange={(event: Event) => update("frequency", eventValue(event) as RepeatRule["frequency"])}><WaOption value="daily">Day</WaOption><WaOption value="weekly">Week</WaOption><WaOption value="monthly">Month</WaOption><WaOption value="yearly">Year</WaOption></WaSelect>
+      <WaSelect label="Frequency" value={value.frequency} onChange={(event: Event) => setFrequency(eventValue(event) as RepeatRule["frequency"])}><WaOption value="daily">Day</WaOption><WaOption value="weekly">Week</WaOption><WaOption value="monthly">Month</WaOption><WaOption value="yearly">Year</WaOption></WaSelect>
       <label class="entity-native-field">Every<input type="number" min="1" value={value.interval || 1} onInput={(event) => update("interval", Math.max(1, Number(event.currentTarget.value) || 1))} /></label>
       <label class="entity-native-field">Next occurrence<input type="date" value={value.nextDate || fallbackDate} onInput={(event) => update("nextDate", event.currentTarget.value)} /></label>
     </div>

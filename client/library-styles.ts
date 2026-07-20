@@ -35,6 +35,7 @@ export const libraryStyles = `
 
 wa-button::part(base) { font-weight: 590; box-shadow: none; }
 wa-button[variant="brand"]::part(base) { background: var(--blue); border-color: var(--blue); color: #fff; }
+wa-button[disabled][variant="brand"]::part(base) { background: var(--surface-subtle); border-color: var(--border-strong); color: var(--muted); opacity: 1; }
 wa-button[appearance="outlined"]::part(base) { background: var(--surface); border-color: var(--border-strong); color: var(--text); }
 wa-button[appearance="outlined"]:hover::part(base),
 wa-button[appearance="plain"]:hover::part(base) { background: var(--surface-subtle); }
@@ -55,7 +56,7 @@ wa-details::part(header) { min-height: var(--control-default); padding: var(--sp
 wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
 .objects-tabs::part(nav) { gap: var(--space-1); border-bottom-color: var(--border); }
 .objects-tabs wa-tab::part(base) { min-height: var(--control-default); padding: var(--space-2) var(--space-3); color: var(--muted); font-size: 13px; }
-.objects-tabs wa-tab[active]::part(base) { color: var(--text); }
+.objects-tabs wa-tab[active]::part(base) { color: var(--text); box-shadow: inset 0 -2px 0 var(--blue); font-weight: 650; }
 .objects-tabs wa-tab-panel::part(base) { padding: var(--space-4) 0 0; }
 
 .objects-dialog {
@@ -79,6 +80,9 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
   color: var(--text);
   box-shadow: var(--shadow);
 }
+.objects-dialog::part(body) { scrollbar-width: thin; }
+.objects-dialog::part(footer) { border-top: 1px solid var(--border); background: var(--surface); box-shadow: 0 -8px 18px color-mix(in srgb, var(--surface) 92%, transparent); }
+.objects-dialog.dialog-quick-find::part(dialog) { margin-top: min(14vh, 104px); margin-bottom: auto; }
 .objects-dialog.dialog-quick-find::part(body) { padding: 0; }
 .objects-dialog .quick-find { margin: 0; }
 .objects-dialog [slot="footer"] wa-button::part(base) {
@@ -92,6 +96,8 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
   .objects-dialog { --width: calc(100vw - 16px); --spacing: var(--space-4); }
   .objects-dialog.dialog-quick-find { --spacing: 0; }
   .objects-dialog::part(dialog) { max-height: calc(100dvh - 16px); border-radius: 13px; }
+  .objects-dialog.dialog-quick-find::part(dialog) { max-height: calc(100dvh - 72px); margin-top: calc(56px + env(safe-area-inset-top, 0px)); }
+  .objects-dialog.dialog-quick-find .search-results { max-height: min(calc(100dvh - 180px), 438px); }
   .objects-dialog [slot="footer"] wa-button::part(base) { min-height: var(--control-touch); height: var(--control-touch); }
 }
 
@@ -123,5 +129,6 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
     pointer-events: auto;
     box-shadow: none;
   }
+  .objects-mobile-drawer .sidebar { background: var(--sidebar); backdrop-filter: none; }
 }
 `;

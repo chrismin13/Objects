@@ -208,11 +208,11 @@ export const featureStyles = `
     transform: none;
   }
   .toast-region {
-    top: calc(68px + env(safe-area-inset-top, 0px));
-    right: 12px;
-    bottom: auto;
+    top: auto;
+    right: 72px;
+    bottom: calc(22px + env(safe-area-inset-bottom, 0px));
     left: 12px;
-    align-items: center;
+    align-items: flex-end;
     transform: none;
   }
   .toast {
