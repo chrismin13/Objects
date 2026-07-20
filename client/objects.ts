@@ -6,7 +6,7 @@ import { reorderChecklist, reorderEntities, reorderTasks } from './app/actions';
 import { destroyChecklistSortable, destroyHeadingSortable, destroyTaskSortables, mountChecklistSortable, mountHeadingSortable, mountTaskSortables } from './ui/sortable';
 import { QuickFind } from './features/search/quick-find';
 import { SettingsDialog } from './features/settings/settings-dialog';
-import { AreaDialog, BulkTagsDialog, ConfirmDialog, FinishProjectDialog, HeadingDialog, MoveTasksDialog, NewListDialog, ProjectDialog, SpacesSettingsDialog, SpaceSwitcherDialog } from './features/entities/entity-dialogs';
+import { AreaDialog, BulkTagsDialog, ConfirmDialog, FinishProjectDialog, HeadingDialog, MoveTasksDialog, NewListDialog, ProjectDialog, RepeatingTemplateDialog, SpacesSettingsDialog, SpaceSwitcherDialog } from './features/entities/entity-dialogs';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -912,6 +912,7 @@ function bindStaticEvents() {
   $('#magic-add').innerHTML = icon('plus');
   $('#magic-add').draggable = true;
   $('#new-list-button').innerHTML = `${icon('plus')}<span>New List</span>`;
+  $('#repeating-button').innerHTML = icon('repeat');
   $('#settings-button').innerHTML = icon('settings');
   $('#space-settings-button').innerHTML = icon('clock');
   $('#search-button').addEventListener('click', () => openSearch());
@@ -929,6 +930,7 @@ function bindStaticEvents() {
     handleDragEnd();
   });
   $('#new-list-button').addEventListener('click', () => openNewListModal());
+  $('#repeating-button').addEventListener('click', () => setView('repeating'));
   $('#settings-button').addEventListener('click', openSettings);
   $('#space-settings-button').addEventListener('click', openSpaceSettings);
   $('#theme-button').addEventListener('click', cycleTheme);
@@ -987,10 +989,6 @@ function bindStaticEvents() {
   content.addEventListener('pointermove', handleTaskGestureMove, { passive: false });
   content.addEventListener('pointerup', handleTaskGestureEnd, { passive: true });
   content.addEventListener('pointercancel', handleTaskGestureCancel, { passive: true });
-  inspector.addEventListener('input', handleInspectorInput);
-  inspector.addEventListener('change', handleInspectorChange);
-  inspector.addEventListener('click', handleInspectorClick);
-  inspector.addEventListener('keydown', handleInspectorKeydown);
   document.addEventListener('keydown', handleGlobalKeydown);
   document.addEventListener('contextmenu', handleContextMenu);
   document.addEventListener('pointerdown', handleContextPressStart, { passive: true });
@@ -1396,13 +1394,17 @@ function upcomingTaskEntries(today, taskFilter) {
     agendaDay: task.scheduledFor && task.scheduledFor > today ? task.scheduledFor : task.deadline,
     agendaDeadlineOnly: !(task.scheduledFor && task.scheduledFor > today),
   }));
-  const repeating = ui.state.tasks.filter((task) => matchesActiveSpace(task) && task.status === 'open' && task.repeat && !task.repeat.paused && task.repeat.nextDate > today).map((task) => ({ ...task, agendaDay: task.repeat.nextDate, agendaPreview: true }));
+  const repeating = ui.state.tasks.filter((task) => matchesActiveSpace(task) && task.status === 'open' && task.repeat && !task.repeat.paused && task.repeat.nextDate > today
+    && !ui.state.tasks.some((candidate) => candidate.repeatTemplateId === task.id && candidate.scheduledFor === task.repeat.nextDate)
+  ).map((task) => ({ ...task, agendaDay: task.repeat.nextDate, agendaPreview: true }));
   return [...dated, ...repeating];
 }
 
 function upcomingProjectEntries(today) {
   const dated = ui.state.projects.filter((project) => projectIsActive(project) && ((project.scheduledFor && project.scheduledFor > today) || (project.deadline && project.deadline > today))).map((project) => ({ ...project, agendaDay: project.scheduledFor && project.scheduledFor > today ? project.scheduledFor : project.deadline }));
-  const repeating = ui.state.projects.filter((project) => matchesActiveSpace(project) && project.status === 'open' && project.repeat && !project.repeat.paused && project.repeat.nextDate > today).map((project) => ({ ...project, agendaDay: project.repeat.nextDate, agendaPreview: true }));
+  const repeating = ui.state.projects.filter((project) => matchesActiveSpace(project) && project.status === 'open' && project.repeat && !project.repeat.paused && project.repeat.nextDate > today
+    && !ui.state.projects.some((candidate) => candidate.repeatTemplateId === project.id && candidate.scheduledFor === project.repeat.nextDate)
+  ).map((project) => ({ ...project, agendaDay: project.repeat.nextDate, agendaPreview: true }));
   return [...dated, ...repeating];
 }
 
@@ -1458,6 +1460,9 @@ function renderSpaceControls() {
 
 function renderSidebar() {
   renderSpaceControls();
+  const repeatingButton = $('#repeating-button');
+  repeatingButton?.classList.toggle('active', ui.view.type === 'repeating');
+  repeatingButton?.setAttribute('aria-pressed', String(ui.view.type === 'repeating'));
   const today = localDay();
   const standard = [
     ['inbox', 'Inbox', 'inbox'],
@@ -1508,13 +1513,13 @@ function viewDefinition() {
     trash: { title: 'Trash', icon: 'trash', eyebrow: 'Discarded', subtitle: 'Items moved here stay available for recovery.', tasks: ui.state.tasks.filter((t) => matchesActiveSpace(t) && isTrashed(t)), projects: ui.state.projects.filter((p) => matchesActiveSpace(p) && isTrashed(p)) },
     tomorrow: { title: 'Tomorrow', icon: 'calendar', eyebrow: formatDate(addDays(today, 1), { weekday: 'long', month: 'long', day: 'numeric' }), subtitle: 'Start dates, repeating plans, and deadlines for the next day.', tasks: upcomingTaskEntries(today, taskFilter).filter((task) => task.agendaDay === addDays(today, 1)), projects: upcomingProjectEntries(today).filter((project) => project.agendaDay === addDays(today, 1)) },
     deadlines: { title: 'Deadlines', icon: 'flag', eyebrow: 'Commitments', subtitle: 'Open items ordered by the date they must be finished.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && t.deadline), projects: ui.state.projects.filter((p) => projectIsActive(p) && p.deadline).sort((a, b) => a.deadline.localeCompare(b.deadline)) },
-    repeating: { title: 'Repeating', icon: 'repeat', eyebrow: 'Templates', subtitle: 'Routines that create fresh to-dos and projects on their schedule.', tasks: ui.state.tasks.filter((t) => matchesActiveSpace(t) && t.status === 'open' && t.repeat), repeatingProjects: ui.state.projects.filter((p) => matchesActiveSpace(p) && p.status === 'open' && p.repeat) },
+    repeating: { title: 'Repeating', icon: 'repeat', eyebrow: 'Templates', subtitle: 'Routines that create fresh to-dos and projects on their schedule.', tasks: ui.state.tasks.filter((t) => matchesActiveSpace(t) && t.repeat), repeatingProjects: ui.state.projects.filter((p) => matchesActiveSpace(p) && p.repeat) },
   };
   if (definitions[ui.view.type]) return definitions[ui.view.type];
   if (ui.view.type === 'project') {
     const project = projectById(ui.view.id);
     if (!project) return definitions.today;
-    return { title: project.title, icon: isLogged(project) ? 'check' : isTrashed(project) ? 'trash' : 'list', eyebrow: project.status === 'completed' ? 'Completed project' : project.status === 'canceled' ? 'Canceled project' : isTrashed(project) ? 'In Trash' : areaById(project.areaId)?.title || 'Project', subtitle: project.notes || 'A focused set of steps toward one outcome.', deadline: project.deadline, tasks: ui.state.tasks.filter((t) => {
+    return { title: project.title, icon: isLogged(project) ? 'check' : isTrashed(project) ? 'trash' : project.repeat ? 'repeat' : 'list', eyebrow: project.repeat ? (project.repeat.stopped ? 'Stopped Repeating Project Template' : 'Repeating Project Template') : project.status === 'completed' ? 'Completed project' : project.status === 'canceled' ? 'Canceled project' : isTrashed(project) ? 'In Trash' : areaById(project.areaId)?.title || 'Project', subtitle: project.notes || (project.repeat ? 'These contents will be copied into future Project Occurrences.' : 'A focused set of steps toward one outcome.'), deadline: project.deadline, tasks: ui.state.tasks.filter((t) => {
       if (t.projectId !== project.id || t.repeat) return false;
       if (isLogged(project)) return isLogged(t);
       if (isTrashed(project)) return isTrashed(t);
@@ -1531,7 +1536,7 @@ function viewDefinition() {
     return { title: `#${ui.view.id}`, icon: 'tag', eyebrow: 'Tag', subtitle: 'Matching items from the active Space.', tasks: ui.state.tasks.filter((t) => taskFilter(t) && effectiveTags(t).includes(ui.view.id)), projects: ui.state.projects.filter((p) => projectIsActive(p) && effectiveProjectTags(p).includes(ui.view.id)) };
   }
   if (ui.view.type === 'allProjects') {
-    return { title: 'All Projects', icon: 'list', eyebrow: 'Open projects', subtitle: 'Every active outcome in this Space.', tasks: [], projects: ui.state.projects.filter((p) => matchesActiveSpace(p) && p.status === 'open') };
+    return { title: 'All Projects', icon: 'list', eyebrow: 'Open projects', subtitle: 'Every active outcome in this Space.', tasks: [], projects: ui.state.projects.filter((p) => matchesActiveSpace(p) && p.status === 'open' && !p.workspaceTemplate && !p.repeat) };
   }
   if (ui.view.type === 'loggedProjects') {
     return { title: 'Logged Projects', icon: 'check', eyebrow: 'Completed projects', subtitle: 'Finished outcomes and their progress history.', tasks: [], projects: ui.state.projects.filter((p) => matchesActiveSpace(p) && isLogged(p)) };
@@ -1559,13 +1564,14 @@ function renderContent() {
     if (ui.view.type === 'repeating') return (a.repeat?.nextDate || '').localeCompare(b.repeat?.nextDate || '');
     return a.order - b.order;
   });
-  const headerActions = `${ui.view.type === 'today' ? `<button class="icon-button" data-action="toggle-group" aria-label="Group Today by list">${icon('layers')}</button>` : ''}${ui.view.type === 'trash' && (view.tasks.length || view.projects.length) ? `<button class="button" data-action="empty-trash">Empty Trash</button>` : ''}${ui.view.type === 'project' ? `${view.project?.status === 'open' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button>` : ''}<button class="icon-button" data-action="project-menu" aria-label="Project options">${icon('more')}</button>` : ''}${ui.view.type === 'area' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button><button class="icon-button" data-action="area-menu" aria-label="Area options">${icon('more')}</button>` : ''}`;
+  const headerActions = `${ui.view.type === 'today' ? `<button class="icon-button" data-action="toggle-group" aria-label="Group Today by list">${icon('layers')}</button>` : ''}${ui.view.type === 'trash' && (view.tasks.length || view.projects.length) ? `<button class="button" data-action="empty-trash">Empty Trash</button>` : ''}${ui.view.type === 'project' ? `${view.project?.status === 'open' && !view.project?.repeat?.stopped ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button>` : ''}<button class="icon-button" data-action="project-menu" aria-label="Project options">${icon('more')}</button>` : ''}${ui.view.type === 'area' ? `<button class="icon-button" data-action="new-heading" aria-label="New heading">${icon('heading')}</button><button class="icon-button" data-action="area-menu" aria-label="Area options">${icon('more')}</button>` : ''}`;
   const deadline = view.deadline ? ` · Deadline ${formatDate(view.deadline, { month: 'short', day: 'numeric' })}` : '';
   const progress = view.project ? projectProgress(view.project.id) : null;
   const sections = buildSections(sorted);
   const tags = [...new Set([...(view.tasks || []).flatMap((task) => effectiveTags(task)), ...(view.projects || []).flatMap((project) => effectiveProjectTags(project))])].sort();
   const calendar = ['today', 'upcoming', 'tomorrow'].includes(ui.view.type) && ui.state.settings.showCalendar ? renderCalendarEvents(ui.view.type) : '';
   const projectSection = visibleProjects.length ? `<section class="section"><div class="section-header"><h2>Projects</h2></div>${renderProjectCards(visibleProjects)}</section>` : '';
+  const repeatingManagement = ui.view.type === 'repeating' ? renderRepeatingManagement(sorted, view.repeatingProjects || []) : '';
 
   content.innerHTML = `<div class="content-inner" data-view-type="${esc(ui.view.type)}">
     <header class="view-header">
@@ -1576,9 +1582,9 @@ function renderContent() {
       ${tags.length && ['project', 'area'].includes(ui.view.type) ? `<div class="filter-bar" aria-label="Filter by tags"><button class="chip ${!ui.activeTags.size ? 'active' : ''}" data-filter-tag="">All</button>${tags.map((tag) => `<button class="chip ${ui.activeTags.has(tag) ? 'active' : ''}" data-filter-tag="${esc(tag)}" aria-pressed="${ui.activeTags.has(tag)}">${esc(tag)}</button>`).join('')}</div>` : ''}
     </header>
     ${calendar}
-    ${projectSection}${view.repeatingProjects?.length ? `<section class="section"><div class="section-header"><h2>Repeating projects</h2></div>${renderProjectCards(view.repeatingProjects)}</section>` : ''}${sections.length ? `<div class="section-list">${sections.map(renderSection).join('')}</div>` : projectSection || view.repeatingProjects?.length ? '' : renderEmpty(view)}
+    ${ui.view.type === 'repeating' ? repeatingManagement : `${projectSection}${view.repeatingProjects?.length ? `<section class="section"><div class="section-header"><h2>Repeating projects</h2></div>${renderProjectCards(view.repeatingProjects)}</section>` : ''}${sections.length ? `<div class="section-list">${sections.map(renderSection).join('')}</div>` : projectSection || view.repeatingProjects?.length ? '' : renderEmpty(view)}`}
   </div>${renderSelectionToolbar()}`;
-  mountTaskSortables(content, {
+  if (ui.view.type !== 'repeating' && !(ui.view.type === 'project' && view.project?.repeat?.stopped)) mountTaskSortables(content, {
     crossSection: ['today', 'upcoming', 'project', 'area'].includes(ui.view.type),
     onStart: (ids) => {
       ui.sortableTaskDrag = true;
@@ -1596,13 +1602,36 @@ function renderContent() {
       renderContent();
     },
   });
-  if (['project', 'area'].includes(ui.view.type)) {
+  if (['project', 'area'].includes(ui.view.type) && !(ui.view.type === 'project' && view.project?.repeat?.stopped)) {
     mountHeadingSortable(content, (orderedIds) => {
       reorderEntities(headingsFor(ui.view.type, ui.view.id), orderedIds);
       scheduleSave();
       renderContent();
     });
   }
+}
+
+function repeatState(item) {
+  if (item.repeat?.stopped) return 'stopped';
+  if (item.repeat?.paused) return 'paused';
+  return 'active';
+}
+
+function renderRepeatingManagement(tasks, projects) {
+  const groups = [
+    ['active', 'Active schedules', 'Creating future Occurrences'],
+    ['paused', 'Paused schedules', 'Kept safely, but not creating anything'],
+    ['stopped', 'Stopped schedules', 'History only; these schedules cannot restart'],
+  ];
+  return `<div class="repeating-management">${groups.map(([state, title, description]) => {
+    const matchingTasks = tasks.filter((task) => repeatState(task) === state);
+    const matchingProjects = projects.filter((project) => repeatState(project) === state);
+    const count = matchingTasks.length + matchingProjects.length;
+    const taskRows = matchingTasks.length ? `<ul class="task-list">${matchingTasks.map(renderTask).join('')}</ul>` : '';
+    const projectRows = matchingProjects.length ? `<div class="repeating-projects"><span class="repeating-kind-label">Projects</span>${renderProjectCards(matchingProjects)}</div>` : '';
+    const empty = count ? '' : '<p class="repeating-empty">None</p>';
+    return `<section class="section repeating-group" data-repeat-state="${state}"><div class="section-header"><div><h2>${title}</h2><p>${description}</p></div><span class="section-meta">${count}</span></div>${taskRows}${projectRows}${empty}</section>`;
+  }).join('')}</div>`;
 }
 
 function renderCalendarEvents(viewType) {
@@ -1626,7 +1655,11 @@ function renderCalendarEvents(viewType) {
 
 function renderProjectCards(projects) {
   if (!projects.length) return `<div class="empty-state">${icon('list')}<h2>No projects here</h2><p>Projects will appear here as their status changes.</p></div>`;
-  return `<div class="project-card-list">${projects.map((project) => `<button class="project-card" data-project-card="${project.id}"><h2>${esc(project.title)}</h2><p>${ui.activeSpaceId === 'all' ? `${esc(spaceLabel(project.spaceId))} · ` : ''}${project.agendaDay ? `${esc(relativeDateLabel(project.agendaDay))} · ` : ''}${project.repeat ? `${esc(repeatLabel(project.repeat))} · ` : ''}${project.deadline ? `Deadline ${esc(deadlineLabel(project.deadline))} · ` : ''}${esc(isTrashed(project) ? 'In Trash' : project.status === 'canceled' ? 'Canceled' : areaById(project.areaId)?.title || 'Project')} · ${projectProgress(project.id)}% complete</p></button>`).join('')}</div>`;
+  return `<div class="project-card-list">${projects.map((project) => {
+    const template = project.repeatTemplateId ? projectById(project.repeatTemplateId) : null;
+    const repeatMeta = project.repeat ? `${esc(repeatLabel(project.repeat))} · ` : template ? `${icon('repeat')} Occurrence of ${esc(template.title)} · ` : '';
+    return `<button class="project-card" data-project-card="${project.id}"><h2>${esc(project.title)}</h2><p>${ui.activeSpaceId === 'all' ? `${esc(spaceLabel(project.spaceId))} · ` : ''}${project.agendaDay ? `${esc(relativeDateLabel(project.agendaDay))} · ` : ''}${repeatMeta}${project.deadline ? `Deadline ${esc(deadlineLabel(project.deadline))} · ` : ''}${esc(isTrashed(project) ? 'In Trash' : project.status === 'canceled' ? 'Canceled' : areaById(project.areaId)?.title || 'Project')} · ${projectProgress(project.id)}% complete</p></button>`;
+  }).join('')}</div>`;
 }
 
 function buildSections(tasks) {
@@ -1724,7 +1757,8 @@ function groupBy(items, getKey) {
 }
 
 function renderSection(section) {
-  const headingActions = section.heading ? `<span class="heading-actions">${section.archived ? `<button class="button heading-restore" data-action="restore-heading" data-heading-id="${section.heading.id}">Restore</button>` : `<button class="icon-button" data-action="heading-menu" data-heading-id="${section.heading.id}" aria-label="Heading options">${icon('more')}</button>`}</span>` : '';
+  const stoppedProjectTemplate = ui.view.type === 'project' && projectById(ui.view.id)?.repeat?.stopped;
+  const headingActions = section.heading && !stoppedProjectTemplate ? `<span class="heading-actions">${section.archived ? `<button class="button heading-restore" data-action="restore-heading" data-heading-id="${section.heading.id}">Restore</button>` : `<button class="icon-button" data-action="heading-menu" data-heading-id="${section.heading.id}" aria-label="Heading options">${icon('more')}</button>`}</span>` : '';
   const title = section.title ? `<div class="section-header ${section.heading ? 'heading-header' : ''} ${section.archived ? 'archived-heading-header' : ''}" ${section.heading && !section.archived ? `data-heading-id="${section.heading.id}"` : ''}>${section.symbol ? `<span class="section-symbol">${section.symbol}</span>` : ''}<h2>${esc(section.title)}</h2>${section.meta ? `<span class="section-meta">${esc(section.meta)}</span>` : ''}${headingActions}</div>` : '';
   const emptyAgenda = section.agenda && !section.tasks.length ? '<p class="agenda-empty">No plans</p>' : '';
   return `<section class="section ${section.archived ? 'archived-section' : ''}" data-section="${esc(section.key)}">${title}<ul class="task-list">${section.tasks.map(renderTask).join('')}</ul>${emptyAgenda}${!section.archived && canQuickAdd() ? renderQuickAdd(section.key, section.title || viewDefinition().title) : ''}</section>`;
@@ -1733,6 +1767,7 @@ function renderSection(section) {
 function renderTask(task) {
   const project = projectById(task.projectId);
   const area = areaById(task.areaId);
+  const projectTemplateItem = Boolean(task.workspaceTemplateId);
   const completed = ['completed', 'canceled'].includes(task.status);
   const checked = task.status !== 'open';
   const meta = [];
@@ -1743,16 +1778,21 @@ function renderTask(task) {
   if (task.bucket === 'someday' && ['project', 'area'].includes(ui.view.type)) meta.push(`<span class="meta-item">${icon('archive')} Someday</span>`);
   else if (task.scheduledFor && !['today', 'upcoming', 'tomorrow'].includes(ui.view.type)) meta.push(`<span class="meta-item ${task.scheduledFor < localDay() ? 'past-date' : ''}">${icon('calendar')} ${esc(scheduleDateLabel(task.scheduledFor))}</span>`);
   if (task.repeat) meta.push(`<span class="meta-item">${icon('repeat')} ${repeatLabel(task.repeat)}</span>`);
+  else if (projectTemplateItem) meta.push(`<span class="meta-item">${icon('repeat')} Template item</span>`);
+  else if (task.repeatTemplateId) {
+    const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
+    meta.push(`<span class="meta-item repeat-occurrence">${icon('repeat')} Occurrence${template ? ` of ${esc(template.title)}` : ''}</span>`);
+  }
   if (task.agendaDeadlineOnly) meta.push(`<span class="meta-item deadline">Deadline date</span>`);
   if (task.agendaPreview) meta.push(`<span class="meta-item">Upcoming copy</span>`);
   if (task.checklist?.length) meta.push(`<span class="meta-item">${icon('list')} ${task.checklist.filter((i) => i.done).length}/${task.checklist.length}</span>`);
   if (task.tags?.length) meta.push(...task.tags.slice(0, 2).map((tag) => `<span class="meta-item"><i class="tag-dot"></i>${esc(tag)}</span>`));
   const star = ui.view.type === 'anytime' && task.bucket === 'today' ? icon('star', 'today-star') : '';
   const bulkSelected = ui.selectedTaskIds.has(task.id);
-  return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${bulkSelected ? 'bulk-selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="true" aria-selected="${bulkSelected}">
-    <button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${checked ? 'Restore' : 'Complete'} ${esc(task.title)}"><span class="check-visual">${checked ? icon('check') : ''}</span></button>
+  return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${bulkSelected ? 'bulk-selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="${!projectTemplateItem}" aria-selected="${bulkSelected}">
+    <button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${projectTemplateItem ? 'Edit Template item' : checked ? 'Restore' : 'Complete'} ${esc(task.title)}"><span class="check-visual">${checked ? icon('check') : ''}</span></button>
     <div class="task-main" data-action="select-task" role="button" tabindex="0" aria-label="Open details for ${esc(task.title)}"><span class="task-title">${star}${esc(task.title)}</span>${task.notes ? `<div class="task-notes-preview">${esc(task.notes)}</div>` : ''}${meta.length ? `<div class="task-meta">${meta.join('')}</div>` : ''}</div>
-    <button class="task-select ${bulkSelected ? 'active' : ''}" type="button" data-action="select-bulk" aria-label="${bulkSelected ? 'Remove' : 'Add'} ${esc(task.title)} ${bulkSelected ? 'from' : 'to'} selection">${bulkSelected ? icon('check') : icon('circle')}</button>
+    ${projectTemplateItem ? '' : `<button class="task-select ${bulkSelected ? 'active' : ''}" type="button" data-action="select-bulk" aria-label="${bulkSelected ? 'Remove' : 'Add'} ${esc(task.title)} ${bulkSelected ? 'from' : 'to'} selection">${bulkSelected ? icon('check') : icon('circle')}</button>`}
     ${icon('chevron', 'task-chevron')}
   </li>`;
 }
@@ -1920,7 +1960,7 @@ function openBulkTagsModal(tasks) {
   } }), $('#modal-root'));
 }
 
-function canQuickAdd() { return !['logbook', 'trash', 'upcoming', 'repeating', 'allProjects', 'loggedProjects'].includes(ui.view.type) && !(ui.view.type === 'project' && projectById(ui.view.id)?.status !== 'open'); }
+function canQuickAdd() { return !['logbook', 'trash', 'upcoming', 'repeating', 'allProjects', 'loggedProjects'].includes(ui.view.type) && !(ui.view.type === 'project' && (projectById(ui.view.id)?.status !== 'open' || projectById(ui.view.id)?.repeat?.stopped)); }
 function renderQuickAdd(key, label = 'this list') {
   return `<button class="section-add" type="button" data-section-add="${esc(key)}" aria-label="New to-do in ${esc(label)}">${icon('plus')}<span>New to-do</span></button><div class="quick-add-row" hidden data-quick-add="${esc(key)}"><span class="quick-add-dot"></span><input class="quick-add-input" type="text" placeholder="Type a to-do…" aria-label="New to-do title in ${esc(label)}"></div>`;
 }
@@ -1972,6 +2012,7 @@ function finalizeInlineTask(input, { renderAfter = true, cancel = false } = {}) 
 function repeatLabel(repeat) {
   if (!repeat) return '';
   const every = Number(repeat.interval) > 1 ? `Every ${repeat.interval} ${repeat.frequency.replace('daily','days').replace('weekly','weeks').replace('monthly','months').replace('yearly','years')}` : ({ daily:'Daily', weekly:'Weekly', monthly:'Monthly', yearly:'Yearly' }[repeat.frequency] || 'Repeating');
+  if (repeat.stopped) return `${every} · stopped`;
   return repeat.paused ? `${every} · paused` : every;
 }
 
@@ -2075,7 +2116,11 @@ function handleContentClick(event) {
     renderContent();
   }
   const projectCard = event.target.closest('[data-project-card]');
-  if (projectCard) setView('project', projectCard.dataset.projectCard);
+  if (projectCard) {
+    const project = projectById(projectCard.dataset.projectCard);
+    if (ui.view.type === 'repeating' && project?.repeat) openRepeatingProjectEditor(project);
+    else setView('project', projectCard.dataset.projectCard);
+  }
   const sectionAdd = event.target.closest('[data-section-add]');
   if (sectionAdd) openQuickAdd(sectionAdd.closest('.section')?.querySelector('.quick-add-row'));
 }
@@ -2297,6 +2342,7 @@ function createTaskFromParsed(parsed, options = {}) {
     else if (targetView.type === 'project') {
       const project = projectById(targetView.id);
       task.bucket = 'anytime'; task.projectId = project?.id || null; task.areaId = project?.areaId || null; task.spaceId = project?.spaceId || task.spaceId; task.headingId = project && options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
+      if (project?.repeat) { task.workspaceTemplate = true; task.workspaceTemplateId = project.id; task.workspaceBlueprintKey = uid('repeat-blueprint'); }
     } else if (targetView.type === 'area') {
       const area = areaById(targetView.id);
       task.bucket = 'anytime'; task.areaId = targetView.id; task.spaceId = area?.spaceId || task.spaceId; task.headingId = options.sectionKey && options.sectionKey !== 'no-heading' ? options.sectionKey : null;
@@ -2331,6 +2377,7 @@ function toggleTask(taskId, row) {
     return;
   }
   if (task.repeat) { selectTask(task.id); showToast('Edit or pause this repeating template in its details'); return; }
+  if (task.workspaceTemplateId) { selectTask(task.id); showToast('Edit this item as part of its Repeating Project Template'); return; }
   if (task.status === 'open') {
     ui.lastCompleted = { id: task.id, status: task.status, completedAt: task.completedAt, loggedAt: task.loggedAt || null, completedWithProjectId: task.completedWithProjectId || null };
     task.status = 'completed';
@@ -2450,29 +2497,42 @@ function renderInspector(force = false) {
   const previousScrollTop = previousPane?.dataset.taskId === task.id ? previousPane.scrollTop : 0;
   const schedule = task.bucket === 'today' ? (task.evening ? 'evening' : 'today') : task.bucket;
   const spaceOptions = ui.state.spaces.map((space) => `<option value="${space.id}" ${itemSpaceId(task) === space.id ? 'selected' : ''}>${esc(space.title)}</option>`).join('');
-  const projectOptions = [`<option value="">No project</option>`, ...ui.state.projects.filter((p) => p.status === 'open').map((p) => `<option value="${p.id}" ${task.projectId === p.id ? 'selected' : ''}>${esc(spaceLabel(p.spaceId))} › ${esc(p.title)}</option>`)].join('');
+  const availableProjects = task.workspaceTemplateId
+    ? ui.state.projects.filter((project) => project.id === task.workspaceTemplateId)
+    : ui.state.projects.filter((project) => project.status === 'open' && !project.workspaceTemplate && !project.repeat);
+  const projectOptions = [`<option value="">No project</option>`, ...availableProjects.map((p) => `<option value="${p.id}" ${task.projectId === p.id ? 'selected' : ''}>${esc(spaceLabel(p.spaceId))} › ${esc(p.title)}${p.repeat ? ' (Repeating Template)' : ''}</option>`)].join('');
   const headingOptions = [`<option value="">No heading</option>`, ...ui.state.headings.filter((h) => !h.archived && (task.projectId ? h.projectId === task.projectId : h.areaId === task.areaId && !h.projectId)).map((h) => `<option value="${h.id}" ${task.headingId === h.id ? 'selected' : ''}>${esc(h.title)}</option>`)].join('');
   const repeat = task.repeat;
+  const projectTemplate = task.workspaceTemplateId ? projectById(task.workspaceTemplateId) : null;
+  const stoppedTemplate = Boolean(repeat?.stopped || projectTemplate?.repeat?.stopped);
+  const occurrenceTemplate = task.repeatTemplateId ? ui.state.tasks.find((item) => item.id === task.repeatTemplateId) : null;
+  const occurrenceDate = task.scheduledFor ? formatDate(task.scheduledFor, { weekday: 'long', month: 'long', day: 'numeric' }) : 'its scheduled date';
   inspector.innerHTML = `<div class="inspector-scroll" data-task-id="${esc(task.id)}">
-    <div class="inspector-top"><span class="inspector-status">${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating template' : 'To-do'}</span><wa-button class="inspector-close-button" size="s" appearance="plain" data-inspector-action="close" data-drawer="close" aria-label="Close details">${icon('x')}</wa-button></div>
-    <input id="inspector-title" class="inspector-title" type="text" data-field="title" value="${esc(task.title)}" placeholder="To-do title">
-    ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)">${esc(task.notes)}</textarea>`}
-    <div class="note-tools"><button class="markdown-toggle" data-inspector-action="markdown">${ui.markdownPreview ? 'Edit notes' : 'Preview Markdown'}</button><button class="markdown-toggle" data-inspector-action="find-text">Find in notes</button></div>
+    <div class="inspector-top"><span class="inspector-status">${task.status === 'completed' ? 'Completed' : task.status === 'canceled' ? 'Canceled' : isTrashed(task) ? 'In trash' : task.repeat ? 'Repeating Template' : task.workspaceTemplateId ? 'Repeating Project Template item' : task.repeatTemplateId ? 'Occurrence' : 'To-do'}</span><wa-button class="inspector-close-button" size="s" appearance="plain" data-inspector-action="close" data-drawer="close" aria-label="Close details">${icon('x')}</wa-button></div>
+    <input id="inspector-title" class="inspector-title" type="text" data-field="title" value="${esc(task.title)}" placeholder="To-do title" ${stoppedTemplate ? 'disabled' : ''}>
+    ${task.workspaceTemplateId ? `<div class="occurrence-notice">${icon('repeat')}<div><strong>Part of a Repeating Project Template</strong><p>Changes here affect future Project Occurrences only.${stoppedTemplate ? ' This stopped Template is read-only.' : ''}</p></div></div>` : ''}
+    ${task.repeatTemplateId ? `<div class="occurrence-notice">${icon('repeat')}<div><strong>Part of a repeating schedule</strong><p>${occurrenceTemplate ? `Created by “${esc(occurrenceTemplate.title)}”` : 'Created by a Repeating Template'} for ${esc(occurrenceDate)}. Editing this to-do changes only this Occurrence.</p>${occurrenceTemplate ? '<button class="checklist-add" type="button" data-inspector-action="open-repeat-template">Open Repeating Template</button>' : ''}</div></div>` : ''}
+    ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)" ${stoppedTemplate ? 'disabled' : ''}>${esc(task.notes)}</textarea>`}
+    ${stoppedTemplate ? '' : `<div class="note-tools"><button class="markdown-toggle" data-inspector-action="markdown">${ui.markdownPreview ? 'Edit notes' : 'Preview Markdown'}</button><button class="markdown-toggle" data-inspector-action="find-text">Find in notes</button></div>`}
     ${ui.noteFindOpen ? `<div class="note-find-bar"><input type="search" data-note-find-query value="${esc(ui.noteFindQuery)}" placeholder="Find in notes" aria-label="Find in notes"><span data-note-find-count>${noteFindLabel(task)}</span><button class="icon-button" data-inspector-action="find-previous" aria-label="Previous match">↑</button><button class="icon-button" data-inspector-action="find-next" aria-label="Next match">↓</button><button class="icon-button" data-inspector-action="close-find" aria-label="Close find">${icon('x')}</button></div>` : ''}
     ${!repeat ? `<div class="detail-group"><span class="detail-label">When</span><div class="schedule-chips">
       ${[['inbox','Inbox'],['today','Today'],['evening','This evening'],['anytime','Anytime'],['someday','Someday']].map(([value, label]) => `<button class="chip ${schedule === value ? 'active' : ''}" data-schedule="${value}">${label}</button>`).join('')}
     </div><div class="detail-row" style="margin-top:9px"><input class="detail-input" type="date" data-field="scheduledFor" value="${task.scheduledFor || ''}" aria-label="Start date"><button class="checklist-add inline-add" type="button" data-inspector-action="clear-date">Clear</button></div></div>` : ''}
-    <div class="detail-group"><span class="detail-label">Checklist</span><div class="checklist">${task.checklist.map((item, index) => `<div class="checklist-item" data-check-id="${item.id}" draggable="true"><span class="checklist-reorder"><button type="button" data-inspector-action="move-check-up" aria-label="Move checklist item up" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" data-inspector-action="move-check-down" aria-label="Move checklist item down" ${index === task.checklist.length - 1 ? 'disabled' : ''}>↓</button></span><input type="checkbox" data-check-field="done" ${item.done ? 'checked' : ''} ${repeat ? 'disabled' : ''} aria-label="${repeat ? 'Checklist items can be completed on generated copies only' : 'Complete checklist item'}"><input type="text" data-check-field="title" value="${esc(item.title)}" aria-label="Checklist item"><button class="checklist-remove" data-inspector-action="remove-check" aria-label="Remove checklist item">×</button></div>`).join('')}</div>${repeat ? '<p class="detail-help">Complete checklist items on each generated copy. This template controls future copies.</p>' : ''}<button class="checklist-add" data-inspector-action="add-check">+ Add item</button></div>
-    <div class="detail-group"><label class="detail-label" for="task-space">Space</label><select id="task-space" class="detail-select" data-field="spaceId">${spaceOptions}</select><p class="detail-help">Choosing a different Space removes this to-do from its current project or area.</p></div>
-    <div class="detail-group"><label class="detail-label" for="task-project">Project</label><select id="task-project" class="detail-select" data-field="projectId">${projectOptions}</select></div>
-    ${task.projectId || task.areaId ? `<div class="detail-group"><label class="detail-label" for="task-heading">Heading</label><select id="task-heading" class="detail-select" data-field="headingId">${headingOptions}</select></div>` : ''}
-    <div class="detail-group"><label class="detail-label" for="task-reminder">Reminder</label><input id="task-reminder" class="detail-input" type="datetime-local" data-field="reminderAt" value="${task.reminderAt || ''}"></div>
-    <div class="detail-group"><label class="detail-label" for="task-deadline">Deadline</label><input id="task-deadline" class="detail-input" type="date" data-field="deadline" value="${task.deadline || ''}"></div>
-    <div class="detail-group"><span class="detail-label">Tags</span>${renderTagPicker(task.tags, 'task')}</div>
-    <div class="detail-group"><span class="detail-label">Repeat</span>${repeat ? `<div class="repeat-grid"><select class="detail-select" data-repeat-field="mode"><option value="fixed" ${repeat.mode === 'fixed' ? 'selected' : ''}>On schedule</option><option value="afterCompletion" ${repeat.mode === 'afterCompletion' ? 'selected' : ''}>After completion</option></select><select class="detail-select" data-repeat-field="frequency"><option value="daily" ${repeat.frequency === 'daily' ? 'selected' : ''}>Day</option><option value="weekly" ${repeat.frequency === 'weekly' ? 'selected' : ''}>Week</option><option value="monthly" ${repeat.frequency === 'monthly' ? 'selected' : ''}>Month</option><option value="yearly" ${repeat.frequency === 'yearly' ? 'selected' : ''}>Year</option></select><input class="detail-input" type="number" min="1" max="365" data-repeat-field="interval" value="${repeat.interval || 1}" aria-label="Repeat interval"><input class="detail-input" type="date" data-repeat-field="nextDate" value="${repeat.nextDate || localDay()}" aria-label="Next occurrence"></div>${repeat.frequency === 'weekly' ? `<div class="weekday-row">${renderWeekdayPicker(repeat.weekdays, 'data-weekday', 'Repeat on')}</div>` : ''}<div class="settings-row"><label for="repeat-paused">Pause schedule</label><input id="repeat-paused" type="checkbox" data-repeat-field="paused" ${repeat.paused ? 'checked' : ''}></div><button class="checklist-add" data-inspector-action="stop-repeat">Stop repeating</button>` : `<button class="checklist-add" data-inspector-action="start-repeat">Make repeating…</button>`}</div>
-    <div class="inspector-actions">${!isTrashed(task) ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === 'open' && !task.repeat ? '<button class="button" data-inspector-action="cancel">Cancel to-do</button>' : ''}` : ''}${isTrashed(task) ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}</div>
+    <div class="detail-group"><span class="detail-label">Checklist</span><div class="checklist">${task.checklist.map((item, index) => `<div class="checklist-item" data-check-id="${item.id}" draggable="${!stoppedTemplate}"><span class="checklist-reorder">${stoppedTemplate ? '' : `<button type="button" data-inspector-action="move-check-up" aria-label="Move checklist item up" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" data-inspector-action="move-check-down" aria-label="Move checklist item down" ${index === task.checklist.length - 1 ? 'disabled' : ''}>↓</button>`}</span><input type="checkbox" data-check-field="done" ${item.done ? 'checked' : ''} ${repeat || task.workspaceTemplateId ? 'disabled' : ''} aria-label="${repeat || task.workspaceTemplateId ? 'Checklist items can be completed on generated copies only' : 'Complete checklist item'}"><input type="text" data-check-field="title" value="${esc(item.title)}" aria-label="Checklist item" ${stoppedTemplate ? 'disabled' : ''}>${stoppedTemplate ? '' : '<button class="checklist-remove" data-inspector-action="remove-check" aria-label="Remove checklist item">×</button>'}</div>`).join('')}</div>${repeat || task.workspaceTemplateId ? '<p class="detail-help">Complete checklist items on each generated copy. This Template controls future copies.</p>' : ''}${stoppedTemplate ? '' : '<button class="checklist-add" data-inspector-action="add-check">+ Add item</button>'}</div>
+    <div class="detail-group"><label class="detail-label" for="task-space">Space</label><select id="task-space" class="detail-select" data-field="spaceId" ${stoppedTemplate || task.workspaceTemplateId ? 'disabled' : ''}>${spaceOptions}</select><p class="detail-help">${task.workspaceTemplateId ? 'This item belongs to its Repeating Project Template.' : 'Choosing a different Space removes this to-do from its current project or area.'}</p></div>
+    <div class="detail-group"><label class="detail-label" for="task-project">Project</label><select id="task-project" class="detail-select" data-field="projectId" ${stoppedTemplate || task.workspaceTemplateId ? 'disabled' : ''}>${projectOptions}</select></div>
+    ${task.projectId || task.areaId ? `<div class="detail-group"><label class="detail-label" for="task-heading">Heading</label><select id="task-heading" class="detail-select" data-field="headingId" ${stoppedTemplate ? 'disabled' : ''}>${headingOptions}</select></div>` : ''}
+    <div class="detail-group"><label class="detail-label" for="task-reminder">Reminder</label><input id="task-reminder" class="detail-input" type="datetime-local" data-field="reminderAt" value="${task.reminderAt || ''}" ${stoppedTemplate ? 'disabled' : ''}></div>
+    <div class="detail-group"><label class="detail-label" for="task-deadline">Deadline</label><input id="task-deadline" class="detail-input" type="date" data-field="deadline" value="${task.deadline || ''}" ${stoppedTemplate ? 'disabled' : ''}></div>
+    <div class="detail-group"><span class="detail-label">Tags</span>${stoppedTemplate ? `<p class="detail-help">${task.tags.length ? esc(task.tags.join(', ')) : 'No tags'}</p>` : renderTagPicker(task.tags, 'task')}</div>
+    ${!task.repeatTemplateId && !task.workspaceTemplateId ? `<div class="detail-group"><span class="detail-label">Repeat</span>${repeat ? `<div class="repeat-summary"><strong>${esc(repeatLabel(repeat))}</strong><span>Next Occurrence ${esc(scheduleDateLabel(repeat.nextDate))}</span></div>${!repeat.stopped ? '<button class="checklist-add" data-inspector-action="edit-repeat">Edit repeating schedule…</button>' : '<p class="detail-help">This schedule is stopped and kept only as history.</p>'}` : `<button class="checklist-add" data-inspector-action="edit-repeat">Make repeating…</button>`}</div>` : ''}
+    <div class="inspector-actions">${task.repeat ? `<button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button>${stoppedTemplate ? `<button class="danger-button" data-inspector-action="delete-repeat-template">${icon('trash')} Delete Repeating Template</button>` : ''}` : task.workspaceTemplateId ? `${stoppedTemplate ? '' : `<button class="danger-button" data-inspector-action="remove-template-item">${icon('trash')} Remove from Template</button>`}` : `${!isTrashed(task) ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === 'open' && task.repeatTemplateId ? '<button class="button" data-inspector-action="skip-occurrence">Skip Occurrence</button>' : task.status === 'open' ? '<button class="button" data-inspector-action="cancel">Cancel to-do</button>' : ''}` : ''}${isTrashed(task) ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon('trash')} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon('trash')} Move to Trash</button>`}`}</div>
   </div>`;
   const nextPane = $('.inspector-scroll', inspector);
+  nextPane?.addEventListener('input', handleInspectorInput);
+  nextPane?.addEventListener('change', handleInspectorChange);
+  nextPane?.addEventListener('click', handleInspectorClick);
+  nextPane?.addEventListener('keydown', handleInspectorKeydown);
   if (nextPane && previousScrollTop) nextPane.scrollTop = previousScrollTop;
   mountChecklistSortable(inspector, (orderedIds) => {
     const activeTask = currentTask();
@@ -2659,14 +2719,20 @@ function handleInspectorChange(event) {
 function handleInspectorClick(event) {
   const task = currentTask();
   if (!task) return;
-  const createTag = event.target.closest('[data-create-tag="task"]');
+  const occurrenceTemplate = task.repeatTemplateId ? ui.state.tasks.find((item) => item.id === task.repeatTemplateId) : null;
+  const closestTarget = (selector) => {
+    const direct = event.target.closest?.(selector);
+    if (direct) return direct;
+    return event.composedPath?.().find((item) => item instanceof Element && item.matches(selector)) || null;
+  };
+  const createTag = closestTarget('[data-create-tag="task"]');
   if (createTag) {
     const picker = createTagInPicker(createTag);
     task.tags = selectedPickerTags(picker);
     scheduleSave(); renderSidebar(); renderContent();
     return;
   }
-  const schedule = event.target.closest('[data-schedule]')?.dataset.schedule;
+  const schedule = closestTarget('[data-schedule]')?.dataset.schedule;
   if (schedule) {
     const nextDate = ['today', 'evening'].includes(schedule) ? localDay() : null;
     moveReminderToDate(task, nextDate);
@@ -2675,8 +2741,9 @@ function handleInspectorClick(event) {
     task.scheduledFor = nextDate;
     scheduleSave(); render(true); return;
   }
-  const action = event.target.closest('[data-inspector-action]')?.dataset.inspectorAction;
+  const action = closestTarget('[data-inspector-action]')?.dataset.inspectorAction;
   if (action === 'close') closeInspector();
+  if (action === 'open-repeat-template' && occurrenceTemplate) { selectTask(occurrenceTemplate.id); return; }
   if (action === 'trash') {
     if (task.repeatTemplateId) {
       const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
@@ -2688,6 +2755,24 @@ function handleInspectorClick(event) {
     task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = null; task.completedWithProjectId = null;
     applyLogbookPolicy(); scheduleSave(); closeInspector(); render(); showToast('To-do canceled', 'Undo', () => {
       task.status = 'open'; task.completedAt = null; task.loggedAt = null; scheduleSave(); render();
+    });
+  }
+  if (action === 'skip-occurrence') {
+    const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
+    task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = task.completedAt; task.completedWithProjectId = null;
+    if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
+    materializeRecurringTasks(); scheduleSave(); closeInspector(); render(); showToast('Occurrence skipped');
+  }
+  if (action === 'delete-repeat-template') {
+    confirmAction('Delete this Repeating Template forever?', 'Its existing Occurrences remain in your history. This cannot be undone.', 'Delete forever', () => {
+      ui.state.tasks = ui.state.tasks.filter((item) => item.id !== task.id);
+      scheduleSave(); closeInspector(); render(); showToast('Repeating Template deleted');
+    });
+  }
+  if (action === 'remove-template-item' && task.workspaceTemplateId) {
+    confirmAction('Remove this item from the Repeating Project Template?', 'Existing Project Occurrences keep their own copy. Future Occurrences will not include it.', 'Remove item', () => {
+      ui.state.tasks = ui.state.tasks.filter((item) => item.id !== task.id);
+      scheduleSave(); closeInspector(); render(); showToast('Item removed from Repeating Project Template');
     });
   }
   if (action === 'restore') {
@@ -2716,11 +2801,12 @@ function handleInspectorClick(event) {
   if (action === 'find-previous') updateNoteFind(-1, true);
   if (action === 'find-next') updateNoteFind(1, true);
   if (action === 'close-find') { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(true); }
-  if (action === 'start-repeat') { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(true); }
+  if (action === 'edit-repeat') { openRepeatingTemplateEditor(task); return; }
+  if (action === 'start-repeat') { openRepeatingTemplateEditor(task); return; }
   if (action === 'stop-repeat') { task.repeat = null; scheduleSave(); render(true); }
   if (action === 'add-check') { task.checklist.push({ id: uid('check'), title: '', done: false }); scheduleSave(); renderInspector(true); $$('.checklist-item input[type="text"]', inspector).at(-1)?.focus(); }
   if (action === 'move-check-up' || action === 'move-check-down') {
-    const id = event.target.closest('[data-check-id]')?.dataset.checkId;
+    const id = closestTarget('[data-check-id]')?.dataset.checkId;
     const from = task.checklist.findIndex((item) => item.id === id);
     const to = from + (action === 'move-check-up' ? -1 : 1);
     if (from >= 0 && to >= 0 && to < task.checklist.length) {
@@ -2729,15 +2815,86 @@ function handleInspectorClick(event) {
       setTimeout(() => $(`[data-check-id="${id}"] [data-inspector-action="${action}"]`, inspector)?.focus(), 20);
     }
   }
-  if (action === 'remove-check') { const id = event.target.closest('[data-check-id]')?.dataset.checkId; task.checklist = task.checklist.filter((item) => item.id !== id); scheduleSave(); renderInspector(true); renderContent(); }
+  if (action === 'remove-check') { const id = closestTarget('[data-check-id]')?.dataset.checkId; task.checklist = task.checklist.filter((item) => item.id !== id); scheduleSave(); renderInspector(true); renderContent(); }
   if (action === 'clear-date') { moveReminderToDate(task, null); task.bucket = 'anytime'; task.scheduledFor = null; task.evening = false; scheduleSave(); render(true); }
-  const weekday = event.target.closest('[data-weekday]');
+  const weekday = closestTarget('[data-weekday]');
   if (weekday && task.repeat) {
     const day = Number(weekday.dataset.weekday);
     task.repeat.weekdays ||= [];
     task.repeat.weekdays = task.repeat.weekdays.includes(day) ? task.repeat.weekdays.filter((item) => item !== day) : [...task.repeat.weekdays, day].sort();
     scheduleSave(); renderInspector(true);
   }
+}
+
+function openRepeatingTemplateEditor(task) {
+  const nextDate = task.repeat?.nextDate || task.scheduledFor || addDays(localDay(), 7);
+  const initial = task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false };
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(RepeatingTemplateDialog, {
+    title: task.title,
+    value: initial,
+    fallbackDate: nextDate,
+    onClose: closeModal,
+    onSave: (repeat) => {
+      const savedRepeat = { ...repeat, weekdays: [...(repeat.weekdays || [])], stopped: false };
+      if (task.repeat) task.repeat = savedRepeat;
+      else {
+        const templateId = uid('repeat');
+        const template = {
+          ...cloneData(task), id: templateId, repeat: savedRepeat, repeatTemplateId: null, workspaceTemplate: true,
+          status: 'open', previousStatus: null, scheduledFor: repeat.nextDate, bucket: 'upcoming', completedAt: null, loggedAt: null, trashedAt: null,
+          checklist: task.checklist.map((item) => ({ ...item, id: uid('check'), done: false })), order: Number.MAX_SAFE_INTEGER,
+        };
+        task.repeatTemplateId = templateId;
+        ui.state.tasks.push(template);
+      }
+      task.scheduledFor = repeat.nextDate;
+      task.bucket = repeat.nextDate <= localDay() ? 'today' : 'upcoming';
+      moveReminderToDate(task, repeat.nextDate);
+      if (Number.isFinite(repeat.deadlineOffset)) task.deadline = addDays(repeat.nextDate, repeat.deadlineOffset);
+      scheduleSave(); closeModal(); render(true); showToast(savedRepeat.paused ? 'Repeating schedule paused' : 'Repeating schedule saved');
+    },
+    onStop: () => {
+      task.repeat = { ...task.repeat, paused: true, stopped: true };
+      scheduleSave(); closeModal(); render(true); showToast('Repeating schedule stopped');
+    },
+  }), $('#modal-root'));
+}
+
+function openRepeatingProjectEditor(project) {
+  if (!project?.repeat) return;
+  const nextDate = project.repeat.nextDate || project.scheduledFor || addDays(localDay(), 7);
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modalUsesPreact = true;
+  renderPreact(h(RepeatingTemplateDialog, {
+    title: project.title,
+    value: { ...project.repeat, weekdays: [...(project.repeat.weekdays || [])] },
+    fallbackDate: nextDate,
+    stopped: Boolean(project.repeat.stopped),
+    onClose: closeModal,
+    onOpenContents: () => { closeModal(); setView('project', project.id); },
+    onSave: (repeat) => {
+      project.repeat = { ...repeat, weekdays: [...(repeat.weekdays || [])], stopped: false };
+      project.scheduledFor = repeat.nextDate;
+      project.bucket = repeat.nextDate <= localDay() ? 'today' : 'upcoming';
+      if (Number.isFinite(repeat.deadlineOffset)) project.deadline = addDays(repeat.nextDate, repeat.deadlineOffset);
+      scheduleSave(); closeModal(); render(true); showToast(repeat.paused ? 'Repeating Project paused' : 'Repeating Project schedule saved');
+    },
+    onStop: () => {
+      project.repeat = { ...project.repeat, paused: true, stopped: true };
+      scheduleSave(); closeModal(); render(true); showToast('Repeating Project stopped');
+    },
+    onDelete: () => {
+      closeModal();
+      confirmAction('Delete this Repeating Project Template forever?', 'Existing Project Occurrences remain in history. This cannot be undone.', 'Delete forever', () => {
+        ui.state.projects = ui.state.projects.filter((item) => item.id !== project.id);
+        ui.state.headings = ui.state.headings.filter((item) => item.workspaceTemplateId !== project.id);
+        ui.state.tasks = ui.state.tasks.filter((item) => item.workspaceTemplateId !== project.id);
+        scheduleSave(); setView('repeating'); showToast('Repeating Project Template deleted');
+      });
+    },
+  }), $('#modal-root'));
 }
 
 function handleInspectorKeydown(event) {
@@ -2818,7 +2975,7 @@ function openMoveTaskModal(taskOrTasks) {
       else if (value.startsWith('project:')) { const project = projectById(value.slice(8)); item.projectId = project.id; item.areaId = project.areaId || null; item.spaceId = project.spaceId || item.spaceId; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
       else if (value.startsWith('heading:')) { const heading = ui.state.headings.find((candidate) => candidate.id === value.slice(8)); const project = projectById(heading.projectId); const area = areaById(heading.areaId); item.headingId = heading.id; item.projectId = project?.id || null; item.areaId = project?.areaId || heading.areaId || null; item.spaceId = project?.spaceId || area?.spaceId || item.spaceId; if (item.bucket === 'inbox') item.bucket = 'anytime'; }
     });
-    scheduleSave(); closeModal(); clearTaskSelection(); showToast(newTitle ? `Moved to new project “${newTitle}”` : `${tasks.length === 1 ? 'To-do' : `${tasks.length} to-dos`} moved`);
+    scheduleSave(); closeModal(); clearTaskSelection(); render(true); showToast(newTitle ? `Moved to new project “${newTitle}”` : `${tasks.length === 1 ? 'To-do' : `${tasks.length} to-dos`} moved`);
     }
   }), $('#modal-root'));
 }
@@ -2851,14 +3008,15 @@ function searchItems(query, searchEverything = false) {
   ].map(([type,title,iconName]) => ({ kind:'view', type, title, meta:'Special list', icon:iconName }));
   const spaces = ui.state.spaces.map((space) => ({ kind:'space', id:space.id, title:space.title, meta:'Space', icon:'layers' }));
   const areas = ui.state.areas.map((area) => ({ kind:'view', type:'area', id:area.id, title:area.title, meta:`${spaceLabel(area.spaceId)} · Area`, icon:'circle' }));
-  const projects = ui.state.projects.filter((p) => p.status === 'open' || isCompletedButVisible(p)).map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:`${spaceLabel(p.spaceId)} · ${areaById(p.areaId)?.title || 'Project'}`, icon:'list' }));
-  const headings = ui.state.headings.filter((h) => !h.archived).map((heading) => { const parent = projectById(heading.projectId) || areaById(heading.areaId); return { kind:'heading', id:heading.id, projectId:heading.projectId, areaId:heading.areaId, title:heading.title, meta:`${spaceLabel(parent?.spaceId)} · ${parent?.title || 'Heading'}`, icon:'heading' }; });
+  const projects = ui.state.projects.filter((p) => !p.workspaceTemplate && !p.repeat && (p.status === 'open' || isCompletedButVisible(p))).map((p) => ({ kind:'view', type:'project', id:p.id, title:p.title, meta:`${spaceLabel(p.spaceId)} · ${areaById(p.areaId)?.title || 'Project'}`, icon:'list' }));
+  const repeatingProjects = ui.state.projects.filter((p) => p.workspaceTemplate || p.repeat).map((p) => ({ kind:'view', type:'repeating', id:p.id, title:p.title, meta:'Repeating Project Template', icon:'repeat' }));
+  const headings = ui.state.headings.filter((h) => !h.archived && !h.workspaceTemplateId).map((heading) => { const parent = projectById(heading.projectId) || areaById(heading.areaId); return { kind:'heading', id:heading.id, projectId:heading.projectId, areaId:heading.areaId, title:heading.title, meta:`${spaceLabel(parent?.spaceId)} · ${parent?.title || 'Heading'}`, icon:'heading' }; });
   const tags = [...new Set([...ui.state.tasks.flatMap((task) => effectiveTags(task)), ...ui.state.projects.flatMap((project) => effectiveProjectTags(project)), ...ui.state.areas.flatMap((area) => area.tags || [])])].map((tag) => ({ kind:'view', type:'tag', id:tag, title:tag, meta:'Tag', icon:'tag' }));
   const taskSource = searchEverything ? ui.state.tasks : ui.state.tasks.filter((task) => task.status === 'open' || isCompletedButVisible(task));
   const tasks = taskSource.map((task) => ({ kind:'task', id:task.id, title:task.title, meta:`${spaceLabel(itemSpaceId(task))} · ${task.repeat ? 'Repeating template' : isLogged(task) ? 'Logbook' : projectById(task.projectId)?.title || areaById(task.areaId)?.title || 'To-do'}`, icon:task.repeat ? 'repeat' : 'circle', searchText: searchEverything ? `${task.title} ${task.notes || ''} ${effectiveTags(task).join(' ')} ${(task.checklist || []).map((i) => i.title).join(' ')}` : `${task.title} ${effectiveTags(task).join(' ')}` }));
   const actions = [{ kind:'settings', title:'Settings', meta:'App preferences', icon:'settings' }, { kind:'space-settings', title:'Spaces & Schedule', meta:'Launch-time focus', icon:'clock' }];
   const queryTokens = q.split(/\s+/).filter(Boolean);
-  const matches = [...lists, ...special, ...actions, ...spaces, ...areas, ...projects, ...headings, ...tags, ...tasks].filter((item) => {
+  const matches = [...lists, ...special, ...actions, ...spaces, ...areas, ...projects, ...repeatingProjects, ...headings, ...tags, ...tasks].filter((item) => {
     const haystack = `${item.title} ${item.meta} ${item.searchText || ''}`.toLowerCase();
     return !q || queryTokens.every((token) => haystack.includes(token));
   }).slice(0, 24);
@@ -2911,16 +3069,21 @@ function openNewListModal(defaults = {}) {
 
 function openHeadingModal(headingId = null) {
   const heading = ui.state.headings.find((item) => item.id === headingId);
+  const templateProject = projectById(heading?.workspaceTemplateId || (ui.view.type === 'project' ? ui.view.id : null));
   const defaultParent = heading?.projectId ? `project:${heading.projectId}` : heading?.areaId ? `area:${heading.areaId}` : `${ui.view.type}:${ui.view.id}`;
-  const parentOptions = [
+  const normalParentOptions = [
     ...ui.state.areas.map((area) => ({ value: `area:${area.id}`, label: `${spaceLabel(area.spaceId)} › ${area.title} (Area)` })),
     ...ui.state.projects.filter((project) => project.status === 'open' && !project.repeat).map((project) => ({ value: `project:${project.id}`, label: `${spaceLabel(project.spaceId)} › ${project.title} (Project)` }))
   ];
+  const parentOptions = templateProject?.repeat
+    ? [{ value: `project:${templateProject.id}`, label: `${spaceLabel(templateProject.spaceId)} › ${templateProject.title} (Repeating Template)` }]
+    : normalParentOptions;
   const initialParent = parentOptions.some((option) => option.value === defaultParent) ? defaultParent : parentOptions[0]?.value || '';
   modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   modalUsesPreact = true;
   renderPreact(h(HeadingDialog, {
     heading: heading || null,
+    isTemplate: Boolean(templateProject?.repeat),
     parents: parentOptions,
     initialParent,
     onClose: closeModal,
@@ -2939,7 +3102,7 @@ function openHeadingModal(headingId = null) {
             task.spaceId = destination?.spaceId || destinationArea?.spaceId || task.spaceId;
           });
         }
-      } else ui.state.headings.push({ id: uid('heading'), projectId: parentType === 'project' ? parentId : null, areaId: parentType === 'area' ? parentId : null, title, archived: false, order: headingsFor(parentType, parentId, true).length });
+      } else ui.state.headings.push({ id: uid('heading'), projectId: parentType === 'project' ? parentId : null, areaId: parentType === 'area' ? parentId : null, title, archived: false, order: headingsFor(parentType, parentId, true).length, ...(templateProject?.repeat ? { workspaceTemplateId: templateProject.id, workspaceBlueprintKey: uid('repeat-heading-blueprint') } : {}) });
       scheduleSave(); closeModal(); render();
     },
     onAction: (action) => {
@@ -3000,6 +3163,7 @@ function moveProjectToTrash(projectId) {
 function openProjectModalPreact(projectId) {
   const project = projectById(projectId);
   if (!project) return;
+  if (project.repeat) { openRepeatingProjectEditor(project); return; }
   const archivedHeadings = ui.state.headings.filter((heading) => heading.projectId === project.id && heading.archived);
   modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   modalUsesPreact = true;
@@ -3022,7 +3186,33 @@ function openProjectModalPreact(projectId) {
       if (project.bucket === 'upcoming' && !project.scheduledFor) project.scheduledFor = addDays(localDay(), 1);
       project.deadline = draft.deadline || null;
       project.tags = cleanTagList(draft.tags || []);
-      project.repeat = draft.repeat ? { ...draft.repeat, weekdays: [...(draft.repeat.weekdays || [])], deadlineOffset: dayDistance(draft.repeat.nextDate, project.deadline) } : null;
+      const savedRepeat = draft.repeat ? { ...draft.repeat, weekdays: [...(draft.repeat.weekdays || [])], deadlineOffset: dayDistance(draft.repeat.nextDate, project.deadline), stopped: false } : null;
+      if (!project.repeat && savedRepeat) {
+        const templateId = uid('repeat-project');
+        const template = { ...cloneData(project), id: templateId, repeat: savedRepeat, repeatTemplateId: null, workspaceTemplate: true, status: 'open', previousStatus: null, completedAt: null, loggedAt: null, trashedAt: null, order: Number.MAX_SAFE_INTEGER };
+        ui.state.projects.push(template);
+        const headingMap = new Map();
+        ui.state.headings.filter((heading) => heading.projectId === project.id && !heading.workspaceTemplateId).forEach((heading) => {
+          const templateHeading = { ...cloneData(heading), id: uid('repeat-heading'), projectId: templateId, workspaceTemplateId: templateId, workspaceBlueprintKey: heading.id };
+          headingMap.set(heading.id, templateHeading.id);
+          ui.state.headings.push(templateHeading);
+        });
+        ui.state.tasks.filter((task) => task.projectId === project.id && !task.workspaceTemplateId).forEach((task) => {
+          ui.state.tasks.push({
+            ...cloneData(task), id: uid('repeat-task'), projectId: templateId, headingId: task.headingId ? headingMap.get(task.headingId) || null : null,
+            workspaceTemplate: true, workspaceTemplateId: templateId, workspaceBlueprintKey: task.id, repeat: null, repeatTemplateId: null,
+            status: 'open', previousStatus: null, completedAt: null, loggedAt: null, trashedAt: null,
+            checklist: task.checklist.map((item) => ({ ...item, id: uid('repeat-check'), done: false })),
+          });
+        });
+        project.repeatTemplateId = templateId;
+        project.repeat = null;
+      } else if (project.repeat && !savedRepeat) project.repeat = { ...project.repeat, paused: true, stopped: true };
+      else project.repeat = savedRepeat;
+      if (project.repeatTemplateId && savedRepeat) {
+        project.scheduledFor = savedRepeat.nextDate;
+        project.bucket = savedRepeat.nextDate <= localDay() ? 'today' : 'upcoming';
+      }
       ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.areaId = project.areaId; task.spaceId = project.spaceId; });
       scheduleSave(); closeModal(); render();
     },
@@ -3049,6 +3239,16 @@ function openProjectModalPreact(projectId) {
         return;
       }
       if (action === 'complete') { closeModal(); resolveProjectCompletion(project); return; }
+      if (action === 'skip') {
+        const skippedAt = new Date().toISOString();
+        project.status = 'canceled'; project.completedAt = skippedAt; project.loggedAt = skippedAt;
+        ui.state.tasks.filter((task) => task.projectId === project.id && task.status === 'open' && !task.repeat).forEach((task) => {
+          task.status = 'canceled'; task.completedAt = skippedAt; task.loggedAt = skippedAt; task.completedWithProjectId = project.id;
+        });
+        const template = projectById(project.repeatTemplateId);
+        if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
+        scheduleSave(); closeModal(); setView('upcoming'); showToast('Project Occurrence skipped'); return;
+      }
       if (action === 'cancel') finishProject(project, 'canceled', 'canceled');
       else if (action === 'restore') {
         project.status = 'open'; project.completedAt = null; project.loggedAt = null;
@@ -3441,7 +3641,7 @@ function handleGlobalKeydown(event) {
     event.preventDefault(); renderInspector(); setTimeout(() => $('[data-field="scheduledFor"]', inspector)?.focus(), 20); return;
   }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r' && ui.selectedTaskId) {
-    event.preventDefault(); const task = currentTask(); if (!task.repeat) { const nextDate = task.scheduledFor || addDays(localDay(), 7); task.repeat = { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false }; task.bucket = 'upcoming'; task.scheduledFor = nextDate; scheduleSave(); render(true); } return;
+    event.preventDefault(); const task = currentTask(); if (!task.repeatTemplateId) openRepeatingTemplateEditor(task); return;
   }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && ['f', 'm'].includes(event.key.toLowerCase()) && (ui.selectedTaskId || ui.selectedTaskIds.size)) { event.preventDefault(); openMoveTaskModal(ui.selectedTaskIds.size ? selectedTasks() : currentTask()); return; }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') { event.preventDefault(); const logged = logCompletedNow(); scheduleSave(); render(); showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`); return; }

@@ -70,6 +70,7 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
 .objects-dialog.dialog-settings { --width: min(610px, calc(100vw - 24px)); }
 .objects-dialog.dialog-spaces { --width: min(860px, calc(100vw - 24px)); }
 .objects-dialog.dialog-project { --width: min(650px, calc(100vw - 24px)); }
+.objects-dialog.dialog-repeat { --width: min(560px, calc(100vw - 24px)); }
 .objects-dialog::part(dialog) {
   max-height: calc(100dvh - 24px);
   border: 1px solid var(--border);
@@ -119,6 +120,7 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
     border-radius: 0;
     opacity: 1;
     transform: none;
+    pointer-events: auto;
     box-shadow: none;
   }
 }

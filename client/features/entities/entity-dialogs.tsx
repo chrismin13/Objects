@@ -30,7 +30,7 @@ function SpacePinCheckbox({ space, disabled, onChange }: { space: Space; disable
   return <WaCheckbox ref={checkbox} disabled={disabled} onInput={(event: Event) => onChange(eventChecked(event))}>Sidebar</WaCheckbox>;
 }
 
-function RepeatEditor({ value, fallbackDate, onChange }: { value: RepeatRule | null; fallbackDate: string; onChange(value: RepeatRule | null): void }) {
+function RepeatEditor({ value, fallbackDate, onChange, showStop = true }: { value: RepeatRule | null; fallbackDate: string; onChange(value: RepeatRule | null): void; showStop?: boolean }) {
   if (!value) return <WaButton size="s" appearance="plain" onClick={() => onChange({ mode: "fixed", frequency: "weekly", interval: 1, weekdays: [], nextDate: fallbackDate, paused: false })}>Make repeating…</WaButton>;
   const update = <K extends keyof RepeatRule>(key: K, next: RepeatRule[K]) => onChange({ ...value, [key]: next });
   return <div class="entity-repeat-editor">
@@ -41,8 +41,32 @@ function RepeatEditor({ value, fallbackDate, onChange }: { value: RepeatRule | n
       <label class="entity-native-field">Next occurrence<input type="date" value={value.nextDate || fallbackDate} onInput={(event) => update("nextDate", event.currentTarget.value)} /></label>
     </div>
     {value.frequency === "weekly" && <WeekdayPicker value={value.weekdays || []} onChange={(weekdays) => update("weekdays", weekdays)} />}
-    <WaButton size="s" appearance="plain" variant="danger" onClick={() => onChange(null)}>Stop repeating</WaButton>
+    {showStop && <WaButton size="s" appearance="plain" variant="danger" onClick={() => onChange(null)}>Stop repeating</WaButton>}
   </div>;
+}
+
+export function RepeatingTemplateDialog({ title, value, fallbackDate, stopped = false, onClose, onSave, onStop, onOpenContents, onDelete }: {
+  title: string;
+  value: RepeatRule;
+  fallbackDate: string;
+  stopped?: boolean;
+  onClose(): void;
+  onSave(value: RepeatRule): void;
+  onStop(): void;
+  onOpenContents?(): void;
+  onDelete?(): void;
+}) {
+  const dialog = useRef<OverlayElement | null>(null);
+  const [draft, setDraft] = useState<RepeatRule>({ ...value, weekdays: [...(value.weekdays || [])] });
+  useWebAwesomeOverlay(dialog, onClose);
+  return <WaDialog ref={dialog} class="objects-dialog dialog-repeat" label="Repeating schedule" light-dismiss>
+    <div class="entity-dialog">
+      <p>{stopped ? `“${title}” is stopped and kept as read-only history. Its existing Occurrences are unchanged.` : `Changes to “${title}” affect future Occurrences only. Existing Occurrences keep their own dates and edits.`}</p>
+      {stopped ? <div class="entity-repeat-stopped"><strong>Stopped schedule</strong><span>No new Occurrences will be created.</span></div> : <><RepeatEditor value={draft} fallbackDate={fallbackDate} showStop={false} onChange={(next) => next && setDraft(next)} /><label class="entity-pause-row"><span><strong>Pause schedule</strong><small>Keep the Template without creating new Occurrences.</small></span><input type="checkbox" checked={draft.paused} onChange={(event) => setDraft((current) => ({ ...current, paused: event.currentTarget.checked }))} /></label><div class="entity-danger-zone"><div><strong>Stop repeating</strong><p>This keeps the schedule as read-only history. It cannot be resumed.</p></div><WaButton size="s" appearance="plain" variant="danger" onClick={onStop}>Stop</WaButton></div></>}
+      {stopped && onDelete && <div class="entity-danger-zone"><div><strong>Delete Repeating Template</strong><p>Existing Occurrences remain. The stopped schedule itself will be removed forever.</p></div><WaButton size="s" appearance="plain" variant="danger" onClick={onDelete}>Delete</WaButton></div>}
+    </div>
+    <div slot="footer" class="entity-dialog-actions">{onOpenContents && <WaButton size="s" appearance="plain" onClick={onOpenContents}>Open Template Contents</WaButton>}<WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>{stopped ? "Done" : "Cancel"}</WaButton>{!stopped && <WaButton size="s" variant="brand" onClick={() => onSave(draft)}>Save schedule</WaButton>}</div>
+  </WaDialog>;
 }
 
 export function NewListDialog({ spaces, areas, defaults, onClose, onSubmit }: {
@@ -81,10 +105,11 @@ export function NewListDialog({ spaces, areas, defaults, onClose, onSubmit }: {
   </WaDialog>;
 }
 
-export function HeadingDialog({ heading, parents, initialParent, onClose, onSave, onAction }: {
+export function HeadingDialog({ heading, parents, initialParent, isTemplate = false, onClose, onSave, onAction }: {
   heading: Heading | null;
   parents: ParentOption[];
   initialParent: string;
+  isTemplate?: boolean;
   onClose(): void;
   onSave(title: string, parent: string): void;
   onAction(action: "duplicate" | "convert" | "archive" | "delete"): void;
@@ -98,7 +123,7 @@ export function HeadingDialog({ heading, parents, initialParent, onClose, onSave
       <p>Headings divide an area or project into clear stages or categories.</p>
       <label class="entity-native-field">Name<input autoFocus required value={title} placeholder="e.g. Preparation" onInput={(event) => setTitle(event.currentTarget.value)} /></label>
       <WaSelect label="Location" value={parent} onChange={(event: Event) => setParent(eventValue(event))}>{parents.map((option) => <WaOption key={option.value} value={option.value}>{option.label}</WaOption>)}</WaSelect>
-      {heading && <div class="entity-secondary-actions"><WaButton size="s" appearance="plain" onClick={() => onAction("duplicate")}>Duplicate with to-dos</WaButton><WaButton size="s" appearance="plain" onClick={() => onAction("convert")}>Convert to project</WaButton><WaButton size="s" appearance="plain" onClick={() => onAction("archive")}>Archive</WaButton><WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("delete")}>Delete heading</WaButton></div>}
+      {heading && <div class="entity-secondary-actions"><WaButton size="s" appearance="plain" onClick={() => onAction("duplicate")}>Duplicate with to-dos</WaButton>{!isTemplate && <WaButton size="s" appearance="plain" onClick={() => onAction("convert")}>Convert to project</WaButton>}<WaButton size="s" appearance="plain" onClick={() => onAction("archive")}>Archive</WaButton><WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("delete")}>Delete heading</WaButton></div>}
     </div>
     <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" disabled={!title.trim() || !parent} onClick={() => onSave(title.trim(), parent)}>{heading ? "Save" : "Create"}</WaButton></div>
   </WaDialog>;
@@ -112,7 +137,7 @@ export function ProjectDialog({ project, spaces, areas, archivedHeadings, fallba
   fallbackRepeatDate: string;
   onClose(): void;
   onSave(draft: Project): void;
-  onAction(action: "duplicate" | "complete" | "cancel" | "restore" | "trash" | "restore-trash" | "delete-forever"): void;
+  onAction(action: "duplicate" | "complete" | "cancel" | "skip" | "restore" | "trash" | "restore-trash" | "delete-forever"): void;
   onRestoreHeading(id: string): void;
 }) {
   const dialog = useRef<OverlayElement | null>(null);
@@ -134,8 +159,9 @@ export function ProjectDialog({ project, spaces, areas, archivedHeadings, fallba
       </div>
       <TagsEditor value={draft.tags || []} onChange={(tags) => update("tags", tags)} />
       {archivedHeadings.length > 0 && <WaDetails summary={`Archived headings (${archivedHeadings.length})`}><div class="entity-secondary-actions">{archivedHeadings.map((heading) => <WaButton size="s" appearance="plain" onClick={() => onRestoreHeading(heading.id)}>Restore {heading.title}</WaButton>)}</div></WaDetails>}
-      {!trashed && project.status === "open" && <WaDetails summary={draft.repeat ? "Repeat · On" : "Repeat"}><RepeatEditor value={draft.repeat} fallbackDate={fallbackRepeatDate} onChange={(repeat) => update("repeat", repeat)} /></WaDetails>}
-      <div class="entity-secondary-actions">{trashed ? <><WaButton size="s" appearance="plain" onClick={() => onAction("restore-trash")}>Restore project</WaButton><WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("delete-forever")}>Delete forever</WaButton></> : <><WaButton size="s" appearance="plain" onClick={() => onAction("duplicate")}>Duplicate project</WaButton><WaButton size="s" appearance="plain" onClick={() => onAction(project.status === "open" ? "complete" : "restore")}>{project.status === "open" ? "Complete project" : "Restore project"}</WaButton>{project.status === "open" && <WaButton size="s" appearance="plain" onClick={() => onAction("cancel")}>Cancel project</WaButton>}<WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("trash")}>Move to Trash</WaButton></>}</div>
+      {!trashed && project.status === "open" && project.repeatTemplateId && <div class="entity-occurrence-note">This is one Project Occurrence. Changes here do not alter its Repeating Template.</div>}
+      {!trashed && project.status === "open" && !project.repeatTemplateId && <WaDetails summary={draft.repeat ? "Repeat · On" : "Repeat"}><RepeatEditor value={draft.repeat} fallbackDate={fallbackRepeatDate} onChange={(repeat) => update("repeat", repeat)} /></WaDetails>}
+      <div class="entity-secondary-actions">{trashed ? <><WaButton size="s" appearance="plain" onClick={() => onAction("restore-trash")}>Restore project</WaButton><WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("delete-forever")}>Delete forever</WaButton></> : <><WaButton size="s" appearance="plain" onClick={() => onAction("duplicate")}>Duplicate project</WaButton><WaButton size="s" appearance="plain" onClick={() => onAction(project.status === "open" ? "complete" : "restore")}>{project.status === "open" ? "Complete project" : "Restore project"}</WaButton>{project.status === "open" && project.repeatTemplateId && <WaButton size="s" appearance="plain" onClick={() => onAction("skip")}>Skip Occurrence</WaButton>}{project.status === "open" && <WaButton size="s" appearance="plain" onClick={() => onAction("cancel")}>Cancel project</WaButton>}<WaButton size="s" appearance="plain" variant="danger" onClick={() => onAction("trash")}>Move to Trash</WaButton></>}</div>
     </div>
     <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant="brand" disabled={!draft.title.trim()} onClick={() => onSave({ ...draft, title: draft.title.trim(), notes: (draft.notes || "").trim() })}>Save</WaButton></div>
   </WaDialog>;

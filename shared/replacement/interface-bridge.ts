@@ -7,6 +7,9 @@ import type {
   Outcome,
   Project,
   ProjectLocation,
+  RepeatingDeadlineDefault,
+  RepeatingProjectToDoBlueprint,
+  RepeatingReminderDefault,
   RepeatingTemplate,
   Schedule,
   Space,
@@ -17,10 +20,13 @@ import type {
   WorkspaceEntityKind,
 } from "./model.ts";
 import {
-  FULL_IMPORT_CONFIRMATION,
+  DELETE_HEADING_CONFIRMATION,
+  DELETE_REPEATING_TEMPLATE_CONFIRMATION,
+  DELETE_SPACE_CONFIRMATION,
+  DELETE_TAG_CONFIRMATION,
   PERMANENT_DELETE_CONFIRMATION,
+  REMOVE_AREA_CONFIRMATION,
   createWorkspace,
-  exportPortableBackup,
   type Workspace,
   type WorkspaceChange,
   type WorkspaceDependencies,
@@ -113,6 +119,10 @@ function numberValue(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function daysBetweenDates(fromDate: string, toDate: string): number {
+  return Math.round((Date.parse(`${toDate}T00:00:00.000Z`) - Date.parse(`${fromDate}T00:00:00.000Z`)) / 86_400_000);
+}
+
 function localDateTime(value: string | null): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -145,6 +155,75 @@ function interfaceSchedule(item: JsonRecord): Schedule {
   const bucket = stringValue(item.bucket, "inbox");
   if (bucket === "anytime" || bucket === "someday") return { kind: bucket };
   return { kind: "inbox" };
+}
+
+function blueprintScheduleForInterface(
+  schedule: RepeatingProjectToDoBlueprint["schedule"],
+  templateDate: string,
+  today: string,
+): Pick<InterfaceToDo, "bucket" | "scheduledFor" | "evening"> {
+  if (schedule?.kind === "scheduled") {
+    return scheduleToInterface({
+      kind: "scheduled",
+      date: addDaysToDate(templateDate, schedule.offsetDays),
+      evening: schedule.evening,
+    }, today);
+  }
+  return scheduleToInterface(schedule ?? { kind: "anytime" }, today);
+}
+
+function blueprintReminderForInterface(
+  reminder: RepeatingReminderDefault | null,
+  templateDate: string,
+  schedule: RepeatingProjectToDoBlueprint["schedule"],
+): string | null {
+  if (!reminder) return null;
+  if (reminder.kind === "fixed") return localDateTime(reminder.at);
+  if (reminder.kind === "offset") return `${addDaysToDate(templateDate, reminder.days)}T${reminder.time}`;
+  const reminderDate = schedule?.kind === "scheduled"
+    ? addDaysToDate(templateDate, schedule.offsetDays)
+    : templateDate;
+  return `${reminderDate}T${reminder.time}`;
+}
+
+function blueprintDeadlineForInterface(deadline: RepeatingDeadlineDefault | null, templateDate: string): string | null {
+  if (!deadline) return null;
+  return deadline.kind === "fixed" ? deadline.date : addDaysToDate(templateDate, deadline.days);
+}
+
+function blueprintScheduleFromInterface(item: InterfaceToDo, templateDate: string): RepeatingProjectToDoBlueprint["schedule"] {
+  const originalValue = record(item.workspaceBlueprintScheduleValue);
+  if (
+    optionalString(originalValue.scheduledFor) === optionalString(item.scheduledFor)
+    && stringValue(originalValue.bucket) === stringValue(item.bucket)
+    && Boolean(originalValue.evening) === Boolean(item.evening)
+    && item.workspaceBlueprintSchedule
+  ) {
+    return clone(item.workspaceBlueprintSchedule as RepeatingProjectToDoBlueprint["schedule"]);
+  }
+  const schedule = interfaceSchedule(item);
+  return schedule.kind === "scheduled"
+    ? { kind: "scheduled", offsetDays: daysBetweenDates(templateDate, schedule.date), evening: schedule.evening }
+    : schedule;
+}
+
+function blueprintReminderFromInterface(item: InterfaceToDo): RepeatingReminderDefault | null {
+  const currentValue = optionalString(item.reminderAt);
+  const originalValue = optionalString(item.workspaceBlueprintReminderValue);
+  if (currentValue === originalValue && item.workspaceBlueprintReminder !== undefined) {
+    return clone(item.workspaceBlueprintReminder as RepeatingReminderDefault | null);
+  }
+  const at = durableDateTime(currentValue);
+  return at ? { kind: "fixed", at } : null;
+}
+
+function blueprintDeadlineFromInterface(item: InterfaceToDo): RepeatingDeadlineDefault | null {
+  const currentValue = optionalString(item.deadline);
+  const originalValue = optionalString(item.workspaceBlueprintDeadlineValue);
+  if (currentValue === originalValue && item.workspaceBlueprintDeadline !== undefined) {
+    return clone(item.workspaceBlueprintDeadline as RepeatingDeadlineDefault | null);
+  }
+  return currentValue ? { kind: "fixed", date: currentValue } : null;
 }
 
 function statusFor(outcome: Outcome, trashedAt: string | null): { status: string; previousStatus: string | null } {
@@ -308,9 +387,9 @@ function templateSources(document: WorkspaceDocument, tagById: Map<string, Tag>,
       });
     }
     for (const blueprint of template.projectContents.toDos) {
-      const schedule = blueprint.schedule?.kind === "scheduled"
-        ? { bucket: "upcoming", scheduledFor: template.nextDate, evening: blueprint.schedule.evening }
-        : scheduleToInterface(blueprint.schedule ?? { kind: "anytime" }, today);
+      const schedule = blueprintScheduleForInterface(blueprint.schedule, template.nextDate, today);
+      const reminderAt = blueprintReminderForInterface(blueprint.reminder, template.nextDate, blueprint.schedule);
+      const deadline = blueprintDeadlineForInterface(blueprint.deadline, template.nextDate);
       tasks.push({
         id: `${template.id}:todo:${blueprint.key}`,
         workspaceTemplateId: template.id,
@@ -320,9 +399,9 @@ function templateSources(document: WorkspaceDocument, tagById: Map<string, Tag>,
         status: "open",
         previousStatus: null,
         ...schedule,
-        reminderAt: null,
+        reminderAt,
         reminderSentAt: null,
-        deadline: null,
+        deadline,
         projectId: template.id,
         headingId: blueprint.headingKey ? `${template.id}:heading:${blueprint.headingKey}` : null,
         areaId: location.areaId,
@@ -331,6 +410,12 @@ function templateSources(document: WorkspaceDocument, tagById: Map<string, Tag>,
         checklist: blueprint.checklist.map((item, index) => ({ id: `${template.id}:${blueprint.key}:check:${index}`, title: item.title, done: false })),
         repeat: null,
         repeatTemplateId: null,
+        workspaceBlueprintSchedule: clone(blueprint.schedule ?? { kind: "anytime" }),
+        workspaceBlueprintScheduleValue: clone(schedule),
+        workspaceBlueprintReminder: clone(blueprint.reminder),
+        workspaceBlueprintReminderValue: reminderAt,
+        workspaceBlueprintDeadline: clone(blueprint.deadline),
+        workspaceBlueprintDeadlineValue: deadline,
         createdAt: template.createdAt,
         completedAt: null,
         loggedAt: null,
@@ -523,9 +608,9 @@ function templateFromSource(
       headingKey: toDo.headingId ? headingKeyById.get(toDo.headingId) ?? null : null,
       tags: idsForTags(toDo.tags),
       checklist: checklist(toDo.checklist).map(({ id: _id, ...entry }) => entry),
-      schedule: interfaceSchedule(toDo),
-      reminder: null,
-      deadline: null,
+      schedule: blueprintScheduleFromInterface(toDo, optionalString(item.scheduledFor) ?? dependencies.now().slice(0, 10)),
+      reminder: blueprintReminderFromInterface(toDo),
+      deadline: blueprintDeadlineFromInterface(toDo),
       order: numberValue(toDo.order, order),
     })),
   };
@@ -559,7 +644,7 @@ function documentFromInterfaceState(
     }] : [];
   });
   const areaIds = new Set(areas.map((area) => area.id));
-  const projects: Project[] = state.projects.filter((item) => !item.workspaceTemplate).flatMap((item, order) => {
+  const projects: Project[] = state.projects.filter((item) => !item.workspaceTemplate && !item.repeat).flatMap((item, order) => {
     const location = projectLocation(item, state);
     if (!item.title.trim() || !location) return [];
     const outcome = outcomeFor(item);
@@ -595,7 +680,7 @@ function documentFromInterfaceState(
     }] : [];
   });
   const headingIds = new Set(headings.map((heading) => heading.id));
-  const toDos: ToDo[] = state.tasks.filter((item) => !item.workspaceTemplate && !item.workspaceTemplateId).flatMap((item, order) => {
+  const toDos: ToDo[] = state.tasks.filter((item) => !item.workspaceTemplate && !item.workspaceTemplateId && !item.repeat).flatMap((item, order) => {
     const location = toDoLocation(item, state);
     if (!item.title.trim() || !location) return [];
     const outcome = outcomeFor(item);
@@ -743,6 +828,10 @@ function applyProjectLifecycleChanges(
     const current = workspace.read().projects.find((candidate) => candidate.id === project.id);
     if (!current || item.status === "trashed") continue;
     const desiredOutcome = outcomeFor(item);
+    if (current.occurrence && current.outcome === "open" && desiredOutcome === "canceled" && optionalString(item.loggedAt)) {
+      errors.push(...applyWorkspaceChange(workspace, { type: "skipOccurrence", itemKind: "project", id: project.id }));
+      continue;
+    }
     if (current.outcome !== "open" && desiredOutcome === "open") {
       errors.push(...applyWorkspaceChange(workspace, { type: "restoreProject", id: project.id }));
       continue;
@@ -796,6 +885,10 @@ function applyToDoLifecycleChanges(
     }
     if (!current || item.status === "trashed") continue;
     const desiredOutcome = desiredToDoOutcome(item);
+    if (current.occurrence && current.outcome === "open" && desiredOutcome === "canceled" && optionalString(item.loggedAt)) {
+      errors.push(...applyWorkspaceChange(workspace, { type: "skipOccurrence", itemKind: "toDo", id: original.id }));
+      continue;
+    }
     if (current.outcome !== "open" && desiredOutcome !== current.outcome) {
       errors.push(...applyWorkspaceChange(workspace, { type: "reopenToDo", id: original.id }));
       current = workspace.read().toDos.find((candidate) => candidate.id === original.id);
@@ -829,6 +922,460 @@ function applyToDoLifecycleChanges(
   return errors;
 }
 
+type IdQueues = Map<string, string[]>;
+
+function queueCreatedIds(queues: IdQueues, values: Partial<Record<WorkspaceEntityKind | "projectClosure" | "undo", string[]>>): void {
+  for (const [kind, ids] of Object.entries(values)) {
+    if (!ids?.length) continue;
+    queues.set(kind, [...(queues.get(kind) ?? []), ...ids]);
+  }
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function orderedIds<T extends { id: string; order: number }>(items: T[]): string[] {
+  return [...items].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id)).map((item) => item.id);
+}
+
+function applyDirectWorkspaceChange(
+  workspace: Workspace,
+  queues: IdQueues,
+  change: WorkspaceChange,
+  ids: Partial<Record<WorkspaceEntityKind | "projectClosure" | "undo", string[]>> = {},
+): string[] {
+  const queueSnapshot = new Map([...queues].map(([kind, queued]) => [kind, [...queued]]));
+  queueCreatedIds(queues, ids);
+  const errors = applyWorkspaceChange(workspace, change);
+  if (errors.length) {
+    queues.clear();
+    for (const [kind, queued] of queueSnapshot) queues.set(kind, queued);
+  }
+  return errors;
+}
+
+function syncSettings(workspace: Workspace, candidate: WorkspaceDocument, queues: IdQueues): string[] {
+  const errors: string[] = [];
+  const current = workspace.read().settings;
+  const applicationChanges = {
+    ...(current.theme !== candidate.settings.theme ? { theme: candidate.settings.theme } : {}),
+    ...(current.groupToday !== candidate.settings.groupToday ? { groupToday: candidate.settings.groupToday } : {}),
+    ...(current.notifications !== candidate.settings.notifications ? { notifications: candidate.settings.notifications } : {}),
+    ...(current.weekStartsOn !== candidate.settings.weekStartsOn ? { weekStartsOn: candidate.settings.weekStartsOn } : {}),
+    ...(current.showCalendar !== candidate.settings.showCalendar ? { showCalendar: candidate.settings.showCalendar } : {}),
+  };
+  if (Object.keys(applicationChanges).length) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateSettings", changes: applicationChanges }));
+  if (workspace.read().settings.logCompletedItems !== candidate.settings.logCompletedItems) {
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "setLogbookPolicy", policy: candidate.settings.logCompletedItems }));
+  }
+  const quickDraft = workspace.read().settings.quickDraft;
+  if (!sameValue(quickDraft, candidate.settings.quickDraft)) {
+    if (candidate.settings.quickDraft) {
+      const viewType = candidate.settings.quickDraft.viewType;
+      const view = viewType === "area" || viewType === "project" || viewType === "heading" || viewType === "space"
+        ? { kind: viewType, id: candidate.settings.quickDraft.viewId ?? "" }
+        : { kind: (viewType || "inbox") as "inbox" };
+      errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "saveQuickDraft", value: candidate.settings.quickDraft.value, view }));
+    } else {
+      errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "clearQuickDraft" }));
+    }
+  }
+  return errors;
+}
+
+function createTagsAndOrganization(workspace: Workspace, candidate: WorkspaceDocument, queues: IdQueues): string[] {
+  const errors: string[] = [];
+  let current = workspace.read();
+  for (const tag of candidate.tags) {
+    if (!current.tags.some((item) => item.id === tag.id)) {
+      errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "createTag", title: tag.title }, { tag: [tag.id] }));
+      current = workspace.read();
+    }
+  }
+  for (const space of candidate.spaces) {
+    if (!current.spaces.some((item) => item.id === space.id)) {
+      errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "createSpace", title: space.title, color: space.color, pinned: space.pinned }, { space: [space.id] }));
+      current = workspace.read();
+    }
+  }
+  for (const area of candidate.areas) {
+    if (!current.areas.some((item) => item.id === area.id)) {
+      errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "createArea", title: area.title, spaceId: area.spaceId, color: area.color, tags: area.tags }, { area: [area.id] }));
+      current = workspace.read();
+    }
+  }
+  return errors;
+}
+
+function generatedOccurrenceIds(candidate: WorkspaceDocument, current: WorkspaceDocument): {
+  projectIds: Set<string>;
+  headingIds: Set<string>;
+  toDoIds: Set<string>;
+} {
+  const currentProjectIds = new Set(current.projects.map((item) => item.id));
+  const currentToDoIds = new Set(current.toDos.map((item) => item.id));
+  const projectIds = new Set(candidate.projects.filter((item) => item.occurrence && !currentProjectIds.has(item.id)).map((item) => item.id));
+  const headingIds = new Set(candidate.headings.filter((heading) => heading.location.kind === "project" && projectIds.has(heading.location.projectId)).map((heading) => heading.id));
+  const toDoIds = new Set(candidate.toDos.filter((toDo) => {
+    if (toDo.occurrence && !currentToDoIds.has(toDo.id)) return true;
+    if (toDo.location.kind === "project") return projectIds.has(toDo.location.projectId);
+    return toDo.location.kind === "heading" && headingIds.has(toDo.location.headingId);
+  }).map((toDo) => toDo.id));
+  return { projectIds, headingIds, toDoIds };
+}
+
+function createProjectsHeadingsAndToDos(
+  workspace: Workspace,
+  candidate: WorkspaceDocument,
+  queues: IdQueues,
+  generated: ReturnType<typeof generatedOccurrenceIds>,
+): string[] {
+  const errors: string[] = [];
+  let current = workspace.read();
+  for (const project of candidate.projects) {
+    if (generated.projectIds.has(project.id) || current.projects.some((item) => item.id === project.id)) continue;
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, {
+      type: "createProject", title: project.title, notes: project.notes, location: project.location,
+      schedule: project.schedule, deadline: project.deadline, tags: project.tags,
+    }, { project: [project.id] }));
+    current = workspace.read();
+  }
+  for (const heading of candidate.headings) {
+    if (generated.headingIds.has(heading.id) || current.headings.some((item) => item.id === heading.id)) continue;
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "createHeading", title: heading.title, location: heading.location }, { heading: [heading.id] }));
+    if (heading.archivedAt) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "archiveHeading", id: heading.id }));
+    current = workspace.read();
+  }
+  for (const toDo of candidate.toDos) {
+    if (generated.toDoIds.has(toDo.id) || current.toDos.some((item) => item.id === toDo.id)) continue;
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, {
+      type: "createToDo", title: toDo.title, notes: toDo.notes, location: toDo.location,
+      schedule: toDo.schedule, reminderAt: toDo.reminder?.at ?? null, deadline: toDo.deadline,
+      tags: toDo.tags, checklist: toDo.checklist.map((item) => item.title),
+    }, { toDo: [toDo.id], checklistItem: toDo.checklist.map((item) => item.id) }));
+    current = workspace.read();
+  }
+  return errors;
+}
+
+function repeatingTemplateChanges(current: RepeatingTemplate, desired: RepeatingTemplate) {
+  return {
+    ...(current.title !== desired.title ? { title: desired.title } : {}),
+    ...(current.notes !== desired.notes ? { notes: desired.notes } : {}),
+    ...(!sameValue(current.tags, desired.tags) ? { tags: desired.tags } : {}),
+    ...(!sameValue(current.pattern, desired.pattern) ? { pattern: desired.pattern } : {}),
+    ...(current.mode !== desired.mode ? { mode: desired.mode } : {}),
+    ...(current.nextDate !== desired.nextDate ? { nextDate: desired.nextDate } : {}),
+    ...(current.reminderTime !== desired.reminderTime ? { reminderTime: desired.reminderTime } : {}),
+    ...(current.deadlineOffsetDays !== desired.deadlineOffsetDays ? { deadlineOffsetDays: desired.deadlineOffsetDays } : {}),
+    ...(!sameValue(current.location, desired.location) ? { location: desired.location } : {}),
+    ...(!sameValue(current.checklist.map((item) => item.title), desired.checklist.map((item) => item.title)) ? { checklist: desired.checklist.map((item) => item.title) } : {}),
+    ...(desired.itemKind === "project" && current.itemKind === "project" && !sameValue(current.projectContents, desired.projectContents)
+      ? { projectContents: desired.projectContents } : {}),
+  };
+}
+
+function createAndUpdateRepeatingTemplates(workspace: Workspace, candidate: WorkspaceDocument, queues: IdQueues): string[] {
+  const errors: string[] = [];
+  for (const desired of candidate.repeatingTemplates) {
+    let currentDocument = workspace.read();
+    let current = currentDocument.repeatingTemplates.find((item) => item.id === desired.id);
+    if (!current) {
+      const linkedToDo = candidate.toDos.find((item) => item.occurrence?.templateId === desired.id && currentDocument.toDos.some((before) => before.id === item.id && !before.occurrence));
+      const linkedProject = candidate.projects.find((item) => item.occurrence?.templateId === desired.id && currentDocument.projects.some((before) => before.id === item.id && !before.occurrence));
+      if (linkedToDo && desired.itemKind === "toDo") {
+        errors.push(...applyDirectWorkspaceChange(workspace, queues, {
+          type: "makeToDoRepeating", id: linkedToDo.id, nextDate: desired.firstDate ?? desired.nextDate,
+          pattern: desired.pattern, mode: desired.mode,
+        }, { repeatingTemplate: [desired.id] }));
+      } else if (linkedProject && desired.itemKind === "project") {
+        errors.push(...applyDirectWorkspaceChange(workspace, queues, {
+          type: "makeProjectRepeating", id: linkedProject.id, firstDate: desired.firstDate ?? desired.nextDate,
+          pattern: desired.pattern, mode: desired.mode,
+        }, { repeatingTemplate: [desired.id] }));
+      } else {
+        const template = desired.itemKind === "toDo"
+          ? {
+              itemKind: "toDo" as const, title: desired.title, notes: desired.notes, tags: desired.tags,
+              checklist: desired.checklist.map((item) => item.title), pattern: desired.pattern, mode: desired.mode,
+              firstDate: desired.firstDate ?? desired.nextDate, reminderTime: desired.reminderTime,
+              deadlineOffsetDays: desired.deadlineOffsetDays, location: desired.location,
+            }
+          : {
+              itemKind: "project" as const, title: desired.title, notes: desired.notes, tags: desired.tags,
+              pattern: desired.pattern, mode: desired.mode, firstDate: desired.firstDate ?? desired.nextDate,
+              reminderTime: desired.reminderTime, deadlineOffsetDays: desired.deadlineOffsetDays,
+              location: desired.location, projectContents: desired.projectContents,
+            };
+        errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "createRepeatingTemplate", template }, {
+          repeatingTemplate: [desired.id], checklistItem: desired.checklist.map((item) => item.id),
+        }));
+      }
+      current = workspace.read().repeatingTemplates.find((item) => item.id === desired.id);
+    }
+    if (!current) continue;
+    if (current.state !== "stopped") {
+      const changes = repeatingTemplateChanges(current, desired);
+      if (Object.keys(changes).length) {
+        const checklistIds = "checklist" in changes ? desired.checklist.map((item) => item.id) : [];
+        errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateRepeatingTemplate", id: desired.id, changes }, { checklistItem: checklistIds }));
+      }
+      current = workspace.read().repeatingTemplates.find((item) => item.id === desired.id)!;
+      if (desired.state === "paused" && current.state === "active") errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "pauseRepeatingTemplate", id: desired.id }));
+      if (desired.state === "active" && current.state === "paused") errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "resumeRepeatingTemplate", id: desired.id }));
+      if (desired.state === "stopped" && current.state !== "stopped") errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "stopRepeatingTemplate", id: desired.id }));
+    }
+  }
+  return errors;
+}
+
+function generateNewOccurrences(
+  workspace: Workspace,
+  candidate: WorkspaceDocument,
+  queues: IdQueues,
+  generated: ReturnType<typeof generatedOccurrenceIds>,
+): string[] {
+  if (!generated.projectIds.size && !generated.toDoIds.size) return [];
+  const projectIds: string[] = [];
+  const headingIds: string[] = [];
+  const toDoIds: string[] = [];
+  const checklistItemIds: string[] = [];
+  let throughDate = "";
+  for (const template of workspace.read().repeatingTemplates) {
+    if (template.itemKind === "toDo") {
+      const occurrences = candidate.toDos
+        .filter((item) => generated.toDoIds.has(item.id) && item.occurrence?.templateId === template.id)
+        .sort((left, right) => left.occurrence!.scheduledDate.localeCompare(right.occurrence!.scheduledDate));
+      for (const occurrence of occurrences) {
+        toDoIds.push(occurrence.id);
+        checklistItemIds.push(...occurrence.checklist.sort((left, right) => left.order - right.order).map((item) => item.id));
+        if (occurrence.occurrence!.scheduledDate > throughDate) throughDate = occurrence.occurrence!.scheduledDate;
+      }
+      continue;
+    }
+    const occurrences = candidate.projects
+      .filter((item) => generated.projectIds.has(item.id) && item.occurrence?.templateId === template.id)
+      .sort((left, right) => left.occurrence!.scheduledDate.localeCompare(right.occurrence!.scheduledDate));
+    for (const occurrence of occurrences) {
+      projectIds.push(occurrence.id);
+      const headings = candidate.headings.filter((item) => item.location.kind === "project" && item.location.projectId === occurrence.id).sort((left, right) => left.order - right.order);
+      const headingSet = new Set(headings.map((item) => item.id));
+      const children = candidate.toDos.filter((item) => item.location.kind === "project" && item.location.projectId === occurrence.id
+        || item.location.kind === "heading" && headingSet.has(item.location.headingId)).sort((left, right) => left.order - right.order);
+      headingIds.push(...headings.map((item) => item.id));
+      toDoIds.push(...children.map((item) => item.id));
+      for (const child of children) checklistItemIds.push(...child.checklist.sort((left, right) => left.order - right.order).map((item) => item.id));
+      if (occurrence.occurrence!.scheduledDate > throughDate) throughDate = occurrence.occurrence!.scheduledDate;
+    }
+  }
+  if (!throughDate) return ["New Occurrences could not be matched to their Repeating Templates."];
+  return applyDirectWorkspaceChange(workspace, queues, { type: "generateRepeatingOccurrences", throughDate }, {
+    project: projectIds, heading: headingIds, toDo: toDoIds, checklistItem: checklistItemIds,
+  });
+}
+
+function updateEntities(workspace: Workspace, candidate: WorkspaceDocument, queues: IdQueues): string[] {
+  const errors: string[] = [];
+  for (const desired of candidate.spaces) {
+    const current = workspace.read().spaces.find((item) => item.id === desired.id);
+    if (!current) continue;
+    const changes = {
+      ...(current.title !== desired.title ? { title: desired.title } : {}),
+      ...(current.color !== desired.color ? { color: desired.color } : {}),
+      ...(current.pinned !== desired.pinned ? { pinned: desired.pinned } : {}),
+    };
+    if (Object.keys(changes).length) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateSpace", id: desired.id, changes }));
+  }
+  for (const desired of candidate.areas) {
+    const current = workspace.read().areas.find((item) => item.id === desired.id);
+    if (!current) continue;
+    const changes = {
+      ...(current.title !== desired.title ? { title: desired.title } : {}),
+      ...(current.spaceId !== desired.spaceId ? { spaceId: desired.spaceId } : {}),
+      ...(current.color !== desired.color ? { color: desired.color } : {}),
+      ...(!sameValue(current.tags, desired.tags) ? { tags: desired.tags } : {}),
+    };
+    if (Object.keys(changes).length) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateArea", id: desired.id, changes }));
+  }
+  for (const desired of candidate.projects) {
+    const current = workspace.read().projects.find((item) => item.id === desired.id);
+    if (!current) continue;
+    const changes = {
+      ...(current.title !== desired.title ? { title: desired.title } : {}),
+      ...(current.notes !== desired.notes ? { notes: desired.notes } : {}),
+      ...(!sameValue(current.location, desired.location) ? { location: desired.location } : {}),
+      ...(!sameValue(current.schedule, desired.schedule) ? { schedule: desired.schedule } : {}),
+      ...(current.deadline !== desired.deadline ? { deadline: desired.deadline } : {}),
+      ...(!sameValue(current.tags, desired.tags) ? { tags: desired.tags } : {}),
+    };
+    if (Object.keys(changes).length) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateProject", id: desired.id, changes }));
+  }
+  for (const desired of candidate.headings) {
+    const current = workspace.read().headings.find((item) => item.id === desired.id);
+    if (!current) continue;
+    const changes = {
+      ...(current.title !== desired.title ? { title: desired.title } : {}),
+      ...(!sameValue(current.location, desired.location) ? { location: desired.location } : {}),
+    };
+    if (Object.keys(changes).length) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateHeading", id: desired.id, changes }));
+    const latest = workspace.read().headings.find((item) => item.id === desired.id);
+    if (desired.archivedAt && !latest?.archivedAt) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "archiveHeading", id: desired.id }));
+    if (!desired.archivedAt && latest?.archivedAt) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "restoreHeading", id: desired.id }));
+  }
+  for (const desired of candidate.toDos) {
+    const current = workspace.read().toDos.find((item) => item.id === desired.id);
+    if (!current) continue;
+    const changes = {
+      ...(current.title !== desired.title ? { title: desired.title } : {}),
+      ...(current.notes !== desired.notes ? { notes: desired.notes } : {}),
+      ...(!sameValue(current.location, desired.location) ? { location: desired.location } : {}),
+      ...(!sameValue(current.schedule, desired.schedule) ? { schedule: desired.schedule } : {}),
+      ...(!sameValue(current.reminder, desired.reminder) ? { reminder: desired.reminder } : {}),
+      ...(current.deadline !== desired.deadline ? { deadline: desired.deadline } : {}),
+      ...(!sameValue(current.tags, desired.tags) ? { tags: desired.tags } : {}),
+    };
+    if (Object.keys(changes).length) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateToDo", id: desired.id, changes }));
+    let latest = workspace.read().toDos.find((item) => item.id === desired.id)!;
+    const desiredIds = new Set(desired.checklist.map((item) => item.id));
+    for (const item of latest.checklist) if (!desiredIds.has(item.id)) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "removeChecklistItem", toDoId: desired.id, itemId: item.id }));
+    latest = workspace.read().toDos.find((item) => item.id === desired.id)!;
+    for (const item of desired.checklist) {
+      if (!latest.checklist.some((candidateItem) => candidateItem.id === item.id)) {
+        errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "addChecklistItem", toDoId: desired.id, title: item.title }, { checklistItem: [item.id] }));
+        latest = workspace.read().toDos.find((candidateItem) => candidateItem.id === desired.id)!;
+      }
+      const actual = latest.checklist.find((candidateItem) => candidateItem.id === item.id);
+      if (actual && (actual.title !== item.title || actual.completed !== item.completed)) {
+        errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateChecklistItem", toDoId: desired.id, itemId: item.id, changes: { title: item.title, completed: item.completed } }));
+      }
+    }
+    latest = workspace.read().toDos.find((item) => item.id === desired.id)!;
+    const desiredChecklistOrder = orderedIds(desired.checklist);
+    if (!sameValue(orderedIds(latest.checklist), desiredChecklistOrder) && desiredChecklistOrder.length) {
+      errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "reorderChecklistItems", toDoId: desired.id, orderedIds: desiredChecklistOrder }));
+    }
+  }
+  for (const desired of candidate.calendarEvents) {
+    const current = workspace.read().calendarEvents.find((item) => item.id === desired.id);
+    if (!current) {
+      errors.push(...applyDirectWorkspaceChange(workspace, queues, {
+        type: "createCalendarEvent", title: desired.title, spaceId: desired.spaceId, start: desired.start,
+        end: desired.end, calendar: desired.calendar, allDay: desired.allDay,
+      }, { calendarEvent: [desired.id] }));
+      continue;
+    }
+    const changes = {
+      ...(current.title !== desired.title ? { title: desired.title } : {}),
+      ...(current.spaceId !== desired.spaceId ? { spaceId: desired.spaceId } : {}),
+      ...(current.start !== desired.start ? { start: desired.start } : {}),
+      ...(current.end !== desired.end ? { end: desired.end } : {}),
+      ...(current.calendar !== desired.calendar ? { calendar: desired.calendar } : {}),
+      ...(current.allDay !== desired.allDay ? { allDay: desired.allDay } : {}),
+    };
+    if (Object.keys(changes).length) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "updateCalendarEvent", id: desired.id, changes }));
+  }
+  return errors;
+}
+
+function applyOrders(workspace: Workspace, candidate: WorkspaceDocument, queues: IdQueues): string[] {
+  const errors: string[] = [];
+  const desiredSpaces = orderedIds(candidate.spaces);
+  for (let index = 0; index < desiredSpaces.length; index += 1) {
+    if (workspace.read().spaces[index]?.id !== desiredSpaces[index]) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "reorderSpace", id: desiredSpaces[index], toIndex: index }));
+  }
+  const collections = [
+    ["areas", "reorderAreas", orderedIds(candidate.areas)],
+    ["projects", "reorderProjects", orderedIds(candidate.projects)],
+    ["headings", "reorderHeadings", orderedIds(candidate.headings)],
+    ["tags", "reorderTags", orderedIds(candidate.tags)],
+  ] as const;
+  for (const [name, type, ids] of collections) {
+    if (ids.length && !sameValue(orderedIds(workspace.read()[name]), ids)) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type, orderedIds: ids }));
+  }
+  const toDoOrder = orderedIds(candidate.toDos);
+  if (toDoOrder.length && !sameValue(orderedIds(workspace.read().toDos), toDoOrder)) {
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "reorderToDos", movedIds: toDoOrder, orderedIds: toDoOrder }));
+  }
+  return errors;
+}
+
+function removeMissingEntities(workspace: Workspace, candidate: WorkspaceDocument, queues: IdQueues): string[] {
+  const errors: string[] = [];
+  const desiredCalendar = new Set(candidate.calendarEvents.map((item) => item.id));
+  for (const item of workspace.read().calendarEvents) if (!desiredCalendar.has(item.id)) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "deleteCalendarEvent", id: item.id }));
+  const desiredTemplates = new Set(candidate.repeatingTemplates.map((item) => item.id));
+  for (const item of workspace.read().repeatingTemplates) {
+    if (desiredTemplates.has(item.id)) continue;
+    if (item.state !== "stopped") errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "stopRepeatingTemplate", id: item.id }));
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "deleteRepeatingTemplate", id: item.id, confirmation: DELETE_REPEATING_TEMPLATE_CONFIRMATION }));
+  }
+  const desiredToDos = new Set(candidate.toDos.map((item) => item.id));
+  for (const item of workspace.read().toDos) {
+    if (desiredToDos.has(item.id) || !item.trashedAt) continue;
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "permanentlyDeleteToDo", id: item.id, confirmation: PERMANENT_DELETE_CONFIRMATION }));
+  }
+  const desiredProjects = new Set(candidate.projects.map((item) => item.id));
+  for (const item of workspace.read().projects) {
+    if (desiredProjects.has(item.id) || !item.trashedAt) continue;
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "permanentlyDeleteProject", id: item.id, confirmation: PERMANENT_DELETE_CONFIRMATION }));
+  }
+  const desiredHeadings = new Set(candidate.headings.map((item) => item.id));
+  for (const item of workspace.read().headings) if (!desiredHeadings.has(item.id)) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "deleteHeading", id: item.id, confirmation: DELETE_HEADING_CONFIRMATION }));
+  const desiredAreas = new Set(candidate.areas.map((item) => item.id));
+  for (const item of workspace.read().areas) if (!desiredAreas.has(item.id)) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "removeArea", id: item.id, confirmation: REMOVE_AREA_CONFIRMATION }));
+  const desiredSpaces = new Set(candidate.spaces.map((item) => item.id));
+  for (const item of workspace.read().spaces) {
+    if (desiredSpaces.has(item.id)) continue;
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "deleteSpace", id: item.id, moveToSpaceId: candidate.spaces[0].id, confirmation: DELETE_SPACE_CONFIRMATION }));
+  }
+  const desiredTags = new Set(candidate.tags.map((item) => item.id));
+  for (const item of workspace.read().tags) if (!desiredTags.has(item.id)) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "deleteTag", id: item.id, confirmation: DELETE_TAG_CONFIRMATION }));
+  return errors;
+}
+
+function finishSettingsAndLogbook(workspace: Workspace, candidate: WorkspaceDocument, queues: IdQueues): string[] {
+  const errors: string[] = [];
+  if (candidate.settings.defaultSpaceId && workspace.read().settings.defaultSpaceId !== candidate.settings.defaultSpaceId) {
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "setDefaultSpace", spaceId: candidate.settings.defaultSpaceId }));
+  }
+  if (!sameValue(workspace.read().settings.launchRules, candidate.settings.launchRules)) {
+    errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "replaceLaunchRules", rules: candidate.settings.launchRules }));
+  }
+  for (const desired of candidate.toDos) {
+    const current = workspace.read().toDos.find((item) => item.id === desired.id);
+    if (desired.logbookAt && current && current.outcome !== "open" && !current.logbookAt) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "logToDo", id: desired.id }));
+  }
+  for (const desired of candidate.projects) {
+    const current = workspace.read().projects.find((item) => item.id === desired.id);
+    if (desired.logbookAt && current && current.outcome !== "open" && !current.logbookAt) errors.push(...applyDirectWorkspaceChange(workspace, queues, { type: "logProject", id: desired.id }));
+  }
+  return errors;
+}
+
+function syncCandidateThroughWorkspace(
+  workspace: Workspace,
+  before: WorkspaceDocument,
+  candidate: WorkspaceDocument,
+  queues: IdQueues,
+): string[] {
+  const generated = generatedOccurrenceIds(candidate, before);
+  const errors = [
+    ...syncSettings(workspace, candidate, queues),
+    ...createTagsAndOrganization(workspace, candidate, queues),
+    ...createProjectsHeadingsAndToDos(workspace, candidate, queues, generated),
+    ...createAndUpdateRepeatingTemplates(workspace, candidate, queues),
+    ...generateNewOccurrences(workspace, candidate, queues, generated),
+    ...updateEntities(workspace, candidate, queues),
+    ...removeMissingEntities(workspace, candidate, queues),
+    ...applyOrders(workspace, candidate, queues),
+    ...finishSettingsAndLogbook(workspace, candidate, queues),
+  ];
+  const unusedIds = [...queues.entries()].filter(([, ids]) => ids.length).flatMap(([kind, ids]) => ids.map((id) => `${kind}:${id}`));
+  if (unusedIds.length) errors.push(`Workspace identity assignment was incomplete for ${unusedIds.join(", ")}.`);
+  return errors;
+}
+
 export function applyInterfaceChangeSetToWorkspace(
   document: WorkspaceDocument,
   changeSet: InterfaceChangeSet,
@@ -837,7 +1384,11 @@ export function applyInterfaceChangeSetToWorkspace(
   if (!changeSet.mutationId || changeSet.mutationId.length > 200) return { ok: false, errors: ["A valid interface mutation identity is required."] };
   const today = dependencies.now().slice(0, 10);
   const desiredState = applyChangeSet(workspaceDocumentToInterfaceState(document, today), changeSet);
-  const workspace = createWorkspace(document, dependencies);
+  const idQueues: IdQueues = new Map();
+  const workspace = createWorkspace(document, {
+    now: dependencies.now,
+    createId: (kind) => idQueues.get(kind)?.shift() ?? dependencies.createId(kind),
+  });
   const behaviorErrors = [
     ...applyProjectLifecycleChanges(workspace, document, desiredState, changeSet),
     ...applyToDoLifecycleChanges(workspace, document, desiredState, changeSet),
@@ -847,8 +1398,8 @@ export function applyInterfaceChangeSetToWorkspace(
   const state = applyChangeSet(workspaceDocumentToInterfaceState(behaviorDocument, today), changeSet);
   const candidate = documentFromInterfaceState(state, behaviorDocument, dependencies);
   if (!candidate) return { ok: false, errors: ["The interface change would leave the Workspace without a Space."] };
-  const imported = workspace.importPortableBackup(exportPortableBackup(candidate), FULL_IMPORT_CONFIRMATION);
-  if (imported.status === "rejected") return { ok: false, errors: imported.errors };
+  const synchronizationErrors = syncCandidateThroughWorkspace(workspace, behaviorDocument, candidate, idQueues);
+  if (synchronizationErrors.length) return { ok: false, errors: synchronizationErrors };
   const next = workspace.read();
   next.sync = clone(document.sync);
   return { ok: true, document: next };

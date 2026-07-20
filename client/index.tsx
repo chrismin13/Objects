@@ -10,7 +10,6 @@ import { workspaceRuntimeReady } from "./workspace/runtime-loader";
 import { objectsThemeReady } from "./theme/loader";
 import { webAwesomeReady } from "./vendor/webawesome/loader";
 import { objectsRuntimeReady } from "./runtime/loader";
-import { ComponentGallery, isComponentGalleryLocation } from "./features/gallery/component-gallery";
 
 type AuthIdentity = ReturnType<typeof useAuth>;
 
@@ -101,6 +100,7 @@ class StableObjectsDom extends Component {
           <div className="sidebar-footer">
             <button id="new-list-button" className="quiet-button" type="button" />
             <div className="sidebar-tools">
+              <button id="repeating-button" className="icon-button" type="button" aria-label="Repeating" />
               <button id="settings-button" className="icon-button" type="button" aria-label="Settings" />
               <button id="theme-button" className="icon-button" type="button" aria-label="Change theme" />
             </div>
@@ -254,7 +254,6 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
 
 export function App() {
   const auth = useAuth();
-  const componentGallery = isComponentGalleryLocation();
   const [themeCss, setThemeCss] = useState("");
   const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [authTimedOut, setAuthTimedOut] = useState(false);
@@ -327,7 +326,7 @@ export function App() {
   return (
     <>
       <style>{themeCss}</style>
-      {componentGallery ? <ComponentGallery /> : auth.isLoading ? !online ? <OfflineScreen /> : authTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
+      {auth.isLoading ? !online ? <OfflineScreen /> : authTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
     </>
   );
 }

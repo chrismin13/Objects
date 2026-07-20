@@ -22,6 +22,16 @@ export const entityDialogStyles = `
 .entity-native-field textarea:focus,
 .entity-native-field select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 15%, transparent); }
 .entity-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+.entity-pause-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; }
+.entity-pause-row span { display: grid; gap: 2px; }
+.entity-pause-row strong { font-size: 12px; }
+.entity-pause-row small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.entity-pause-row input { width: 17px; height: 17px; accent-color: var(--blue); }
+.entity-danger-zone { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.entity-danger-zone strong { font-size: 12px; }
+.entity-danger-zone p { margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.entity-repeat-stopped { display: grid; gap: 4px; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-soft); }
+.entity-repeat-stopped span { color: var(--muted); font-size: 11px; }
 .entity-secondary-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding-top: var(--space-1); }
 .entity-tags-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 630; }
 .entity-tags-list { display: flex; min-height: var(--control-default); flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--bg); }

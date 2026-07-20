@@ -84,9 +84,11 @@ export type WorkspaceChange =
   | { type: "deleteSpace"; id: EntityId; moveToSpaceId: EntityId; confirmation: string }
   | { type: "createArea"; title: string; spaceId: EntityId; color?: string; tags?: EntityId[] }
   | { type: "updateArea"; id: EntityId; changes: AreaChanges }
+  | { type: "reorderAreas"; orderedIds: EntityId[] }
   | { type: "removeArea"; id: EntityId; confirmation: string }
   | { type: "createProject"; title: string; location: ProjectLocation; notes?: string; schedule?: Schedule; deadline?: string | null; tags?: EntityId[] }
   | { type: "updateProject"; id: EntityId; changes: ProjectChanges }
+  | { type: "reorderProjects"; orderedIds: EntityId[] }
   | { type: "duplicateProject"; id: EntityId }
   | { type: "closeProject"; id: EntityId; outcome: Exclude<Outcome, "open">; toDoOutcomes: Array<{ id: EntityId; outcome: Exclude<Outcome, "open"> }> }
   | { type: "restoreProject"; id: EntityId }
@@ -95,6 +97,7 @@ export type WorkspaceChange =
   | { type: "permanentlyDeleteProject"; id: EntityId; confirmation: string }
   | { type: "createHeading"; title: string; location: HeadingLocation }
   | { type: "updateHeading"; id: EntityId; changes: HeadingChanges }
+  | { type: "reorderHeadings"; orderedIds: EntityId[] }
   | { type: "duplicateHeading"; id: EntityId }
   | { type: "archiveHeading"; id: EntityId }
   | { type: "restoreHeading"; id: EntityId }
@@ -102,6 +105,7 @@ export type WorkspaceChange =
   | { type: "convertHeadingToProject"; id: EntityId }
   | { type: "createTag"; title: string }
   | { type: "updateTag"; id: EntityId; title: string }
+  | { type: "reorderTags"; orderedIds: EntityId[] }
   | { type: "deleteTag"; id: EntityId; confirmation: string }
   | { type: "createToDo"; title: string; notes?: string; location?: ToDoLocation; schedule?: Schedule; reminderAt?: string | null; deadline?: string | null; tags?: EntityId[]; checklist?: string[]; quickEntry?: { referenceDate: string } }
   | { type: "captureToDo"; capture: CapturedToDoInput }
@@ -129,6 +133,7 @@ export type WorkspaceChange =
   | { type: "reopenToDo"; id: EntityId }
   | { type: "duplicateToDo"; id: EntityId }
   | { type: "logToDo"; id: EntityId }
+  | { type: "logProject"; id: EntityId }
   | { type: "runDailyLogbook"; spaceId?: EntityId }
   | { type: "setLogbookPolicy"; policy: LogbookPolicy }
   | { type: "setTheme"; theme: WorkspaceDocument["settings"]["theme"] }
@@ -1526,6 +1531,15 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         }
         return finishChange(previous, "area-updated", [{ kind: "area", id: area.id }], `Undo changes to “${area.title}”`);
       }
+      if (change.type === "reorderAreas") {
+        const orderedIds = [...new Set(change.orderedIds)];
+        if (orderedIds.length !== document.areas.length || orderedIds.some((id) => !document.areas.some((area) => area.id === id))) {
+          return fail(["Choose every Area exactly once when changing Area order."]);
+        }
+        const byId = new Map(document.areas.map((area) => [area.id, area]));
+        document.areas = orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
+        return finishChange(previous, "areas-reordered", orderedIds.map((id) => ({ kind: "area", id })), "Undo Area order");
+      }
       if (change.type === "removeArea") {
         if (change.confirmation !== REMOVE_AREA_CONFIRMATION) return failAs("confirmation-required", [`Type ${REMOVE_AREA_CONFIRMATION} to remove this Area.`]);
         const area = document.areas.find((item) => item.id === change.id);
@@ -1605,6 +1619,15 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
           project.tags = [...new Set(change.changes.tags)];
         }
         return finishChange(previous, "project-updated", [{ kind: "project", id: project.id }], `Undo changes to “${project.title}”`);
+      }
+      if (change.type === "reorderProjects") {
+        const orderedIds = [...new Set(change.orderedIds)];
+        if (orderedIds.length !== document.projects.length || orderedIds.some((id) => !document.projects.some((project) => project.id === id))) {
+          return fail(["Choose every Project exactly once when changing Project order."]);
+        }
+        const byId = new Map(document.projects.map((project) => [project.id, project]));
+        document.projects = orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
+        return finishChange(previous, "projects-reordered", orderedIds.map((id) => ({ kind: "project", id })), "Undo Project order");
       }
       if (change.type === "duplicateProject") {
         const project = document.projects.find((item) => item.id === change.id);
@@ -1755,6 +1778,15 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         }
         return finishChange(previous, "heading-updated", [{ kind: "heading", id: heading.id }], `Undo changes to “${heading.title}”`);
       }
+      if (change.type === "reorderHeadings") {
+        const orderedIds = [...new Set(change.orderedIds)];
+        if (orderedIds.length !== document.headings.length || orderedIds.some((id) => !document.headings.some((heading) => heading.id === id))) {
+          return fail(["Choose every Heading exactly once when changing Heading order."]);
+        }
+        const byId = new Map(document.headings.map((heading) => [heading.id, heading]));
+        document.headings = orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
+        return finishChange(previous, "headings-reordered", orderedIds.map((id) => ({ kind: "heading", id })), "Undo Heading order");
+      }
       if (change.type === "duplicateHeading") {
         const heading = document.headings.find((item) => item.id === change.id);
         if (!heading) return failAs("not-found", ["The Heading no longer exists."]);
@@ -1857,6 +1889,15 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         if (document.tags.some((item) => item.id !== tag.id && item.title.toLowerCase() === title.toLowerCase())) return fail(["A Tag with this name already exists."]);
         tag.title = title;
         return finishChange(previous, "tag-updated", [{ kind: "tag", id: tag.id }], `Undo renaming “${tag.title}”`);
+      }
+      if (change.type === "reorderTags") {
+        const orderedIds = [...new Set(change.orderedIds)];
+        if (orderedIds.length !== document.tags.length || orderedIds.some((id) => !document.tags.some((tag) => tag.id === id))) {
+          return fail(["Choose every Tag exactly once when changing Tag order."]);
+        }
+        const byId = new Map(document.tags.map((tag) => [tag.id, tag]));
+        document.tags = orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
+        return finishChange(previous, "tags-reordered", orderedIds.map((id) => ({ kind: "tag", id })), "Undo Tag order");
       }
       if (change.type === "deleteTag") {
         if (change.confirmation !== DELETE_TAG_CONFIRMATION) return failAs("confirmation-required", [`Type ${DELETE_TAG_CONFIRMATION} to delete this Tag.`]);
@@ -2102,6 +2143,16 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
           { kind: "toDo", id: occurrence.id },
           ...(template ? [{ kind: "repeatingTemplate" as const, id: template.id }] : []),
         ], `Undo Skip of “${occurrence.title}”`);
+      }
+
+      if (change.type === "logProject") {
+        const project = document.projects.find((item) => item.id === change.id);
+        if (!project) return failAs("not-found", ["The Project no longer exists."]);
+        if (project.trashedAt) return fail(["Restore this Project before changing its Logbook placement."]);
+        if (project.outcome === "open") return fail(["Finish or cancel this Project before moving it to the Logbook."]);
+        if (project.logbookAt) return fail(["This Project is already in the Logbook."]);
+        project.logbookAt = dependencies.now();
+        return finishChange(previous, "project-logged", [{ kind: "project", id: project.id }], `Remove “${project.title}” from the Logbook`);
       }
 
       const id = "id" in change ? change.id : "toDoId" in change ? change.toDoId : null;
