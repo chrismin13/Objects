@@ -1,4 +1,6 @@
-import { sortableCompressed } from "./packed";
+import { workspaceRuntimeCompressed } from "./runtime-packed";
+
+type WorkspaceRuntime = typeof import("./runtime-entry");
 
 function decodeBase64(value: string): Uint8Array {
   const binary = atob(value);
@@ -7,17 +9,16 @@ function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
-async function loadSortable() {
-  const compressed = decodeBase64(sortableCompressed);
+async function loadWorkspaceRuntime(): Promise<WorkspaceRuntime> {
+  const compressed = decodeBase64(workspaceRuntimeCompressed);
   const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip"));
   const source = await new Response(stream).text();
   const moduleUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
   try {
-    const module = await import(moduleUrl);
-    return module.default;
+    return await import(moduleUrl) as WorkspaceRuntime;
   } finally {
     URL.revokeObjectURL(moduleUrl);
   }
 }
 
-export const sortableReady = loadSortable();
+export const workspaceRuntimeReady = loadWorkspaceRuntime();

@@ -115,6 +115,31 @@ test("the inspector edit path updates fields and manages independent checklist i
   assert.deepEqual(toDo(workspace, id).tags.map((tagId) => workspace.read().tags.find((tag) => tag.id === tagId)?.title), ["travel", "important"]);
 });
 
+test("checklist order changes through the public Workspace seam", () => {
+  const workspace = setup();
+  const created = workspace.change({
+    type: "createToDo",
+    title: "Release",
+    location: { kind: "unfiled", spaceId: "space-personal" },
+    checklist: ["Write notes", "Tag build", "Publish"],
+  });
+  const toDoId = created.affected.find((item) => item.kind === "toDo")!.id;
+  const before = workspace.read().toDos.find((item) => item.id === toDoId)!;
+  const orderedIds = [before.checklist[2].id, before.checklist[0].id, before.checklist[1].id];
+
+  const changed = workspace.change({ type: "reorderChecklistItems", toDoId, orderedIds });
+
+  assert.equal(changed.status, "changed");
+  assert.deepEqual(workspace.read().toDos.find((item) => item.id === toDoId)?.checklist.map((item) => [item.id, item.order]), [
+    [orderedIds[0], 0],
+    [orderedIds[1], 1],
+    [orderedIds[2], 2],
+  ]);
+  const rejected = workspace.change({ type: "reorderChecklistItems", toDoId, orderedIds: [orderedIds[0]] });
+  assert.equal(rejected.status, "rejected");
+  assert.deepEqual(workspace.read().toDos.find((item) => item.id === toDoId)?.checklist.map((item) => item.id), orderedIds);
+});
+
 test("moving a scheduled to-do keeps a same-day reminder at the same time", () => {
   const workspace = setup();
   const id = changedId(workspace.change({ type: "createToDo", title: "Prepare", schedule: { kind: "scheduled", date: "2026-07-20", evening: false }, reminderAt: "2026-07-20T16:45:00.000Z" }));

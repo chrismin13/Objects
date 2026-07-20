@@ -163,13 +163,13 @@ export async function requestNotificationAccess(): Promise<NotificationPermissio
   return permission;
 }
 
-export async function showTaskReminder(task: { id: string; title: string; notes?: string }, options: { replacement?: boolean } = {}): Promise<boolean> {
+export async function showTaskReminder(task: { id: string; title: string; notes?: string }): Promise<boolean> {
   if (!("Notification" in window) || Notification.permission !== "granted") return false;
   const notificationOptions: NotificationOptions = {
     body: task.notes || "Scheduled in Objects",
     icon: "/favicon.svg",
     tag: `objects-task-${task.id}`,
-    data: { url: options.replacement ? `/?replacement=1&todo=${encodeURIComponent(task.id)}` : `/?task=${encodeURIComponent(task.id)}` },
+    data: { url: `/?open=toDo&id=${encodeURIComponent(task.id)}` },
     actions: [
       { action: "snooze-10", title: "Snooze 10 min" },
       { action: "snooze-30", title: "Snooze 30 min" },

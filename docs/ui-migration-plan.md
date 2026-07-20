@@ -1,6 +1,6 @@
 # UI migration plan
 
-This is the historical inventory and comparison target for the rewrite. The final application no longer includes Web Awesome or the imperative renderer. See [replacement-parity-audit.md](replacement-parity-audit.md) for the shipped architecture, story evidence, and cutover record.
+This is the historical inventory and comparison target for the interface. The Workspace branch now uses the established interface again through a temporary compatibility bridge. See [replacement-parity-audit.md](replacement-parity-audit.md) for current recovery evidence and the remaining architecture work.
 
 This document is the parity contract for simplifying the Objects client. The application at commit `bb976b8` is the behavioral and visual baseline. No feature may be removed, substantially redesigned, or replaced with a weaker interaction without explicit product approval.
 
@@ -10,7 +10,7 @@ This document is the parity contract for simplifying the Objects client. The app
 - Replace fragile, locally implemented interaction primitives with maintained, vendored libraries.
 - Keep Preact as the application renderer and Lakebed as the runtime.
 - Separate domain behavior from rendering so features can be tested independently.
-- Delete the legacy imperative runtime only after the replacement passes the complete parity matrix.
+- Delete each compatibility-runtime area only after its Workspace-backed replacement passes the complete parity matrix without changing the visible interface.
 
 Raw repository size is not a goal. Vendored, versioned upstream code is preferable to smaller but bespoke focus, keyboard, overlay, and drag-and-drop implementations.
 

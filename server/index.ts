@@ -1,18 +1,16 @@
 import { capsule, endpoint, json, mutation, query, string, table, text } from "lakebed/server";
-import {
-  resolveSyncCommand,
-  type WorkspaceSyncCommand,
-  type WorkspaceSyncSnapshot,
-} from "../shared/replacement/sync";
-import { dateInTimeZone } from "../shared/replacement/dates";
-import { captureIntoSnapshot, selectCaptureBase } from "../shared/replacement/http-capture";
-import { parsePortableBackup } from "../shared/replacement/importer";
+import type { WorkspaceSyncCommand, WorkspaceSyncSnapshot } from "../shared/replacement/sync";
+import type { LegacyMigrationIdentity } from "../shared/replacement/legacy-storage";
 import {
   assembleLegacyWorkspace,
+  captureIntoSnapshot,
+  createEmptyWorkspace,
+  dateInTimeZone,
   mergeMigratedLegacySnapshot,
-  type LegacyMigrationIdentity,
-} from "../shared/replacement/legacy-storage";
-import { createEmptyWorkspace } from "../shared/replacement/workspace";
+  parsePortableBackup,
+  resolveSyncCommand,
+  selectCaptureBase,
+} from "./workspace-runtime";
 
 const MAX_REPLACEMENT_WORKSPACE_SIZE = 2_000_000;
 const MAX_REPLACEMENT_COMMAND_SIZE = 5_000_000;
@@ -32,8 +30,8 @@ const PWA_MANIFEST = JSON.stringify({
   dir: "ltr",
   categories: ["productivity", "utilities"],
   shortcuts: [
-    { name: "Today", short_name: "Today", url: "/?view=today", icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }] },
-    { name: "Inbox", short_name: "Inbox", url: "/?view=inbox", icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }] },
+    { name: "Today", short_name: "Today", url: "/?open=view&view=today", icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }] },
+    { name: "Inbox", short_name: "Inbox", url: "/?open=view&view=inbox", icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }] },
     { name: "New to-do", short_name: "New to-do", url: "/?capture=1", icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }] }
   ],
   share_target: {

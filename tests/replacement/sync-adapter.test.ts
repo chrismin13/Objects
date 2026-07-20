@@ -6,7 +6,7 @@ import {
   migrationCommandForQuery,
   parseLakebedWorkspaceQuery,
   scopeWorkspaceAdapter,
-} from "../../client/replacement/lakebed-adapter-core.ts";
+} from "../../client/workspace/lakebed-adapter-core.ts";
 import { createEmptyWorkspace } from "../../shared/replacement/workspace.ts";
 import {
   createInMemorySyncStore,

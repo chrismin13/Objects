@@ -2,60 +2,137 @@ import { sortableReady } from "../vendor/sortablejs/loader";
 
 type SortableInstance = { destroy(): void };
 
-let workspaceToDoInstance: SortableInstance | null = null;
-let workspaceToDoRequest = 0;
+let checklistInstance: SortableInstance | null = null;
+let taskInstances: SortableInstance[] = [];
+let headingInstance: SortableInstance | null = null;
+let checklistRequest = 0;
+let taskRequest = 0;
+let headingRequest = 0;
 
-export type WorkspaceToDoSortEvent = {
+export type TaskSortEvent = {
   movedIds: string[];
   orderedIds: string[];
   sectionKey: string;
 };
 
-export function mountWorkspaceToDoSortable(
+export function mountTaskSortables(
   root: ParentNode,
-  selectedIds: string[],
-  onEnd: (event: WorkspaceToDoSortEvent) => void,
+  options: {
+    crossSection: boolean;
+    onStart(movedIds: string[]): void;
+    onEnd(event: TaskSortEvent): void;
+  },
 ): void {
-  destroyWorkspaceToDoSortable();
-  const request = workspaceToDoRequest;
-  const lists = [...root.querySelectorAll<HTMLElement>(".replacement-list[data-section]")];
-  if (!lists.length) return;
+  destroyTaskSortables();
+  const request = taskRequest;
+  const lists = [...root.querySelectorAll<HTMLElement>(".section[data-section] > .task-list")];
   void sortableReady.then((Sortable: any) => {
-    if (request !== workspaceToDoRequest) return;
-    const instances = lists.filter((list) => list.isConnected).map((list) => {
-      const instance = Sortable.create(list, {
+    if (request !== taskRequest) return;
+    for (const list of lists) {
+      if (!list.isConnected) continue;
+      const sectionKey = list.closest<HTMLElement>("[data-section]")?.dataset.section || "list";
+      taskInstances.push(Sortable.create(list, {
         animation: 150,
-        draggable: "[data-todo-id]",
-        handle: ".replacement-row-body",
-        group: "objects-workspace-todos",
+        draggable: ".task-row",
+        handle: ".task-main",
+        group: options.crossSection ? "objects-tasks" : `objects-${sectionKey}`,
         multiDrag: true,
         selectedClass: "bulk-selected",
         ghostClass: "sortable-ghost",
         chosenClass: "sortable-chosen",
         dragClass: "sortable-drag",
         fallbackTolerance: 5,
+        onStart: (event: { item: HTMLElement; items?: HTMLElement[] }) => {
+          const elements = event.items?.length ? event.items : [event.item];
+          options.onStart(elements.map((item) => item.dataset.taskId).filter(Boolean) as string[]);
+        },
         onEnd: (event: { item: HTMLElement; items?: HTMLElement[]; to: HTMLElement }) => {
           const elements = event.items?.length ? event.items : [event.item];
-          onEnd({
-            movedIds: elements.map((item) => item.dataset.todoId).filter(Boolean) as string[],
-            orderedIds: [...event.to.querySelectorAll<HTMLElement>("[data-todo-id]")]
-              .map((item) => item.dataset.todoId)
+          const targetSection = event.to.closest<HTMLElement>("[data-section]");
+          options.onEnd({
+            movedIds: elements.map((item) => item.dataset.taskId).filter(Boolean) as string[],
+            orderedIds: [...event.to.querySelectorAll<HTMLElement>("[data-task-id]")]
+              .map((item) => item.dataset.taskId)
               .filter(Boolean) as string[],
-            sectionKey: event.to.dataset.section ?? "view",
+            sectionKey: targetSection?.dataset.section || sectionKey,
           });
         },
-      });
-      for (const row of list.querySelectorAll<HTMLElement>("[data-todo-id]")) {
-        if (row.dataset.todoId && selectedIds.includes(row.dataset.todoId)) Sortable.utils.select(row);
-      }
-      return instance;
-    });
-    workspaceToDoInstance = { destroy: () => { for (const instance of instances) instance.destroy(); } };
+      }));
+    }
   });
 }
 
-export function destroyWorkspaceToDoSortable(): void {
-  workspaceToDoRequest += 1;
-  workspaceToDoInstance?.destroy();
-  workspaceToDoInstance = null;
+export function destroyTaskSortables(): void {
+  taskRequest += 1;
+  for (const instance of taskInstances) instance.destroy();
+  taskInstances = [];
+}
+
+export function mountHeadingSortable(root: ParentNode, onOrder: (orderedIds: string[]) => void): void {
+  headingInstance?.destroy();
+  headingInstance = null;
+  headingRequest += 1;
+  const request = headingRequest;
+  const sections = root.querySelector<HTMLElement>(".section-list");
+  if (!sections || sections.querySelectorAll(".heading-header").length < 2) return;
+  void sortableReady.then((Sortable: any) => {
+    if (request !== headingRequest || !sections.isConnected) return;
+    headingInstance = Sortable.create(sections, {
+      animation: 150,
+      draggable: ".section:has(.heading-header)",
+      handle: ".heading-header",
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      dragClass: "sortable-drag",
+      fallbackTolerance: 5,
+      onEnd: () => onOrder(
+        [...sections.querySelectorAll<HTMLElement>(":scope > .section[data-section]:has(.heading-header)")]
+          .map((section) => section.dataset.section)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    });
+  });
+}
+
+export function destroyHeadingSortable(): void {
+  headingRequest += 1;
+  headingInstance?.destroy();
+  headingInstance = null;
+}
+
+export function mountChecklistSortable(
+  root: ParentNode,
+  onOrder: (orderedIds: string[]) => void,
+): void {
+  checklistInstance?.destroy();
+  checklistInstance = null;
+  checklistRequest += 1;
+  const request = checklistRequest;
+  const checklist = root.querySelector<HTMLElement>(".checklist");
+  if (!checklist || checklist.children.length < 2) return;
+  void sortableReady.then((Sortable: any) => {
+    if (request !== checklistRequest || !checklist.isConnected) return;
+    checklistInstance = Sortable.create(checklist, {
+      animation: 140,
+      draggable: ".checklist-item",
+      handle: ".checklist-reorder",
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      dragClass: "sortable-drag",
+      fallbackTolerance: 5,
+      onEnd: () => {
+        onOrder(
+          [...checklist.querySelectorAll<HTMLElement>("[data-check-id]")]
+            .map((item) => item.dataset.checkId)
+            .filter((id): id is string => Boolean(id)),
+        );
+      },
+    });
+  });
+}
+
+export function destroyChecklistSortable(): void {
+  checklistRequest += 1;
+  checklistInstance?.destroy();
+  checklistInstance = null;
 }

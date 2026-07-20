@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { changesForIntent, toDoActionForShortcut, touchActionForDistance, updateSelection } from "../../client/replacement/interactions.ts";
+import { changesForIntent, toDoActionForShortcut, touchActionForDistance, updateSelection } from "../../client/workspace/interactions.ts";
 import { createEmptyWorkspace, createWorkspace } from "../../shared/replacement/workspace.ts";
 
 test("row, inspector, keyboard, menu, bulk, drag, and touch completion use the same Workspace operation", () => {

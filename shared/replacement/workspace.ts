@@ -112,6 +112,7 @@ export type WorkspaceChange =
   | { type: "addChecklistItem"; toDoId: EntityId; title: string }
   | { type: "updateChecklistItem"; toDoId: EntityId; itemId: EntityId; changes: Partial<Pick<ChecklistItem, "title" | "completed">> }
   | { type: "removeChecklistItem"; toDoId: EntityId; itemId: EntityId }
+  | { type: "reorderChecklistItems"; toDoId: EntityId; orderedIds: EntityId[] }
   | { type: "reorderToDos"; movedIds: EntityId[]; orderedIds: EntityId[]; destination?: { location?: ToDoLocation; schedule?: Schedule } }
   | { type: "makeToDoRepeating"; id: EntityId; nextDate: string; pattern?: RepeatingPattern; mode?: RepeatingTemplate["mode"] }
   | { type: "makeProjectRepeating"; id: EntityId; firstDate: string; pattern: RepeatingPattern; mode: RepeatingTemplate["mode"] }
@@ -2177,6 +2178,16 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         if (!item) return failAs("not-found", ["The checklist item no longer exists."]);
         toDo.checklist = toDo.checklist.filter((candidate) => candidate.id !== item.id).map((candidate, order) => ({ ...candidate, order }));
         return finishChange(previous, "checklist-item-removed", [{ kind: "checklistItem", id: item.id }], `Restore “${item.title}”`);
+      }
+      if (change.type === "reorderChecklistItems") {
+        const currentIds = new Set(toDo.checklist.map((item) => item.id));
+        const orderedIds = [...new Set(change.orderedIds)];
+        if (orderedIds.length !== toDo.checklist.length || orderedIds.some((id) => !currentIds.has(id))) {
+          return fail(["Checklist ordering must include every current checklist item exactly once."]);
+        }
+        const itemById = new Map(toDo.checklist.map((item) => [item.id, item]));
+        toDo.checklist = orderedIds.map((id, order) => ({ ...itemById.get(id)!, order }));
+        return finishChange(previous, "checklist-items-reordered", [{ kind: "toDo", id: toDo.id }], `Undo checklist order changes to “${toDo.title}”`);
       }
       if (change.type === "snoozeReminder") {
         if (!isIsoDateTime(change.until)) return fail(["Choose a valid time to snooze until."]);

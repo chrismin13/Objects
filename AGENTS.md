@@ -16,7 +16,7 @@ Your role is to build software within this capsule. Lakebed is the runtime, the 
 - Do not add a CSS, PostCSS, or Tailwind build pipeline. They are built in.
 - Favicons can live at `favicon.svg` or `favicon.ico`; for another capsule path, set `favicon: "assets/icon.svg"` in `server/index.ts`.
 - There is no file based routing. Use the built-in client router from `lakebed/client` when you need pages.
-- All imports must be from Lakebed or from relative paths.
+- All imports must be from Lakebed or from relative paths. Client Preact code may import `preact` and `preact/hooks`, which are provided by the Lakebed runtime.
 - Do not use Node built-ins in app code.
 - Use auth through `ctx.auth` on the server and `useAuth()` on the client.
 - Read server-only environment variables through `ctx.env`; define them in `.env.lakebed.server`.
