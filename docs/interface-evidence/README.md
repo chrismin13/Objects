@@ -15,3 +15,15 @@ shasum -a 256 docs/interface-evidence/*.jpg
 ```
 
 The full browser verification record, tested viewports, appearances, and workflows are listed in `docs/replacement-parity-audit.md`.
+
+The 2026-07-21 repetition repair also has three direct browser captures:
+
+- `repeating-template-actions-fixed.png` shows that a Template has a repeat marker and opens for inspection, without completion or bulk-selection controls.
+- `stopped-template-read-only.png` shows the stopped Template inspector on desktop.
+- `stopped-template-mobile.png` shows the same read-only inspector in the mobile drawer.
+
+The exact workflows, browser log counts, bundle hash, and screenshot hashes are stored in `browser-verification.json`. Verify that record with:
+
+```sh
+node scripts/verify-interface-evidence.mjs
+```

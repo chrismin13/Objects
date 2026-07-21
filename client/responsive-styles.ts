@@ -37,6 +37,17 @@ export const responsiveStyles = `
   color: #fff;
   box-shadow: none;
 }
+.template-check { cursor: default; }
+.template-check .check-visual {
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--faint));
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.template-check:hover .check-visual {
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--faint));
+  background: var(--blue-soft);
+  box-shadow: none;
+}
 .check-visual svg { width: 12px; height: 12px; stroke-width: 3; }
 
 :where(button, [role="button"], input, textarea, select):focus-visible {

@@ -42,10 +42,26 @@ export type InterfaceChecklistItem = {
   done: boolean;
 };
 
+export type InterfaceRepeatRule = JsonRecord & {
+  mode: "fixed" | "afterCompletion";
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  interval: number;
+  weekdays: number[];
+  nextDate: string;
+  reminderTime: string | null;
+  deadlineOffset: number | null;
+  paused: boolean;
+  stopped?: boolean;
+  workspaceTemplateId?: string;
+};
+
 export type InterfaceEntity = JsonRecord & {
   id: string;
   title: string;
   order?: number;
+  workspaceTemplate?: boolean;
+  workspaceTemplateId?: string | null;
+  workspaceBlueprintKey?: string;
 };
 
 export type InterfaceToDo = InterfaceEntity & {
@@ -64,13 +80,15 @@ export type InterfaceToDo = InterfaceEntity & {
   spaceId: string | null;
   tags: string[];
   checklist: InterfaceChecklistItem[];
-  repeat: JsonRecord | null;
+  repeat: InterfaceRepeatRule | null;
   repeatTemplateId?: string | null;
   createdAt: string;
   completedAt: string | null;
   loggedAt: string | null;
   trashedAt?: string | null;
   workspaceTemplate?: boolean;
+  workspaceTemplateId?: string | null;
+  workspaceBlueprintKey?: string;
 };
 
 export type InterfaceState = {
@@ -88,6 +106,7 @@ export type InterfaceState = {
 
 export type InterfaceChangeSet = {
   mutationId: string;
+  workspaceChanges?: WorkspaceChange[];
   settings?: JsonRecord;
   entities?: Partial<Record<"spaces" | "areas" | "projects" | "headings" | "calendarEvents" | "tasks", Array<{ id: string; patch: JsonRecord }>>>;
   deletes?: Partial<Record<"spaces" | "areas" | "projects" | "headings" | "calendarEvents" | "tasks", string[]>>;
@@ -302,7 +321,7 @@ function interfaceToDo(
   };
 }
 
-function repeatRecord(template: RepeatingTemplate): JsonRecord {
+function repeatRecord(template: RepeatingTemplate): InterfaceRepeatRule {
   return {
     workspaceTemplateId: template.id,
     mode: template.mode === "after-completion" ? "afterCompletion" : "fixed",
@@ -793,6 +812,64 @@ function documentFromInterfaceState(
 function applyWorkspaceChange(workspace: Workspace, change: WorkspaceChange): string[] {
   const result = workspace.change(change);
   return result.status === "rejected" ? result.errors : [];
+}
+
+const LIFECYCLE_COMPATIBILITY_FIELDS = new Set([
+  "status",
+  "previousStatus",
+  "completedAt",
+  "loggedAt",
+  "trashedAt",
+  "completedWithProjectId",
+]);
+
+function explicitLifecycleTargets(changes: WorkspaceChange[]): { toDoIds: Set<string>; projectIds: Set<string> } {
+  const toDoIds = new Set<string>();
+  const projectIds = new Set<string>();
+  for (const change of changes) {
+    if (["completeToDo", "cancelToDo", "reopenToDo", "trashToDo", "restoreToDo", "permanentlyDeleteToDo"].includes(change.type)) {
+      toDoIds.add((change as { id: string }).id);
+    }
+    if (["closeProject", "restoreProject", "trashProject", "restoreProjectFromTrash", "permanentlyDeleteProject"].includes(change.type)) {
+      projectIds.add((change as { id: string }).id);
+    }
+    if (change.type === "skipOccurrence") {
+      if (change.itemKind === "toDo") toDoIds.add(change.id);
+      else projectIds.add(change.id);
+    }
+  }
+  return { toDoIds, projectIds };
+}
+
+function withoutInferredLifecycleChanges(changeSet: InterfaceChangeSet): InterfaceChangeSet {
+  const explicit = explicitLifecycleTargets(changeSet.workspaceChanges ?? []);
+  if (!explicit.toDoIds.size && !explicit.projectIds.size) return changeSet;
+  const next = clone(changeSet);
+  const cleanPatches = (name: "tasks" | "projects", ids: Set<string>) => {
+    const changes = next.entities?.[name];
+    if (!changes) return;
+    next.entities![name] = changes.map((change) => {
+      if (!ids.has(change.id)) return change;
+      const patch = { ...change.patch };
+      for (const field of LIFECYCLE_COMPATIBILITY_FIELDS) delete patch[field];
+      return { ...change, patch };
+    }).filter((change) => Object.keys(change.patch).length > 0);
+  };
+  cleanPatches("tasks", explicit.toDoIds);
+  cleanPatches("projects", explicit.projectIds);
+  if (next.deletes?.tasks) next.deletes.tasks = next.deletes.tasks.filter((id) => !explicit.toDoIds.has(id));
+  if (next.deletes?.projects) next.deletes.projects = next.deletes.projects.filter((id) => !explicit.projectIds.has(id));
+  return next;
+}
+
+function queueExplicitInterfaceIds(changeSet: InterfaceChangeSet, queues: IdQueues): void {
+  for (const change of changeSet.workspaceChanges ?? []) {
+    if (change.type !== "makeToDoRepeating" && change.type !== "makeProjectRepeating") continue;
+    const collection = change.type === "makeToDoRepeating" ? changeSet.entities?.tasks : changeSet.entities?.projects;
+    const source = collection?.find((item) => item.id === change.id);
+    const templateId = optionalString(source?.patch.repeatTemplateId);
+    if (templateId) queueCreatedIds(queues, { repeatingTemplate: [templateId] });
+  }
 }
 
 function desiredToDoOutcome(item: InterfaceToDo): Outcome {
@@ -1383,19 +1460,27 @@ export function applyInterfaceChangeSetToWorkspace(
 ): InterfaceBridgeResult {
   if (!changeSet.mutationId || changeSet.mutationId.length > 200) return { ok: false, errors: ["A valid interface mutation identity is required."] };
   const today = dependencies.now().slice(0, 10);
-  const desiredState = applyChangeSet(workspaceDocumentToInterfaceState(document, today), changeSet);
   const idQueues: IdQueues = new Map();
   const workspace = createWorkspace(document, {
     now: dependencies.now,
     createId: (kind) => idQueues.get(kind)?.shift() ?? dependencies.createId(kind),
   });
+  queueExplicitInterfaceIds(changeSet, idQueues);
+  const explicitChanges = changeSet.workspaceChanges ?? [];
+  if (explicitChanges.length) {
+    const result = workspace.changeMany(explicitChanges);
+    if (result.status === "rejected") return { ok: false, errors: result.errors };
+  }
+  const compatibilityChangeSet = withoutInferredLifecycleChanges(changeSet);
+  const lifecycleStart = workspace.read();
+  const desiredState = applyChangeSet(workspaceDocumentToInterfaceState(lifecycleStart, today), compatibilityChangeSet);
   const behaviorErrors = [
-    ...applyProjectLifecycleChanges(workspace, document, desiredState, changeSet),
-    ...applyToDoLifecycleChanges(workspace, document, desiredState, changeSet),
+    ...applyProjectLifecycleChanges(workspace, lifecycleStart, desiredState, compatibilityChangeSet),
+    ...applyToDoLifecycleChanges(workspace, lifecycleStart, desiredState, compatibilityChangeSet),
   ];
   if (behaviorErrors.length) return { ok: false, errors: behaviorErrors };
   const behaviorDocument = workspace.read();
-  const state = applyChangeSet(workspaceDocumentToInterfaceState(behaviorDocument, today), changeSet);
+  const state = applyChangeSet(workspaceDocumentToInterfaceState(behaviorDocument, today), compatibilityChangeSet);
   const candidate = documentFromInterfaceState(state, behaviorDocument, dependencies);
   if (!candidate) return { ok: false, errors: ["The interface change would leave the Workspace without a Space."] };
   const synchronizationErrors = syncCandidateThroughWorkspace(workspace, behaviorDocument, candidate, idQueues);

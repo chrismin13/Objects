@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { changesForIntent, toDoActionForShortcut, touchActionForDistance, updateSelection } from "../../client/workspace/interactions.ts";
+import {
+  repeatingEditorAccess,
+  toDoRowCapabilities,
+} from "../../client/app/actions.ts";
+import { changesForIntent, changesForProjectRepetition, changesForToDoRepetition, toDoActionForShortcut, touchActionForDistance, updateSelection } from "../../client/workspace/interactions.ts";
 import { createEmptyWorkspace, createWorkspace } from "../../shared/replacement/workspace.ts";
 
 test("row, inspector, keyboard, menu, bulk, drag, and touch completion use the same Workspace operation", () => {
@@ -50,6 +54,65 @@ test("touch swipes select or open a safe menu without destructive actions", () =
   assert.equal(touchActionForDistance(40), null);
   assert.equal(touchActionForDistance(90), "select");
   assert.equal(touchActionForDistance(-90), "menu");
+});
+
+test("Repeating Templates are inspectable but never actionable to-dos", () => {
+  assert.deepEqual(toDoRowCapabilities({ repeat: { stopped: false }, workspaceTemplateId: null }), {
+    completable: false,
+    selectable: false,
+    draggable: false,
+  });
+  assert.deepEqual(toDoRowCapabilities({ repeat: null, workspaceTemplateId: null }), {
+    completable: true,
+    selectable: true,
+    draggable: true,
+  });
+});
+
+test("stopped Repeating Templates stay read-only through every editor entry path", () => {
+  assert.equal(repeatingEditorAccess({ repeat: { stopped: true }, repeatTemplateId: null, workspaceTemplateId: null }), "read-only");
+  assert.equal(repeatingEditorAccess({ repeat: { stopped: false }, repeatTemplateId: null, workspaceTemplateId: null }), "edit");
+  assert.equal(repeatingEditorAccess({ repeat: null, repeatTemplateId: null, workspaceTemplateId: null }), "create");
+  assert.equal(repeatingEditorAccess({ repeat: null, repeatTemplateId: "template-1", workspaceTemplateId: null }), "unavailable");
+});
+
+test("saving repetition translates into named Workspace changes", () => {
+  const repeat = {
+    mode: "fixed" as const,
+    frequency: "weekly" as const,
+    interval: 2,
+    weekdays: [1, 4],
+    nextDate: "2026-08-03",
+    reminderTime: "09:30",
+    deadlineOffset: 2,
+    paused: true,
+  };
+  assert.deepEqual(changesForToDoRepetition({ toDoId: "todo-1", templateId: null, wasPaused: false, repeat, newTemplateId: "repeat-1" }), [
+    { type: "makeToDoRepeating", id: "todo-1", nextDate: "2026-08-03", pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] }, mode: "on-schedule" },
+    { type: "updateRepeatingTemplate", id: "repeat-1", changes: { nextDate: "2026-08-03", pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] }, mode: "on-schedule", reminderTime: "09:30", deadlineOffsetDays: 2 } },
+    { type: "pauseRepeatingTemplate", id: "repeat-1" },
+  ]);
+  assert.deepEqual(changesForToDoRepetition({ toDoId: "todo-1", templateId: "repeat-1", wasPaused: true, repeat: { ...repeat, paused: false }, newTemplateId: null }), [
+    { type: "updateRepeatingTemplate", id: "repeat-1", changes: { nextDate: "2026-08-03", pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] }, mode: "on-schedule", reminderTime: "09:30", deadlineOffsetDays: 2 } },
+    { type: "resumeRepeatingTemplate", id: "repeat-1" },
+  ]);
+});
+
+test("saving Project repetition uses the same Repeating Template lifecycle", () => {
+  const repeat = {
+    mode: "afterCompletion" as const,
+    frequency: "monthly" as const,
+    interval: 1,
+    weekdays: [],
+    nextDate: "2026-08-15",
+    reminderTime: null,
+    deadlineOffset: 4,
+    paused: false,
+  };
+  assert.deepEqual(changesForProjectRepetition({ projectId: "project-1", templateId: null, newTemplateId: "repeat-project-1", wasPaused: false, repeat }), [
+    { type: "makeProjectRepeating", id: "project-1", firstDate: "2026-08-15", pattern: { frequency: "monthly", interval: 1, weekdays: [] }, mode: "after-completion" },
+    { type: "updateRepeatingTemplate", id: "repeat-project-1", changes: { nextDate: "2026-08-15", pattern: { frequency: "monthly", interval: 1, weekdays: [] }, mode: "after-completion", reminderTime: null, deadlineOffsetDays: 4 } },
+  ]);
 });
 
 test("bulk changes are applied atomically through the Workspace seam", () => {

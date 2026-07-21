@@ -431,6 +431,13 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
     toDo.schedule = schedule;
   }
 
+  function reorderedCompleteCollection<T extends { id: EntityId; order: number }>(items: T[], requestedIds: EntityId[]): T[] | null {
+    const orderedIds = [...new Set(requestedIds)];
+    if (orderedIds.length !== items.length || orderedIds.some((id) => !items.some((item) => item.id === id))) return null;
+    const byId = new Map(items.map((item) => [item.id, item]));
+    return orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
+  }
+
   function duplicateToDoRecord(toDo: ToDo, location: ToDoLocation, order: number, title = toDo.title): ToDo {
     return {
       ...copyDocument(toDo),
@@ -1532,13 +1539,10 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         return finishChange(previous, "area-updated", [{ kind: "area", id: area.id }], `Undo changes to “${area.title}”`);
       }
       if (change.type === "reorderAreas") {
-        const orderedIds = [...new Set(change.orderedIds)];
-        if (orderedIds.length !== document.areas.length || orderedIds.some((id) => !document.areas.some((area) => area.id === id))) {
-          return fail(["Choose every Area exactly once when changing Area order."]);
-        }
-        const byId = new Map(document.areas.map((area) => [area.id, area]));
-        document.areas = orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
-        return finishChange(previous, "areas-reordered", orderedIds.map((id) => ({ kind: "area", id })), "Undo Area order");
+        const reordered = reorderedCompleteCollection(document.areas, change.orderedIds);
+        if (!reordered) return fail(["Choose every Area exactly once when changing Area order."]);
+        document.areas = reordered;
+        return finishChange(previous, "areas-reordered", reordered.map(({ id }) => ({ kind: "area", id })), "Undo Area order");
       }
       if (change.type === "removeArea") {
         if (change.confirmation !== REMOVE_AREA_CONFIRMATION) return failAs("confirmation-required", [`Type ${REMOVE_AREA_CONFIRMATION} to remove this Area.`]);
@@ -1621,13 +1625,10 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         return finishChange(previous, "project-updated", [{ kind: "project", id: project.id }], `Undo changes to “${project.title}”`);
       }
       if (change.type === "reorderProjects") {
-        const orderedIds = [...new Set(change.orderedIds)];
-        if (orderedIds.length !== document.projects.length || orderedIds.some((id) => !document.projects.some((project) => project.id === id))) {
-          return fail(["Choose every Project exactly once when changing Project order."]);
-        }
-        const byId = new Map(document.projects.map((project) => [project.id, project]));
-        document.projects = orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
-        return finishChange(previous, "projects-reordered", orderedIds.map((id) => ({ kind: "project", id })), "Undo Project order");
+        const reordered = reorderedCompleteCollection(document.projects, change.orderedIds);
+        if (!reordered) return fail(["Choose every Project exactly once when changing Project order."]);
+        document.projects = reordered;
+        return finishChange(previous, "projects-reordered", reordered.map(({ id }) => ({ kind: "project", id })), "Undo Project order");
       }
       if (change.type === "duplicateProject") {
         const project = document.projects.find((item) => item.id === change.id);
@@ -1779,13 +1780,10 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         return finishChange(previous, "heading-updated", [{ kind: "heading", id: heading.id }], `Undo changes to “${heading.title}”`);
       }
       if (change.type === "reorderHeadings") {
-        const orderedIds = [...new Set(change.orderedIds)];
-        if (orderedIds.length !== document.headings.length || orderedIds.some((id) => !document.headings.some((heading) => heading.id === id))) {
-          return fail(["Choose every Heading exactly once when changing Heading order."]);
-        }
-        const byId = new Map(document.headings.map((heading) => [heading.id, heading]));
-        document.headings = orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
-        return finishChange(previous, "headings-reordered", orderedIds.map((id) => ({ kind: "heading", id })), "Undo Heading order");
+        const reordered = reorderedCompleteCollection(document.headings, change.orderedIds);
+        if (!reordered) return fail(["Choose every Heading exactly once when changing Heading order."]);
+        document.headings = reordered;
+        return finishChange(previous, "headings-reordered", reordered.map(({ id }) => ({ kind: "heading", id })), "Undo Heading order");
       }
       if (change.type === "duplicateHeading") {
         const heading = document.headings.find((item) => item.id === change.id);
@@ -1891,13 +1889,10 @@ export function createWorkspace(initial: WorkspaceDocument, dependencies: Worksp
         return finishChange(previous, "tag-updated", [{ kind: "tag", id: tag.id }], `Undo renaming “${tag.title}”`);
       }
       if (change.type === "reorderTags") {
-        const orderedIds = [...new Set(change.orderedIds)];
-        if (orderedIds.length !== document.tags.length || orderedIds.some((id) => !document.tags.some((tag) => tag.id === id))) {
-          return fail(["Choose every Tag exactly once when changing Tag order."]);
-        }
-        const byId = new Map(document.tags.map((tag) => [tag.id, tag]));
-        document.tags = orderedIds.map((id, order) => ({ ...byId.get(id)!, order }));
-        return finishChange(previous, "tags-reordered", orderedIds.map((id) => ({ kind: "tag", id })), "Undo Tag order");
+        const reordered = reorderedCompleteCollection(document.tags, change.orderedIds);
+        if (!reordered) return fail(["Choose every Tag exactly once when changing Tag order."]);
+        document.tags = reordered;
+        return finishChange(previous, "tags-reordered", reordered.map(({ id }) => ({ kind: "tag", id })), "Undo Tag order");
       }
       if (change.type === "deleteTag") {
         if (change.confirmation !== DELETE_TAG_CONFIRMATION) return failAs("confirmation-required", [`Type ${DELETE_TAG_CONFIRMATION} to delete this Tag.`]);

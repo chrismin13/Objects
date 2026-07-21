@@ -1,0 +1,51 @@
+{
+  "date": "2026-07-21",
+  "target": "http://localhost:3012",
+  "clientBundleSha256": "f3ceeb31ca2849f0203ef35f2f3a4a4954fb30dee101b846faabef4f275c06e7",
+  "viewports": [
+    { "width": 1280, "height": 720, "appearance": "dark" },
+    { "width": 390, "height": 844, "appearance": "dark" }
+  ],
+  "consoleErrors": 0,
+  "consoleWarnings": 0,
+  "workflows": [
+    {
+      "name": "Create a to-do and turn it into a repeating schedule",
+      "result": "pass"
+    },
+    {
+      "name": "Open the Repeating view from its visible sidebar button",
+      "result": "pass"
+    },
+    {
+      "name": "Inspect a Template without completion, selection, or drag controls",
+      "result": "pass"
+    },
+    {
+      "name": "Stop a schedule and reopen its read-only Template",
+      "result": "pass"
+    },
+    {
+      "name": "Reload and confirm the stopped schedule remains stored",
+      "result": "pass"
+    },
+    {
+      "name": "Open the stopped Template in the mobile inspector drawer",
+      "result": "pass"
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "docs/interface-evidence/repeating-template-actions-fixed.png",
+      "sha256": "1931e063361e31c02d45f4bddc7b32985c1d826ec8623c2d4f09b2f6a7beb771"
+    },
+    {
+      "path": "docs/interface-evidence/stopped-template-read-only.png",
+      "sha256": "4500faae415f0093623954b17920d0092c6871ed69b59e553a3f1b547ce13dea"
+    },
+    {
+      "path": "docs/interface-evidence/stopped-template-mobile.png",
+      "sha256": "5dbc2b26b8179513d20670045ce77c56c986030accbbf919ac86c7b9034076ba"
+    }
+  ]
+}

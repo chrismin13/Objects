@@ -11,7 +11,8 @@ The Workspace rewrite branch now mounts the established Objects interface again.
 The bridge is intentionally one-way at each boundary:
 
 - Workspace document to the interface state shape for rendering.
-- Interface change set through public Workspace lifecycle operations, followed by validated compatibility import for fields that have not migrated yet.
+- Named lifecycle and repetition changes through the public Workspace interface.
+- A validated compatibility import for ordinary fields that have not migrated yet.
 - Workspace document to the sync client for durable saving.
 
 The old `state`, `initializeNormalized`, and `applyChanges` Lakebed APIs are not used by the restored client.
@@ -23,6 +24,8 @@ Run:
 ```sh
 node --experimental-strip-types --test tests/replacement/*.test.ts
 npx lakebed build . --target anonymous --json
+node scripts/check-build-artifact.mjs
+node scripts/verify-interface-evidence.mjs
 ```
 
 The bridge tests cover:
@@ -35,6 +38,8 @@ The bridge tests cover:
 - Workspace validation after an interface edit.
 
 The existing suite continues to cover Workspace lifecycle rules, organization, repetition, discovery, calendar agenda, import, capture, sync, offline queues, and multi-device merging.
+
+The artifact guard keeps the anonymous deploy below the project's 2,080,000-byte safety limit, which is lower than Lakebed's 2,097,152-byte hard maximum.
 
 ## Browser evidence
 
@@ -49,10 +54,12 @@ On 2026-07-20, the complete local Lakebed app was checked with the guest Workspa
 
 The browser workflows covered inline to-do creation, inspector editing, Markdown notes, checklist creation, save and reload persistence, mobile sidebar and inspector drawers, Settings, appearance changes, Quick Find, and the custom New List dialog. No browser-native prompt, confirm, or alert was active.
 
+On 2026-07-21, repetition was checked again through the running app at 1280 × 720 and 390 × 844. The browser run created a normal to-do, made it repeat, opened the visible Repeating view, checked that its Template had no completion or bulk-selection actions, stopped the schedule, reloaded the app, and reopened the stopped Template in desktop and mobile inspectors. The stopped Template stayed read-only and offered permanent deletion instead of restart. The browser reported no errors or warnings. The exact record and screenshot hashes are stored in `docs/interface-evidence/browser-verification.json`.
+
 ## Architecture status
 
 The branch has one visible renderer: the restored Objects interface. The rejected replacement renderer and its packed runtime are gone.
 
-The compatibility interface runtime still owns some temporary interaction and state behavior before it sends a change set across the bridge. This is accepted only for interface recovery. Future behavior migration should move one lifecycle area at a time behind direct Workspace intents without changing the visible markup or CSS. The bridge and compatibility state behavior must not be treated as the final architecture or used for new product behavior.
+The compatibility interface runtime still owns some temporary interaction and state behavior before it sends a change set across the bridge. To-do completion, reopening, cancellation, trash, restore, permanent deletion, skipping, and to-do and Project repetition now cross the seam as named Workspace changes. The bridge still maps ordinary field edits and some older actions. This is accepted only for interface recovery. Future behavior migration should move the remaining lifecycle areas behind direct Workspace intents without changing the visible markup or CSS. The bridge and compatibility state behavior must not be treated as the final architecture or used for new product behavior.
 
 Production cutover remains out of scope. The branch stays on its separate Lakebed deployment until the owner explicitly accepts it.

@@ -155,6 +155,27 @@ test("interface completion keeps after-completion repetition behavior inside Wor
   assert.equal(next.document.repeatingTemplates[0].nextDate, "2026-07-27");
 });
 
+test("explicit Workspace lifecycle changes are authoritative over compatibility status fields", () => {
+  const workspace = workspaceFixture();
+  const created = workspace.change({
+    type: "createToDo",
+    title: "Review report",
+    location: { kind: "unfiled", spaceId: "space-personal" },
+  });
+  assert.equal(created.status, "changed");
+  const toDoId = created.affected.find((item) => item.kind === "toDo")!.id;
+
+  const next = applyInterfaceChangeSetToWorkspace(workspace.read(), {
+    mutationId: "mutation-explicit-cancel",
+    workspaceChanges: [{ type: "cancelToDo", id: toDoId }],
+    entities: { tasks: [{ id: toDoId, patch: { status: "completed", completedAt: NOW } }] },
+  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+
+  assert.equal(next.ok, true);
+  if (!next.ok) return;
+  assert.equal(next.document.toDos[0].outcome, "canceled");
+});
+
 test("making an existing to-do repeat keeps the to-do as the first Occurrence", () => {
   const workspace = workspaceFixture();
   const created = workspace.change({
@@ -169,6 +190,13 @@ test("making an existing to-do repeat keeps the to-do as the first Occurrence", 
 
   const next = applyInterfaceChangeSetToWorkspace(before, {
     mutationId: "mutation-start-repeat",
+    workspaceChanges: [{
+      type: "makeToDoRepeating",
+      id: toDoId,
+      nextDate: "2026-07-27",
+      pattern: { frequency: "weekly", interval: 1, weekdays: [] },
+      mode: "on-schedule",
+    }],
     entities: {
       tasks: [{
         id: toDoId,

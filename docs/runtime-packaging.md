@@ -20,7 +20,7 @@ After rebuilding these files, run:
 ```sh
 node --experimental-strip-types --test tests/replacement/*.test.ts
 npx lakebed build . --target anonymous --json
-wc -c .lakebed/artifacts/Objects.anonymous.json
+node scripts/check-build-artifact.mjs
 ```
 
-The final artifact must stay below 2,097,152 bytes before deployment.
+Lakebed's hard maximum is 2,097,152 bytes. The guard uses an Objects safety limit of 2,080,000 bytes so a build fails before it reaches the platform limit.

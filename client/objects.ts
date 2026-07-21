@@ -2,7 +2,8 @@
 import { h, render as renderPreact } from 'preact';
 import { activatePwaUpdate, getPwaStatus, requestNotificationAccess, requestPwaInstall, showTaskReminder } from './pwa';
 import { parseNaturalDate as parseNaturalDateCore, parseNaturalTask as parseNaturalTaskCore } from './app/model';
-import { reorderChecklist, reorderEntities, reorderTasks } from './app/actions';
+import { repeatingEditorAccess, reorderChecklist, reorderEntities, reorderTasks, toDoRowCapabilities } from './app/actions';
+import { changesForIntent, changesForProjectRepetition, changesForToDoRepetition } from './workspace/interactions';
 import { destroyChecklistSortable, destroyHeadingSortable, destroyTaskSortables, mountChecklistSortable, mountHeadingSortable, mountTaskSortables } from './ui/sortable';
 import { QuickFind } from './features/search/quick-find';
 import { SettingsDialog } from './features/settings/settings-dialog';
@@ -131,8 +132,8 @@ function recordPatch(previous = {}, current = {}) {
 
 function buildChangeSet() {
   if (!ui.state || !ui.syncedState) return null;
-  const changes = { mutationId: uid('mutation'), settings: recordPatch(ui.syncedState.settings, ui.state.settings), entities: {}, deletes: {} };
-  let changed = Object.keys(changes.settings).length > 0;
+  const changes = { mutationId: uid('mutation'), workspaceChanges: cloneData(ui.workspaceChanges), settings: recordPatch(ui.syncedState.settings, ui.state.settings), entities: {}, deletes: {} };
+  let changed = changes.workspaceChanges.length > 0 || Object.keys(changes.settings).length > 0;
   for (const kind of ENTITY_KINDS) {
     const previous = new Map((ui.syncedState[kind] || []).map((item) => [item.id, item]));
     const current = new Map((ui.state[kind] || []).map((item) => [item.id, item]));
@@ -172,6 +173,11 @@ function acknowledgeChanges(changes, serializedAck) {
   ui.state.updatedAt = ack.updatedAt;
   ui.state.syncMutationId = ack.mutationId;
   ui.ownMutationIds.delete(ack.mutationId);
+  ui.workspaceChanges.splice(0, changes.workspaceChanges?.length || 0);
+}
+
+function recordToDoIntent(source, ids, action) {
+  ui.workspaceChanges.push(...changesForIntent({ source, ids, action }));
 }
 
 function mergeRecord(previous, local, remote) {
@@ -215,6 +221,7 @@ const ui = {
   saveFailures: 0,
   renderAfterSave: false,
   ownMutationIds: new Set(),
+  workspaceChanges: [],
   lastCompleted: null,
   activeTags: new Set(),
   markdownPreview: false,
@@ -391,6 +398,7 @@ export function mountObjects(serializedState, options) {
     ui.saveReady = false;
     ui.saveQueued = false;
     ui.saveFailures = 0;
+    ui.workspaceChanges = [];
     ui.launchRulesEnabled = false;
     ui.launchRulesPreferenceLoaded = false;
     ui.state = JSON.parse(serializedState);
@@ -1125,9 +1133,9 @@ function handleContextMenuClick(event) {
     if (!task) return;
     if (action === 'today' || action === 'someday') { moveReminderToDate(task, action === 'today' ? localDay() : null); task.bucket = action; task.scheduledFor = action === 'today' ? localDay() : null; task.evening = false; scheduleSave(); render(); }
     if (action === 'move') openMoveTaskModal(task);
-    if (action === 'restore-task') { task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.trashedAt = null; scheduleSave(); render(); }
+    if (action === 'restore-task') { recordToDoIntent('menu', [task.id], { type: isTrashed(task) ? 'restore' : 'reopen' }); task.status = 'open'; task.completedAt = null; task.loggedAt = null; task.trashedAt = null; scheduleSave(); render(); }
     if (action === 'duplicate-task') { const copy = { ...task, id: uid('task'), title: `${task.title} copy`, status: 'open', completedAt: null, loggedAt: null, trashedAt: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); scheduleSave(); render(); }
-    if (action === 'trash-task') { task.previousStatus = task.status; task.status = 'trashed'; task.trashedAt = new Date().toISOString(); task.loggedAt = null; scheduleSave(); render(); }
+    if (action === 'trash-task') { recordToDoIntent('menu', [task.id], { type: 'trash' }); task.previousStatus = task.status; task.status = 'trashed'; task.trashedAt = new Date().toISOString(); task.loggedAt = null; scheduleSave(); render(); }
   }
   if (kind === 'heading') {
     if (action === 'edit-heading') openHeadingModal(id);
@@ -1782,6 +1790,7 @@ function renderTask(task) {
   const project = projectById(task.projectId);
   const area = areaById(task.areaId);
   const projectTemplateItem = Boolean(task.workspaceTemplateId);
+  const rowCapabilities = toDoRowCapabilities(task);
   const completed = ['completed', 'canceled'].includes(task.status);
   const checked = task.status !== 'open';
   const meta = [];
@@ -1803,10 +1812,13 @@ function renderTask(task) {
   if (task.tags?.length) meta.push(...task.tags.slice(0, 2).map((tag) => `<span class="meta-item"><i class="tag-dot"></i>${esc(tag)}</span>`));
   const star = ui.view.type === 'anytime' && task.bucket === 'today' ? icon('star', 'today-star') : '';
   const bulkSelected = ui.selectedTaskIds.has(task.id);
-  return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${bulkSelected ? 'bulk-selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="${!projectTemplateItem}" aria-selected="${bulkSelected}">
-    <button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${projectTemplateItem ? 'Edit Template item' : checked ? 'Restore' : 'Complete'} ${esc(task.title)}"><span class="check-visual">${checked ? icon('check') : ''}</span></button>
+  const leadingControl = task.repeat
+    ? `<span class="check-button template-check" aria-hidden="true"><span class="check-visual">${icon('repeat')}</span></span>`
+    : `<button class="check-button ${checked ? 'checked' : ''}" data-action="toggle-task" aria-label="${projectTemplateItem ? 'Edit Template item' : checked ? 'Restore' : 'Complete'} ${esc(task.title)}"><span class="check-visual">${checked ? icon('check') : ''}</span></button>`;
+  return `<li class="task-row ${ui.selectedTaskId === task.id ? 'selected' : ''} ${bulkSelected ? 'bulk-selected' : ''} ${completed ? 'completed' : ''} ${task.status === 'canceled' ? 'canceled' : ''}" data-task-id="${task.id}" draggable="${rowCapabilities.draggable}" aria-selected="${bulkSelected}">
+    ${leadingControl}
     <div class="task-main" data-action="select-task" role="button" tabindex="0" aria-label="Open details for ${esc(task.title)}"><span class="task-title">${star}${esc(task.title)}</span>${task.notes ? `<div class="task-notes-preview">${esc(task.notes)}</div>` : ''}${meta.length ? `<div class="task-meta">${meta.join('')}</div>` : ''}</div>
-    ${projectTemplateItem ? '' : `<button class="task-select ${bulkSelected ? 'active' : ''}" type="button" data-action="select-bulk" aria-label="${bulkSelected ? 'Remove' : 'Add'} ${esc(task.title)} ${bulkSelected ? 'from' : 'to'} selection">${bulkSelected ? icon('check') : ''}</button>`}
+    ${rowCapabilities.selectable ? `<button class="task-select ${bulkSelected ? 'active' : ''}" type="button" data-action="select-bulk" aria-label="${bulkSelected ? 'Remove' : 'Add'} ${esc(task.title)} ${bulkSelected ? 'from' : 'to'} selection">${bulkSelected ? icon('check') : ''}</button>` : ''}
     ${icon('chevron', 'task-chevron')}
   </li>`;
 }
@@ -1815,6 +1827,8 @@ function handleTaskGestureStart(event) {
   if (!matchMedia('(max-width: 820px)').matches || !event.isPrimary || event.target.closest('button, input, textarea, select, a')) return;
   const row = event.target.closest('[data-task-id]');
   if (!row) return;
+  const task = ui.state.tasks.find((item) => item.id === row.dataset.taskId);
+  if (!task || !toDoRowCapabilities(task).selectable) return;
   taskGesture = { pointerId: event.pointerId, row, taskId: row.dataset.taskId, startX: event.clientX, startY: event.clientY, currentX: event.clientX, currentY: event.clientY, horizontal: false };
 }
 
@@ -1854,7 +1868,7 @@ function handleTaskGestureEnd(event) { finishTaskGesture(event); }
 function handleTaskGestureCancel(event) { finishTaskGesture(event, true); }
 
 function selectedTasks() {
-  return ui.state.tasks.filter((task) => ui.selectedTaskIds.has(task.id));
+  return ui.state.tasks.filter((task) => ui.selectedTaskIds.has(task.id) && toDoRowCapabilities(task).selectable);
 }
 
 function draggedTasks() {
@@ -1873,6 +1887,8 @@ function clearTaskSelection(renderAfter = true) {
 }
 
 function selectTaskForBulk(taskId, extendRange = false) {
+  const task = ui.state.tasks.find((item) => item.id === taskId);
+  if (!task || !toDoRowCapabilities(task).selectable) return;
   if (extendRange && ui.selectionAnchorId) {
     const visibleIds = $$('[data-task-id]', content).map((row) => row.dataset.taskId);
     const anchor = visibleIds.indexOf(ui.selectionAnchorId);
@@ -1923,6 +1939,7 @@ function handleBulkAction(action) {
   }
   if (action === 'complete' || action === 'cancel') {
     const finishedAt = new Date().toISOString();
+    recordToDoIntent('bulk', actionable.map((task) => task.id), { type: action === 'complete' ? 'complete' : 'cancel' });
     actionable.forEach((task) => {
       task.status = action === 'complete' ? 'completed' : 'canceled';
       task.completedAt = finishedAt; task.loggedAt = null; task.completedWithProjectId = null;
@@ -1935,12 +1952,16 @@ function handleBulkAction(action) {
     showToast(`${actionable.length} to-do${actionable.length === 1 ? '' : 's'} ${action === 'complete' ? 'completed' : 'canceled'}`); return;
   }
   if (action === 'restore') {
+    const directRestores = tasks.filter((task) => !isTrashed(projectById(task.projectId))).map((task) => task.id);
+    recordToDoIntent('bulk', directRestores, { type: 'restore' });
     tasks.forEach((task) => restoreTrashedTask(task));
     scheduleSave(); clearTaskSelection(); showToast(`${tasks.length} to-do${tasks.length === 1 ? '' : 's'} restored`); return;
   }
   if (action === 'trash') {
     const trashedAt = new Date().toISOString();
-    tasks.filter((task) => !isTrashed(task)).forEach((task) => {
+    const toTrash = tasks.filter((task) => !isTrashed(task));
+    recordToDoIntent('bulk', toTrash.map((task) => task.id), { type: 'trash' });
+    toTrash.forEach((task) => {
       task.previousStatus = task.status; task.status = 'trashed'; task.loggedAt = null; task.trashedAt = trashedAt;
     });
     scheduleSave(); clearTaskSelection(); showToast(`${tasks.length} to-do${tasks.length === 1 ? '' : 's'} moved to Trash`);
@@ -2382,17 +2403,19 @@ function createTaskFromParsed(parsed, options = {}) {
   return task;
 }
 
-function toggleTask(taskId, row) {
+function toggleTask(taskId, row, source = 'row') {
   const task = ui.state.tasks.find((item) => item.id === taskId);
   if (!task) return;
   if (isTrashed(task)) {
     const restoredProject = restoreTrashedTask(task);
+    if (!restoredProject) recordToDoIntent(source, [task.id], { type: 'restore' });
     scheduleSave(); render(); showToast(restoredProject ? 'Project restored' : 'To-do restored');
     return;
   }
   if (task.repeat) { selectTask(task.id); showToast('Edit or pause this repeating template in its details'); return; }
   if (task.workspaceTemplateId) { selectTask(task.id); showToast('Edit this item as part of its Repeating Project Template'); return; }
   if (task.status === 'open') {
+    recordToDoIntent(source, [task.id], { type: 'complete' });
     ui.lastCompleted = { id: task.id, status: task.status, completedAt: task.completedAt, loggedAt: task.loggedAt || null, completedWithProjectId: task.completedWithProjectId || null };
     task.status = 'completed';
     task.completedAt = new Date().toISOString();
@@ -2414,6 +2437,7 @@ function toggleTask(taskId, row) {
     if (isLogged(task)) setTimeout(render, 220);
     else render();
   } else {
+    recordToDoIntent(source, [task.id], { type: 'reopen' });
     task.status = 'open';
     task.completedAt = null;
     task.loggedAt = null;
@@ -2427,6 +2451,7 @@ function undoComplete() {
   if (!ui.lastCompleted) return;
   const task = ui.state.tasks.find((item) => item.id === ui.lastCompleted.id);
   if (task) {
+    recordToDoIntent('inspector', [task.id], { type: 'reopen' });
     task.status = ui.lastCompleted.status; task.completedAt = ui.lastCompleted.completedAt; task.loggedAt = ui.lastCompleted.loggedAt; task.completedWithProjectId = ui.lastCompleted.completedWithProjectId;
     if (task.repeatTemplateId && ui.lastCompleted.repeatTemplateNextDate) {
       const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
@@ -2773,22 +2798,27 @@ function handleInspectorClick(event) {
       const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
       if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
     }
+    recordToDoIntent('inspector', [task.id], { type: 'trash' });
     task.previousStatus = task.status; task.status = 'trashed'; task.loggedAt = null; task.trashedAt = new Date().toISOString(); scheduleSave(); closeInspector(); showToast('Moved to Trash');
   }
   if (action === 'cancel') {
+    recordToDoIntent('inspector', [task.id], { type: 'cancel' });
     task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = null; task.completedWithProjectId = null;
     applyLogbookPolicy(); scheduleSave(); closeInspector(); render(); showToast('To-do canceled', 'Undo', () => {
+      recordToDoIntent('inspector', [task.id], { type: 'reopen' });
       task.status = 'open'; task.completedAt = null; task.loggedAt = null; scheduleSave(); render();
     });
   }
   if (action === 'skip-occurrence') {
     const template = ui.state.tasks.find((item) => item.id === task.repeatTemplateId);
+    ui.workspaceChanges.push({ type: 'skipOccurrence', itemKind: 'toDo', id: task.id });
     task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = task.completedAt; task.completedWithProjectId = null;
     if (template?.repeat?.mode === 'afterCompletion') template.repeat.nextDate = nextRepeatDate(localDay(), template.repeat);
     materializeRecurringTasks(); scheduleSave(); closeInspector(); render(); showToast('Occurrence skipped');
   }
   if (action === 'delete-repeat-template') {
     confirmAction('Delete this Repeating Template forever?', 'Its existing Occurrences remain in your history. This cannot be undone.', 'Delete forever', () => {
+      ui.workspaceChanges.push({ type: 'deleteRepeatingTemplate', id: task.id, confirmation: 'DELETE REPEATING TEMPLATE' });
       ui.state.tasks = ui.state.tasks.filter((item) => item.id !== task.id);
       scheduleSave(); closeInspector(); render(); showToast('Repeating Template deleted');
     });
@@ -2801,10 +2831,12 @@ function handleInspectorClick(event) {
   }
   if (action === 'restore') {
     const restoredProject = restoreTrashedTask(task);
+    if (!restoredProject) recordToDoIntent('inspector', [task.id], { type: 'restore' });
     scheduleSave(); closeInspector(); showToast(restoredProject ? 'Project restored' : 'To-do restored');
   }
   if (action === 'delete-forever') {
     confirmAction('Delete this to-do forever?', 'This cannot be undone.', 'Delete forever', () => {
+      ui.workspaceChanges.push({ type: 'permanentlyDeleteToDo', id: task.id, confirmation: 'DELETE FOREVER' });
       ui.state.tasks = ui.state.tasks.filter((item) => item.id !== task.id); scheduleSave(); closeInspector(); showToast('To-do permanently deleted');
     });
   }
@@ -2827,7 +2859,7 @@ function handleInspectorClick(event) {
   if (action === 'close-find') { ui.noteFindOpen = false; ui.noteFindQuery = ''; ui.noteFindIndex = 0; renderInspector(true); }
   if (action === 'edit-repeat') { openRepeatingTemplateEditor(task); return; }
   if (action === 'start-repeat') { openRepeatingTemplateEditor(task); return; }
-  if (action === 'stop-repeat') { task.repeat = null; scheduleSave(); render(true); }
+  if (action === 'stop-repeat' && task.repeat) { ui.workspaceChanges.push({ type: 'stopRepeatingTemplate', id: task.id }); task.repeat = { ...task.repeat, paused: true, stopped: true }; scheduleSave(); render(true); }
   if (action === 'add-check') { task.checklist.push({ id: uid('check'), title: '', done: false }); scheduleSave(); renderInspector(true); $$('.checklist-item input[type="text"]', inspector).at(-1)?.focus(); }
   if (action === 'move-check-up' || action === 'move-check-down') {
     const id = closestTarget('[data-check-id]')?.dataset.checkId;
@@ -2851,6 +2883,8 @@ function handleInspectorClick(event) {
 }
 
 function openRepeatingTemplateEditor(task) {
+  const editorAccess = repeatingEditorAccess(task);
+  if (editorAccess === 'unavailable') return;
   const nextDate = task.repeat?.nextDate || task.scheduledFor || addDays(localDay(), 7);
   const nextWeekday = new Date(`${nextDate}T12:00:00`).getDay();
   const initial = task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : { mode: 'fixed', frequency: 'weekly', interval: 1, weekdays: [Number.isNaN(nextWeekday) ? 1 : nextWeekday], nextDate, reminderTime: task.reminderAt?.slice(11, 16) || '', deadlineOffset: dayDistance(nextDate, task.deadline), paused: false };
@@ -2860,12 +2894,17 @@ function openRepeatingTemplateEditor(task) {
     title: task.title,
     value: initial,
     fallbackDate: nextDate,
+    stopped: editorAccess === 'read-only',
     onClose: closeModal,
     onSave: (repeat) => {
+      const previousTemplateId = task.repeat ? task.id : null;
+      const wasPaused = Boolean(task.repeat?.paused);
       const savedRepeat = { ...repeat, weekdays: [...(repeat.weekdays || [])], stopped: false };
+      let newTemplateId = null;
       if (task.repeat) task.repeat = savedRepeat;
       else {
         const templateId = uid('repeat');
+        newTemplateId = templateId;
         const template = {
           ...cloneData(task), id: templateId, repeat: savedRepeat, repeatTemplateId: null, workspaceTemplate: true,
           status: 'open', previousStatus: null, scheduledFor: repeat.nextDate, bucket: 'upcoming', completedAt: null, loggedAt: null, trashedAt: null,
@@ -2874,6 +2913,13 @@ function openRepeatingTemplateEditor(task) {
         task.repeatTemplateId = templateId;
         ui.state.tasks.push(template);
       }
+      ui.workspaceChanges.push(...changesForToDoRepetition({
+        toDoId: task.id,
+        templateId: previousTemplateId,
+        newTemplateId,
+        wasPaused,
+        repeat: savedRepeat,
+      }));
       task.scheduledFor = repeat.nextDate;
       task.bucket = repeat.nextDate <= localDay() ? 'today' : 'upcoming';
       moveReminderToDate(task, repeat.nextDate);
@@ -2881,6 +2927,8 @@ function openRepeatingTemplateEditor(task) {
       scheduleSave(); closeModal(); render(true); showToast(savedRepeat.paused ? 'Repeating schedule paused' : 'Repeating schedule saved');
     },
     onStop: () => {
+      if (!task.repeat) { closeModal(); return; }
+      ui.workspaceChanges.push({ type: 'stopRepeatingTemplate', id: task.id });
       task.repeat = { ...task.repeat, paused: true, stopped: true };
       scheduleSave(); closeModal(); render(true); showToast('Repeating schedule stopped');
     },
@@ -2900,19 +2948,29 @@ function openRepeatingProjectEditor(project) {
     onClose: closeModal,
     onOpenContents: () => { closeModal(); setView('project', project.id); },
     onSave: (repeat) => {
+      const wasPaused = Boolean(project.repeat?.paused);
       project.repeat = { ...repeat, weekdays: [...(repeat.weekdays || [])], stopped: false };
+      ui.workspaceChanges.push(...changesForProjectRepetition({
+        projectId: project.id,
+        templateId: project.id,
+        newTemplateId: null,
+        wasPaused,
+        repeat: project.repeat,
+      }));
       project.scheduledFor = repeat.nextDate;
       project.bucket = repeat.nextDate <= localDay() ? 'today' : 'upcoming';
       if (Number.isFinite(repeat.deadlineOffset)) project.deadline = addDays(repeat.nextDate, repeat.deadlineOffset);
       scheduleSave(); closeModal(); render(true); showToast(repeat.paused ? 'Repeating Project paused' : 'Repeating Project schedule saved');
     },
     onStop: () => {
+      ui.workspaceChanges.push({ type: 'stopRepeatingTemplate', id: project.id });
       project.repeat = { ...project.repeat, paused: true, stopped: true };
       scheduleSave(); closeModal(); render(true); showToast('Repeating Project stopped');
     },
     onDelete: () => {
       closeModal();
       confirmAction('Delete this Repeating Project Template forever?', 'Existing Project Occurrences remain in history. This cannot be undone.', 'Delete forever', () => {
+        ui.workspaceChanges.push({ type: 'deleteRepeatingTemplate', id: project.id, confirmation: 'DELETE REPEATING TEMPLATE' });
         ui.state.projects = ui.state.projects.filter((item) => item.id !== project.id);
         ui.state.headings = ui.state.headings.filter((item) => item.workspaceTemplateId !== project.id);
         ui.state.tasks = ui.state.tasks.filter((item) => item.workspaceTemplateId !== project.id);
@@ -3212,8 +3270,10 @@ function openProjectModalPreact(projectId) {
       project.deadline = draft.deadline || null;
       project.tags = cleanTagList(draft.tags || []);
       const savedRepeat = draft.repeat ? { ...draft.repeat, weekdays: [...(draft.repeat.weekdays || [])], deadlineOffset: dayDistance(draft.repeat.nextDate, project.deadline), stopped: false } : null;
+      let newTemplateId = null;
       if (!project.repeat && savedRepeat) {
         const templateId = uid('repeat-project');
+        newTemplateId = templateId;
         const template = { ...cloneData(project), id: templateId, repeat: savedRepeat, repeatTemplateId: null, workspaceTemplate: true, status: 'open', previousStatus: null, completedAt: null, loggedAt: null, trashedAt: null, order: Number.MAX_SAFE_INTEGER };
         ui.state.projects.push(template);
         const headingMap = new Map();
@@ -3237,6 +3297,15 @@ function openProjectModalPreact(projectId) {
       if (project.repeatTemplateId && savedRepeat) {
         project.scheduledFor = savedRepeat.nextDate;
         project.bucket = savedRepeat.nextDate <= localDay() ? 'today' : 'upcoming';
+      }
+      if (savedRepeat && newTemplateId) {
+        ui.workspaceChanges.push(...changesForProjectRepetition({
+          projectId: project.id,
+          templateId: null,
+          newTemplateId,
+          wasPaused: false,
+          repeat: savedRepeat,
+        }));
       }
       ui.state.tasks.filter((task) => task.projectId === project.id).forEach((task) => { task.areaId = project.areaId; task.spaceId = project.spaceId; });
       scheduleSave(); closeModal(); render();
@@ -3637,7 +3706,10 @@ function handleGlobalKeydown(event) {
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
     event.preventDefault();
-    $$('[data-task-id]', content).forEach((row) => ui.selectedTaskIds.add(row.dataset.taskId));
+    $$('[data-task-id]', content).forEach((row) => {
+      const task = ui.state.tasks.find((item) => item.id === row.dataset.taskId);
+      if (task && toDoRowCapabilities(task).selectable) ui.selectedTaskIds.add(task.id);
+    });
     ui.selectionAnchorId = [...ui.selectedTaskIds][0] || null;
     if (ui.selectedTaskIds.size) closeInspector({ restoreFocus: false });
     renderContent(); return;
@@ -3648,8 +3720,8 @@ function handleGlobalKeydown(event) {
     const destinations = ['inbox', 'today', 'upcoming', 'anytime', 'someday', 'logbook'];
     event.preventDefault(); setView(destinations[Number(event.key) - 1]); return;
   }
-  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
-  if ((event.metaKey || event.ctrlKey) && event.key === '.' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId, null, 'keyboard'); return; }
+  if ((event.metaKey || event.ctrlKey) && event.key === '.' && ui.selectedTaskId) { event.preventDefault(); toggleTask(ui.selectedTaskId, null, 'keyboard'); return; }
   if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 't' && ui.selectedTaskId) {
     event.preventDefault(); const task = currentTask(); task.bucket = 'today'; task.scheduledFor = localDay(); task.evening = false; moveReminderToDate(task, task.scheduledFor); scheduleSave(); render(true); return;
   }
@@ -3666,12 +3738,12 @@ function handleGlobalKeydown(event) {
     event.preventDefault(); renderInspector(); setTimeout(() => $('[data-field="scheduledFor"]', inspector)?.focus(), 20); return;
   }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'r' && ui.selectedTaskId) {
-    event.preventDefault(); const task = currentTask(); if (!task.repeatTemplateId) openRepeatingTemplateEditor(task); return;
+    event.preventDefault(); const task = currentTask(); if (task && repeatingEditorAccess(task) !== 'unavailable') openRepeatingTemplateEditor(task); return;
   }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && ['f', 'm'].includes(event.key.toLowerCase()) && (ui.selectedTaskId || ui.selectedTaskIds.size)) { event.preventDefault(); openMoveTaskModal(ui.selectedTaskIds.size ? selectedTasks() : currentTask()); return; }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') { event.preventDefault(); const logged = logCompletedNow(); scheduleSave(); render(); showToast(`Logged ${logged} completed item${logged === 1 ? '' : 's'}`); return; }
   if (event.altKey && event.key === 'Backspace' && ui.selectedTaskId && currentTask()?.status === 'open') {
-    event.preventDefault(); const task = currentTask(); task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = null; applyLogbookPolicy(); scheduleSave(); closeInspector(); render(); showToast('To-do canceled'); return;
+    event.preventDefault(); const task = currentTask(); recordToDoIntent('keyboard', [task.id], { type: 'cancel' }); task.status = 'canceled'; task.completedAt = new Date().toISOString(); task.loggedAt = null; applyLogbookPolicy(); scheduleSave(); closeInspector(); render(); showToast('To-do canceled'); return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd' && ui.selectedTaskId) { event.preventDefault(); const task = currentTask(); const copy = { ...task, id: uid('task'), title: `${task.title} copy`, tags: [...(task.tags || [])], repeat: task.repeat ? { ...task.repeat, weekdays: [...(task.repeat.weekdays || [])] } : null, status: 'open', completedAt: null, loggedAt: null, completedWithProjectId: null, reminderSentAt: null, repeatTemplateId: null, createdAt: new Date().toISOString(), order: Date.now(), checklist: task.checklist.map((item) => ({ ...item, id: uid('check') })) }; ui.state.tasks.push(copy); selectTask(copy.id); scheduleSave(); showToast('To-do duplicated'); return; }
   if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'n' && ui.view.type === 'project') { event.preventDefault(); openHeadingModal(); return; }

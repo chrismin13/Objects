@@ -5,6 +5,33 @@ import type {
   LegacyTask,
 } from "./legacy-types";
 
+type ToDoPresentationState = {
+  repeat?: { stopped?: unknown } | null;
+  repeatTemplateId?: string | null;
+  workspaceTemplateId?: string | null;
+};
+
+export function toDoRowCapabilities(task: ToDoPresentationState): {
+  completable: boolean;
+  selectable: boolean;
+  draggable: boolean;
+} {
+  const isRepeatingTemplate = Boolean(task.repeat);
+  const isProjectTemplateItem = Boolean(task.workspaceTemplateId);
+  const actionable = !isRepeatingTemplate && !isProjectTemplateItem;
+  return {
+    completable: actionable,
+    selectable: actionable,
+    draggable: actionable,
+  };
+}
+
+export function repeatingEditorAccess(task: ToDoPresentationState): "create" | "edit" | "read-only" | "unavailable" {
+  if (task.repeatTemplateId || task.workspaceTemplateId) return "unavailable";
+  if (!task.repeat) return "create";
+  return task.repeat.stopped ? "read-only" : "edit";
+}
+
 function touch(state: LegacyInterfaceState): void {
   state.updatedAt = new Date().toISOString();
 }

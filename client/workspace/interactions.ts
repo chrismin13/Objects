@@ -20,6 +20,34 @@ export type ToDoIntent = {
   action: ToDoAction;
 };
 
+export type InterfaceRepeatRule = {
+  mode: "fixed" | "afterCompletion";
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  interval: number;
+  weekdays: number[];
+  nextDate: string;
+  reminderTime?: string | null;
+  deadlineOffset?: number | null;
+  paused: boolean;
+};
+
+function repeatingTemplateDetails(repeat: InterfaceRepeatRule) {
+  const pattern = {
+    frequency: repeat.frequency,
+    interval: Math.max(1, Math.floor(repeat.interval)),
+    weekdays: [...repeat.weekdays],
+  };
+  const mode = repeat.mode === "afterCompletion" ? "after-completion" as const : "on-schedule" as const;
+  const changes = {
+    nextDate: repeat.nextDate,
+    pattern,
+    mode,
+    reminderTime: repeat.reminderTime || null,
+    deadlineOffsetDays: Number.isFinite(repeat.deadlineOffset) ? repeat.deadlineOffset : null,
+  };
+  return { pattern, mode, changes };
+}
+
 export type SelectionState = { ids: string[]; anchorId: string | null };
 export type SelectionMode = "single" | "toggle" | "range" | "all";
 
@@ -79,4 +107,44 @@ export function changesForIntent(intent: ToDoIntent): WorkspaceChange[] {
     if (action.type === "move") return { type: "updateToDo", id, changes: { location: action.location } };
     return { type: "setToDoTags", id, titles: action.titles };
   });
+}
+
+export function changesForToDoRepetition(input: {
+  toDoId: string;
+  templateId: string | null;
+  newTemplateId: string | null;
+  wasPaused: boolean;
+  repeat: InterfaceRepeatRule;
+}): WorkspaceChange[] {
+  const details = repeatingTemplateDetails(input.repeat);
+  const templateId = input.templateId ?? input.newTemplateId;
+  if (!templateId) return [];
+  const changes: WorkspaceChange[] = [];
+  if (!input.templateId) {
+    changes.push({ type: "makeToDoRepeating", id: input.toDoId, nextDate: input.repeat.nextDate, pattern: details.pattern, mode: details.mode });
+  }
+  changes.push({ type: "updateRepeatingTemplate", id: templateId, changes: details.changes });
+  if (input.repeat.paused && !input.wasPaused) changes.push({ type: "pauseRepeatingTemplate", id: templateId });
+  if (!input.repeat.paused && input.wasPaused) changes.push({ type: "resumeRepeatingTemplate", id: templateId });
+  return changes;
+}
+
+export function changesForProjectRepetition(input: {
+  projectId: string;
+  templateId: string | null;
+  newTemplateId: string | null;
+  wasPaused: boolean;
+  repeat: InterfaceRepeatRule;
+}): WorkspaceChange[] {
+  const details = repeatingTemplateDetails(input.repeat);
+  const templateId = input.templateId ?? input.newTemplateId;
+  if (!templateId) return [];
+  const changes: WorkspaceChange[] = [];
+  if (!input.templateId) {
+    changes.push({ type: "makeProjectRepeating", id: input.projectId, firstDate: input.repeat.nextDate, pattern: details.pattern, mode: details.mode });
+  }
+  changes.push({ type: "updateRepeatingTemplate", id: templateId, changes: details.changes });
+  if (input.repeat.paused && !input.wasPaused) changes.push({ type: "pauseRepeatingTemplate", id: templateId });
+  if (!input.repeat.paused && input.wasPaused) changes.push({ type: "resumeRepeatingTemplate", id: templateId });
+  return changes;
 }
