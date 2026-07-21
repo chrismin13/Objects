@@ -57,8 +57,8 @@ npx lakebed deploy
 
 ### Deployment target
 
-- This Workspace rewrite branch must always be published through `https://objects-rewrite.lakebed.app`.
-- Keep `lakebed.json` bound to the claimed deploy that owns `objects-rewrite.lakebed.app`, and verify the named hostname after every deploy before reporting completion.
+- This Workspace rewrite branch must always be published through `https://objects-next.lakebed.app`.
+- Keep `lakebed.json` bound to the claimed deploy that owns `objects-next.lakebed.app`, and verify the named hostname after every deploy before reporting completion.
 - Lakebed also prints a generated slug URL for the backing deploy. Do not report that generated URL as this branch's deployment target, and do not create a replacement deploy merely because the generated backing URL is visible.
 - Separate random-slug preview deploys may be used for short-lived verification only; terminate them after the named deployment is verified.
 - Do not deploy this branch to the production `objects.lakebed.app` app unless the owner explicitly requests a production cutover.
