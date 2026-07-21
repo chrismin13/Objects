@@ -125,7 +125,8 @@ class StableObjectsDom extends Component {
         <button className="context-menu-trigger" slot="trigger" type="button" tabIndex={-1} aria-hidden="true" />
         <div id="context-menu-items" />
       </WaDropdown>
-      <div id="toast-region" className="toast-region" aria-live="polite" />
+      <span id="toast-anchor" hidden />
+      <div id="toast-region" className="toast-region" aria-live="polite" popover="manual" />
     </>;
   }
 }

@@ -375,7 +375,8 @@ h1 { margin: 0; font-size: clamp(30px, 4vw, 38px); line-height: 1.08; letter-spa
 .button.primary { border-color: var(--blue); background: var(--blue); color: white; }
 .button.primary:hover { filter: brightness(1.04); }
 
-.toast-region { position: fixed; z-index: 200; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast-region { position: fixed; z-index: 200; top: auto; right: auto; left: 50%; bottom: 24px; margin: 0; padding: 0; overflow: visible; border: 0; background: transparent; transform: translateX(-50%); flex-direction: column; gap: 8px; pointer-events: none; }
+.toast-region:popover-open { display: flex; }
 .toast { display: flex; align-items: center; gap: 12px; min-width: 220px; padding: 10px 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--text); color: var(--surface); box-shadow: 0 9px 30px rgba(0,0,0,.2); animation: toast-in .25s var(--ease) both; }
 .toast { pointer-events: auto; }
 .toast button { margin-left: auto; border: 0; background: transparent; color: inherit; font-weight: 700; cursor: pointer; }

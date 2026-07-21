@@ -8,6 +8,7 @@ import { destroyChecklistSortable, destroyHeadingSortable, destroyTaskSortables,
 import { QuickFind } from './features/search/quick-find';
 import { SettingsDialog } from './features/settings/settings-dialog';
 import { AreaDialog, BulkTagsDialog, ConfirmDialog, FinishProjectDialog, HeadingDialog, MoveTasksDialog, NewListDialog, ProjectDialog, RepeatingTemplateDialog, SpacesSettingsDialog, SpaceSwitcherDialog } from './features/entities/entity-dialogs';
+import { hideEmptyToastLayer, placeToastLayer, showToastLayer } from './toast-layer';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -3809,7 +3810,15 @@ function showToast(message, actionLabel, action) {
   const toast = document.createElement('div');
   toast.className = 'toast';
   toast.innerHTML = `<span>${esc(message)}</span>${actionLabel ? `<button type="button">${esc(actionLabel)}</button>` : ''}`;
-  if (actionLabel) $('button', toast).addEventListener('click', () => { action(); toast.remove(); });
+  const removeToast = () => {
+    toast.remove();
+    hideEmptyToastLayer(region);
+  };
+  if (actionLabel) $('button', toast).addEventListener('click', () => { action(); removeToast(); });
   region.append(toast);
-  setTimeout(() => toast.remove(), 4200);
+  const openDialogs = [...document.querySelectorAll('wa-dialog[open]')];
+  const activeDialog = openDialogs[openDialogs.length - 1];
+  if (activeDialog instanceof HTMLElement) placeToastLayer(region, activeDialog);
+  showToastLayer(region);
+  setTimeout(removeToast, 4200);
 }

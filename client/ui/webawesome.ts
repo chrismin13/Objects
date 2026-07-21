@@ -1,5 +1,6 @@
 import type { RefObject } from "preact";
 import { useEffect } from "preact/hooks";
+import { placeToastLayer, raiseToastLayer } from "../toast-layer";
 
 export type OverlayElement = HTMLElement & { open: boolean; show(): void; hide(): void };
 export type ValueElement = HTMLElement & { value: string | string[] | null; checked: boolean };
@@ -55,8 +56,28 @@ export function useWebAwesomeOverlay(ref: RefObject<OverlayElement>, onClose: ()
     let active = true;
     const element = ref.current;
     if (!element) return;
-    const closed = (event: Event) => { if (event.target === element) onClose(); };
-    const opened = (event: Event) => { if (event.target === element) onOpen?.(); };
+    const closed = (event: Event) => {
+      if (event.target !== element) return;
+      const toastRegion = document.querySelector("#toast-region");
+      const openDialogs = [...document.querySelectorAll("wa-dialog[open]")];
+      const remainingDialog = openDialogs.findLast((dialog) => dialog !== element);
+      const toastHome = document.querySelector("#toast-anchor")?.parentElement;
+      const nextParent = remainingDialog || toastHome;
+      if (toastRegion instanceof HTMLElement && nextParent instanceof HTMLElement) {
+        placeToastLayer(toastRegion, nextParent);
+        raiseToastLayer(toastRegion);
+      }
+      onClose();
+    };
+    const opened = (event: Event) => {
+      if (event.target !== element) return;
+      const toastRegion = document.querySelector("#toast-region");
+      if (toastRegion instanceof HTMLElement && toastRegion.childElementCount) {
+        placeToastLayer(toastRegion, element);
+        raiseToastLayer(toastRegion);
+      }
+      onOpen?.();
+    };
     void customElements.whenDefined(element.localName).then(() => {
       if (!active || !element.isConnected) return;
       element.addEventListener("wa-after-hide", closed);
