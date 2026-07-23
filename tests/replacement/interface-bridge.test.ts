@@ -409,6 +409,33 @@ test("skipping a repeating Project uses the distinct Workspace Skip lifecycle", 
   assert.deepEqual(next.document.projectClosures[0].changedToDoIds, [toDoId]);
 });
 
+test("a restored backup replaces the complete Workspace through the interface bridge", () => {
+  const workspace = workspaceFixture();
+  workspace.change({ type: "createToDo", title: "Current item", location: { kind: "unfiled", spaceId: "space-personal" } });
+  const before = workspace.read();
+
+  const next = applyInterfaceChangeSetToWorkspace(before, {
+    mutationId: "restore-backup",
+    replaceWorkspace: true,
+    settings: { defaultSpaceId: "space-restored", tags: [] },
+    entities: {
+      spaces: [{ id: "space-restored", patch: { title: "Restored", color: "#123456", pinned: true, order: 0 } }],
+      tasks: [{ id: "todo-restored", patch: {
+        title: "Restored item", notes: "", status: "open", bucket: "inbox", scheduledFor: null, evening: false,
+        reminderAt: null, reminderSentAt: null, deadline: null, projectId: null, headingId: null, areaId: null,
+        spaceId: "space-restored", tags: [], checklist: [], repeat: null, createdAt: NOW, completedAt: null, loggedAt: null,
+      } }],
+    },
+    deletes: { spaces: ["space-personal"], tasks: [before.toDos[0].id] },
+  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+
+  assert.equal(next.ok, true);
+  if (!next.ok) return;
+  assert.deepEqual(next.document.spaces.map((item) => item.id), ["space-restored"]);
+  assert.deepEqual(next.document.toDos.map((item) => item.id), ["todo-restored"]);
+  assert.equal(next.document.toDos[0].title, "Restored item");
+});
+
 test("published Workspace links open the matching restored interface target", () => {
   const workspace = workspaceFixture();
   workspace.change({ type: "createArea", title: "Studio", spaceId: "space-personal" });

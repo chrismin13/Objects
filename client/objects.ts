@@ -133,7 +133,7 @@ function recordPatch(previous = {}, current = {}) {
 
 function buildChangeSet() {
   if (!ui.state || !ui.syncedState) return null;
-  const changes = { mutationId: uid('mutation'), workspaceChanges: cloneData(ui.workspaceChanges), settings: recordPatch(ui.syncedState.settings, ui.state.settings), entities: {}, deletes: {} };
+  const changes = { mutationId: uid('mutation'), replaceWorkspace: ui.replaceWorkspace, workspaceChanges: cloneData(ui.workspaceChanges), settings: recordPatch(ui.syncedState.settings, ui.state.settings), entities: {}, deletes: {} };
   let changed = changes.workspaceChanges.length > 0 || Object.keys(changes.settings).length > 0;
   for (const kind of ENTITY_KINDS) {
     const previous = new Map((ui.syncedState[kind] || []).map((item) => [item.id, item]));
@@ -175,6 +175,7 @@ function acknowledgeChanges(changes, serializedAck) {
   ui.state.syncMutationId = ack.mutationId;
   ui.ownMutationIds.delete(ack.mutationId);
   ui.workspaceChanges.splice(0, changes.workspaceChanges?.length || 0);
+  if (changes.replaceWorkspace) ui.replaceWorkspace = false;
 }
 
 function recordToDoIntent(source, ids, action) {
@@ -223,6 +224,7 @@ const ui = {
   renderAfterSave: false,
   ownMutationIds: new Set(),
   workspaceChanges: [],
+  replaceWorkspace: false,
   lastCompleted: null,
   activeTags: new Set(),
   markdownPreview: false,
@@ -3619,7 +3621,7 @@ function importJsonFile(event) {
       if (!state || !Array.isArray(state.tasks) || !Array.isArray(state.projects) || !Array.isArray(state.areas)) throw new Error('Invalid backup');
       closeModal();
       confirmAction('Replace all Objects data?', 'The imported backup will replace the current Spaces, tasks, projects, areas, settings, and calendar events.', 'Import backup', () => {
-        ui.state = state; normalizeState(); initializeActiveSpace(); scheduleSave(); setView('today'); showToast('Backup imported');
+        ui.state = state; normalizeState(); initializeActiveSpace(); ui.replaceWorkspace = true; scheduleSave(); setView('today'); showToast('Backup imported');
       });
     } catch (error) { showToast('This file is not a valid Objects backup'); }
   };

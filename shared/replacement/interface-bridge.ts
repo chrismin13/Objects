@@ -106,6 +106,7 @@ export type InterfaceState = {
 
 export type InterfaceChangeSet = {
   mutationId: string;
+  replaceWorkspace?: boolean;
   workspaceChanges?: WorkspaceChange[];
   settings?: JsonRecord;
   entities?: Partial<Record<"spaces" | "areas" | "projects" | "headings" | "calendarEvents" | "tasks", Array<{ id: string; patch: JsonRecord }>>>;
@@ -886,7 +887,10 @@ function applyProjectLifecycleChanges(
   const deletedIds = new Set(changes.deletes?.projects ?? []);
   for (const project of before.projects) {
     if (deletedIds.has(project.id)) {
-      if (project.trashedAt) errors.push(...applyWorkspaceChange(workspace, {
+      if (!project.trashedAt && changes.replaceWorkspace) {
+        errors.push(...applyWorkspaceChange(workspace, { type: "trashProject", id: project.id }));
+      }
+      if (project.trashedAt || changes.replaceWorkspace) errors.push(...applyWorkspaceChange(workspace, {
         type: "permanentlyDeleteProject",
         id: project.id,
         confirmation: PERMANENT_DELETE_CONFIRMATION,
@@ -941,7 +945,10 @@ function applyToDoLifecycleChanges(
   const deletedIds = new Set(changes.deletes?.tasks ?? []);
   for (const original of before.toDos) {
     if (deletedIds.has(original.id)) {
-      if (original.trashedAt) errors.push(...applyWorkspaceChange(workspace, {
+      if (!original.trashedAt && changes.replaceWorkspace) {
+        errors.push(...applyWorkspaceChange(workspace, { type: "trashToDo", id: original.id }));
+      }
+      if (original.trashedAt || changes.replaceWorkspace) errors.push(...applyWorkspaceChange(workspace, {
         type: "permanentlyDeleteToDo",
         id: original.id,
         confirmation: PERMANENT_DELETE_CONFIRMATION,
