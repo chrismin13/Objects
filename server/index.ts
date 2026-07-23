@@ -347,12 +347,6 @@ export default capsule({
     })
       .index("by_owner_entity", ["ownerId", "entityId"])
       .index("by_owner_task", ["ownerId", "taskId"]),
-    tombstones: table({
-      ownerId: string(),
-      kind: string(),
-      entityId: string(),
-      deletedAt: string()
-    }).index("by_owner_kind_entity", ["ownerId", "kind", "entityId"]),
     replacementWorkspaceMeta: table({
       ownerId: string(),
       revision: string(),

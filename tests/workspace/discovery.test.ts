@@ -149,6 +149,7 @@ test("direct targets round-trip through shareable URLs and resolve every navigat
     assert.deepEqual(parseDirectTarget(new URL(url).search), target);
     assert.equal(resolveDirectTarget(document, target, TODAY).status, "resolved");
   }
+  assert.equal(parseDirectTarget("?todo=todo-active"), null);
   const template = document.repeatingTemplates.find((item) => item.id === "template-report")!;
   assert.equal(spaceIdForRepeatingTemplate(document, template), "space-work");
   assert.deepEqual(effectiveTagIdsForRepeatingTemplate(document, template), ["tag-focus"]);

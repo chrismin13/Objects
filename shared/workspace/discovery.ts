@@ -212,8 +212,6 @@ export function directTargetUrl(target: DirectTarget, base: string): string {
 
 export function parseDirectTarget(search: string): DirectTarget | null {
   const params = new URLSearchParams(search);
-  const legacyToDoId = params.get("todo");
-  if (legacyToDoId) return { kind: "toDo", id: legacyToDoId };
   const kind = params.get("open");
   if (kind === "view") {
     const viewKind = params.get("view") as SpecialViewKind | null;

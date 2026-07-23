@@ -256,19 +256,13 @@ function launchRulesStorageKey() {
   return `objects-use-launch-rules:${storageIdentity()}`;
 }
 
-function initializeLaunchRulesPreference(legacyValue = false) {
+function initializeLaunchRulesPreference() {
   if (ui.launchRulesPreferenceLoaded) return;
   ui.launchRulesPreferenceLoaded = true;
   try {
-    const stored = localStorage.getItem(launchRulesStorageKey());
-    if (stored !== null) {
-      ui.launchRulesEnabled = stored === 'true';
-      return;
-    }
-    ui.launchRulesEnabled = Boolean(legacyValue);
-    localStorage.setItem(launchRulesStorageKey(), String(ui.launchRulesEnabled));
+    ui.launchRulesEnabled = localStorage.getItem(launchRulesStorageKey()) === 'true';
   } catch (_) {
-    ui.launchRulesEnabled = Boolean(legacyValue);
+    ui.launchRulesEnabled = false;
   }
 }
 
@@ -315,10 +309,6 @@ function initializeActiveSpace() {
   ui.activeSpaceId = scheduled || (remembered === 'all' || spaceById(remembered) ? remembered : 'all');
 }
 
-function legacyDraftStorageKey() {
-  return `objects-quick-draft:${storageIdentity()}`;
-}
-
 function readStoredValue(key) {
   try {
     return JSON.parse(localStorage.getItem(key) || 'null');
@@ -359,19 +349,6 @@ function recoverPendingEntry() {
   return true;
 }
 
-function migrateLegacyDraft(skipCreate = false) {
-  const localDraft = readStoredValue(legacyDraftStorageKey());
-  const remoteDraft = ui.state.settings.quickDraft;
-  const draft = localDraft && (!remoteDraft?.updatedAt || localDraft.updatedAt > remoteDraft.updatedAt) ? localDraft : remoteDraft;
-  ui.state.settings.quickDraft = null;
-  try { localStorage.removeItem(legacyDraftStorageKey()); } catch (_) {}
-  if (!draft?.value?.trim() || skipCreate) return Boolean(draft);
-  ui.view = { type: draft.viewType || 'inbox', id: draft.viewId || null };
-  const task = createTaskFromParsed(parseNaturalTask(draft.value), { sectionKey: draft.sectionKey, view: ui.view, select: false, render: false });
-  rememberPendingTask(task);
-  return true;
-}
-
 export function mountObjects(serializedState, options) {
   app = $('#objects-shell') || $('#app'); content = $('#content'); sidebar = $('#sidebar-nav'); sidebarPanel = $('#sidebar'); inspector = $('#inspector');
   persistChanges = options.saveChanges; initializePersistentState = options.initializeState; performSignOut = options.signOut; ui.user = options.user;
@@ -388,11 +365,10 @@ export function mountObjects(serializedState, options) {
     ui.syncedState = cloneData(migrated ? receivedState : ui.state);
     const recoveredPending = recoverPendingEntry();
     if (recoveredPending) migrated = normalizeState() || migrated;
-    const migratedDraft = migrateLegacyDraft(recoveredPending);
     const logged = applyLogbookPolicy();
     initializeActiveSpace();
     materializeRecurringTasks(); applyTheme(); render(); handleCaptureUrl(); startReminderChecks(); startLogbookChecks();
-    const needsInitialSave = logged || recoveredPending || migratedDraft || migrated;
+    const needsInitialSave = logged || recoveredPending || migrated;
     if (!staticEventsBound) { bindStaticEvents(); staticEventsBound = true; render(); }
     app.setAttribute('aria-busy', 'false');
     void initializePersistentState(JSON.stringify(ui.syncedState)).then((state) => {
@@ -473,7 +449,7 @@ function normalizeState() {
   const workSpace = ui.state.spaces.find((space) => String(space.title).toLocaleLowerCase() === 'work') || ui.state.spaces[1] || personalSpace;
   if (!spaceById(ui.state.settings.defaultSpaceId)) ui.state.settings.defaultSpaceId = personalSpace?.id || null;
   ui.state.settings.spaceSchedule ||= { enabled: false, rules: workSpace ? [{ id: 'rule-work-weekdays', spaceId: workSpace.id, weekdays: [1, 2, 3, 4, 5], start: '09:00', end: '17:30' }] : [] };
-  initializeLaunchRulesPreference(ui.state.settings.spaceSchedule.enabled);
+  initializeLaunchRulesPreference();
   delete ui.state.settings.spaceSchedule.enabled;
   ui.state.settings.spaceSchedule.rules = Array.isArray(ui.state.settings.spaceSchedule.rules) ? ui.state.settings.spaceSchedule.rules.filter((rule) => rule && spaceById(rule.spaceId)).map((rule, index) => ({ id: rule.id || uid('space-rule'), spaceId: rule.spaceId, weekdays: Array.isArray(rule.weekdays) ? rule.weekdays : [1, 2, 3, 4, 5], start: rule.start || '09:00', end: rule.end || '17:30', order: rule.order ?? index })) : [];
   ui.state.areas.forEach((area) => { area.spaceId ??= null; });
