@@ -199,7 +199,8 @@ export const featureStyles = `
   .checklist-reorder { opacity: 1; }
   .checklist-reorder button { width: 22px; height: 44px; font-size: 15px; }
   .task-row { grid-template-columns: 32px minmax(0, 1fr) 44px 16px; }
-  .task-select { width: 44px; height: 44px; margin: -8px 0; opacity: 1; }
+  .task-select { width: 44px; height: 44px; margin: -8px 0; }
+  .selection-active .task-select { opacity: 1; }
   .selection-toolbar {
     left: 12px;
     right: 12px;

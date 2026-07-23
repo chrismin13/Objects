@@ -1598,7 +1598,7 @@ function renderContent() {
   const sectionList = sections.some((section) => section.tasks.length || section.heading || section.agenda) ? `<div class="section-list">${sections.map(renderSection).join('')}</div>` : '';
   const repeatingManagement = ui.view.type === 'repeating' ? renderRepeatingManagement(sorted, view.repeatingProjects || []) : '';
 
-  content.innerHTML = `<div class="content-inner" data-view-type="${esc(ui.view.type)}">
+  content.innerHTML = `<div class="content-inner ${ui.selectedTaskIds.size ? 'selection-active' : ''}" data-view-type="${esc(ui.view.type)}">
     <header class="view-header">
       <div class="eyebrow">${esc(view.eyebrow)}${deadline}</div>
       <div class="view-title-row">${icon(view.icon, 'view-icon')}<h1>${esc(view.title)}</h1><div class="header-actions">${headerActions}</div></div>

@@ -33,6 +33,9 @@ export function mountTaskSortables(
       const sectionKey = list.closest<HTMLElement>("[data-section]")?.dataset.section || "list";
       taskInstances.push(Sortable.create(list, {
         animation: 150,
+        delay: 180,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 8,
         draggable: ".task-row",
         handle: ".task-main",
         group: options.crossSection ? "objects-tasks" : `objects-${sectionKey}`,
@@ -79,6 +82,9 @@ export function mountHeadingSortable(root: ParentNode, onOrder: (orderedIds: str
     if (request !== headingRequest || !sections.isConnected) return;
     headingInstance = Sortable.create(sections, {
       animation: 150,
+      delay: 180,
+      delayOnTouchOnly: true,
+      touchStartThreshold: 8,
       draggable: ".section:has(.heading-header)",
       handle: ".heading-header",
       ghostClass: "sortable-ghost",
@@ -114,6 +120,9 @@ export function mountChecklistSortable(
     if (request !== checklistRequest || !checklist.isConnected) return;
     checklistInstance = Sortable.create(checklist, {
       animation: 140,
+      delay: 180,
+      delayOnTouchOnly: true,
+      touchStartThreshold: 8,
       draggable: ".checklist-item",
       handle: ".checklist-reorder",
       ghostClass: "sortable-ghost",
