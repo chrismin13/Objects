@@ -3,6 +3,7 @@ import { h, render as renderPreact } from 'preact';
 import { activatePwaUpdate, getPwaStatus, requestNotificationAccess, requestPwaInstall, showTaskReminder } from './pwa';
 import { parseNaturalDate as parseNaturalDateCore, parseNaturalTask as parseNaturalTaskCore } from './app/model';
 import { repeatingEditorAccess, reorderChecklist, reorderEntities, reorderTasks, toDoRowCapabilities } from './app/actions';
+import { createInterfaceChangeSet } from './app/change-set';
 import { changesForIntent, changesForProjectRepetition, changesForToDoRepetition } from './workspace/interactions';
 import { destroyChecklistSortable, destroyHeadingSortable, destroyTaskSortables, mountChecklistSortable, mountHeadingSortable, mountTaskSortables } from './ui/sortable';
 import { QuickFind } from './features/search/quick-find';
@@ -122,38 +123,15 @@ function sameValue(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function recordPatch(previous = {}, current = {}) {
-  const patch = {};
-  for (const key of new Set([...Object.keys(previous || {}), ...Object.keys(current || {})])) {
-    if (key === 'id' || current[key] === undefined || sameValue(previous[key], current[key])) continue;
-    patch[key] = current[key];
-  }
-  return patch;
-}
-
 function buildChangeSet() {
   if (!ui.state || !ui.syncedState) return null;
-  const changes = { mutationId: uid('mutation'), replaceWorkspace: ui.replaceWorkspace, workspaceChanges: cloneData(ui.workspaceChanges), settings: recordPatch(ui.syncedState.settings, ui.state.settings), entities: {}, deletes: {} };
-  let changed = changes.workspaceChanges.length > 0 || Object.keys(changes.settings).length > 0;
-  for (const kind of ENTITY_KINDS) {
-    const previous = new Map((ui.syncedState[kind] || []).map((item) => [item.id, item]));
-    const current = new Map((ui.state[kind] || []).map((item) => [item.id, item]));
-    const patches = [];
-    const deletes = [];
-    for (const [id, item] of current) {
-      const patch = recordPatch(previous.get(id), item);
-      if (!previous.has(id)) {
-        for (const [key, value] of Object.entries(item)) if (key !== 'id') patch[key] = value;
-      }
-      if (Object.keys(patch).length) patches.push({ id, patch });
-    }
-    for (const id of previous.keys()) {
-      if (!current.has(id)) deletes.push(id);
-    }
-    if (patches.length) { changes.entities[kind] = patches; changed = true; }
-    if (deletes.length) { changes.deletes[kind] = deletes; changed = true; }
-  }
-  return changed ? changes : null;
+  return createInterfaceChangeSet({
+    previous: ui.syncedState,
+    current: ui.state,
+    mutationId: uid('mutation'),
+    workspaceChanges: ui.workspaceChanges,
+    replaceWorkspace: ui.replaceWorkspace,
+  });
 }
 
 function acknowledgeChanges(changes, serializedAck) {
@@ -1046,10 +1024,15 @@ function handleContextPressMove(event) {
   if (Math.hypot(event.clientX - contextPress.x, event.clientY - contextPress.y) > 9) handleContextPressEnd(event);
 }
 
-function handleContextPressEnd(event) {
-  if (!contextPress || event.pointerId !== contextPress.pointerId) return;
+function cancelContextPress() {
+  if (!contextPress) return;
   clearTimeout(contextPress.timer);
   contextPress = null;
+}
+
+function handleContextPressEnd(event) {
+  if (!contextPress || event.pointerId !== contextPress.pointerId) return;
+  cancelContextPress();
 }
 
 function menuButton(action, label, danger = false) {
@@ -1612,6 +1595,7 @@ function renderContent() {
   if (ui.view.type !== 'repeating' && !(ui.view.type === 'project' && view.project?.repeat?.stopped)) mountTaskSortables(content, {
     crossSection: ['today', 'upcoming', 'project', 'area'].includes(ui.view.type),
     onStart: (ids) => {
+      cancelContextPress();
       ui.sortableTaskDrag = true;
       ui.draggedTaskId = ids[0] || null;
     },
@@ -1628,10 +1612,13 @@ function renderContent() {
     },
   });
   if (['project', 'area'].includes(ui.view.type) && !(ui.view.type === 'project' && view.project?.repeat?.stopped)) {
-    mountHeadingSortable(content, (orderedIds) => {
-      reorderEntities(headingsFor(ui.view.type, ui.view.id), orderedIds);
-      scheduleSave();
-      renderContent();
+    mountHeadingSortable(content, {
+      onStart: cancelContextPress,
+      onOrder: (orderedIds) => {
+        reorderEntities(headingsFor(ui.view.type, ui.view.id), orderedIds);
+        scheduleSave();
+        renderContent();
+      },
     });
   }
 }

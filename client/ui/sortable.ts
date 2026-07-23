@@ -71,7 +71,10 @@ export function destroyTaskSortables(): void {
   taskInstances = [];
 }
 
-export function mountHeadingSortable(root: ParentNode, onOrder: (orderedIds: string[]) => void): void {
+export function mountHeadingSortable(
+  root: ParentNode,
+  options: { onStart(): void; onOrder(orderedIds: string[]): void },
+): void {
   headingInstance?.destroy();
   headingInstance = null;
   headingRequest += 1;
@@ -91,7 +94,8 @@ export function mountHeadingSortable(root: ParentNode, onOrder: (orderedIds: str
       chosenClass: "sortable-chosen",
       dragClass: "sortable-drag",
       fallbackTolerance: 5,
-      onEnd: () => onOrder(
+      onStart: options.onStart,
+      onEnd: () => options.onOrder(
         [...sections.querySelectorAll<HTMLElement>(":scope > .section[data-section]:has(.heading-header)")]
           .map((section) => section.dataset.section)
           .filter((id): id is string => Boolean(id)),

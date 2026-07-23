@@ -40,6 +40,7 @@ wa-button[appearance="outlined"]::part(base) { background: var(--surface); borde
 wa-button[appearance="outlined"]:hover::part(base),
 wa-button[appearance="plain"]:hover::part(base) { background: var(--surface-subtle); }
 wa-button[variant="danger"]::part(base) { color: var(--red); }
+wa-button[variant="danger"]:not([appearance="plain"]):not([appearance="outlined"])::part(base) { color: #fff; }
 wa-select::part(combobox) { box-shadow: none; }
 wa-select::part(form-control-label) { margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 630; line-height: 1.2; }
 wa-select:focus-within::part(combobox) { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 15%, transparent); }

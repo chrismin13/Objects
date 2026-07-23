@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createInterfaceChangeSet } from "../../client/app/change-set.ts";
 import { applyInterfaceChangeSetToWorkspace, workspaceDocumentToInterfaceState } from "../../shared/replacement/interface-bridge.ts";
 import { createEmptyWorkspace } from "../../shared/replacement/workspace.ts";
 import { createWorkspaceSyncClient, type WorkspaceSyncPersistence } from "../../shared/replacement/sync-client.ts";
 import { createInMemorySyncStore, type WorkspaceSyncAdapter } from "../../shared/replacement/sync.ts";
+import { FIXTURE_NOW, representativeWorkspace } from "./workspace-fixtures.ts";
 
 function initialWorkspace() {
   const document = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
@@ -21,57 +23,73 @@ function memoryPersistence(): WorkspaceSyncPersistence & { serialized: string | 
   };
 }
 
-test("restoring a backup replaces active work durably after the app is reopened", async () => {
-  const store = createInMemorySyncStore(() => "2026-07-19T09:00:00.000Z");
+test("a representative backup replaces the visible Workspace exactly after save and reopen", async () => {
+  const store = createInMemorySyncStore(() => FIXTURE_NOW);
   const durable = store.forOwner("alice");
-  const firstSession = createWorkspaceSyncClient(durable, memoryPersistence(), () => "2026-07-19T09:00:00.000Z");
-  const current = initialWorkspace();
-  current.projects.push({
-    id: "project-current", title: "Current project", notes: "", location: { kind: "space", spaceId: "space-personal" },
-    schedule: { kind: "anytime" }, deadline: null, outcome: "open", trashedAt: null, logbookAt: null, tags: [],
-    occurrence: null, completedAt: null, order: 0,
-  });
-  current.toDos.push({
-    id: "todo-current", title: "Current item", notes: "Must disappear", checklist: [],
-    location: { kind: "project", projectId: "project-current" }, schedule: { kind: "inbox" }, reminder: null,
-    deadline: null, outcome: "open", trashedAt: null, logbookAt: null, tags: [], occurrence: null,
-    createdAt: "2026-07-19T08:00:00.000Z", completedAt: null, order: 0,
-  });
-  await firstSession.initialize(() => current);
-  firstSession.stage(current, "save-current-workspace");
-  await firstSession.flush();
+  const current = representativeWorkspace("current");
+  const backup = representativeWorkspace("backup");
+  assert.ok(current.toDos.some((item) => item.location.kind === "unfiled"));
+  assert.ok(current.toDos.some((item) => item.location.kind === "area"));
+  assert.ok(current.toDos.some((item) => item.location.kind === "project"));
+  assert.ok(current.toDos.some((item) => item.location.kind === "heading"));
+  assert.ok(current.toDos.some((item) => item.outcome === "completed"));
+  assert.ok(current.toDos.some((item) => item.trashedAt));
+  assert.ok(current.repeatingTemplates.some((item) => item.itemKind === "toDo"));
+  assert.ok(current.repeatingTemplates.some((item) => item.itemKind === "project"));
+  const seeded = await durable.save({ expectedRevision: 0, mutationId: "seed-current", document: current });
+  assert.equal(seeded.status, "acknowledged");
 
-  const restoredState = workspaceDocumentToInterfaceState(firstSession.read().snapshot!.document, "2026-07-19");
-  restoredState.settings.defaultSpaceId = "space-restored";
-  restoredState.spaces = [{ id: "space-restored", title: "Restored", color: "#123456", pinned: true, order: 0 }];
-  restoredState.tasks = [{
-    id: "todo-restored", title: "Restored item", notes: "From backup", status: "open", bucket: "inbox",
-    scheduledFor: null, evening: false, reminderAt: null, reminderSentAt: null, deadline: null, projectId: null,
-    headingId: null, areaId: null, spaceId: "space-restored", tags: [], checklist: [], repeat: null,
-    createdAt: "2026-07-18T08:00:00.000Z", completedAt: null, loggedAt: null,
-  }];
-  const replacement = applyInterfaceChangeSetToWorkspace(firstSession.read().snapshot!.document, {
-    mutationId: "restore-backup",
+  const firstSession = createWorkspaceSyncClient(durable, memoryPersistence(), () => FIXTURE_NOW);
+  await firstSession.initialize(initialWorkspace);
+  const previousState = workspaceDocumentToInterfaceState(firstSession.read().snapshot!.document, "2026-07-20");
+  const backupState = workspaceDocumentToInterfaceState(backup, "2026-07-20");
+  const changeSet = createInterfaceChangeSet({
+    previous: previousState,
+    current: backupState,
+    mutationId: "restore-representative-backup",
     replaceWorkspace: true,
-    settings: restoredState.settings,
-    entities: {
-      spaces: restoredState.spaces.map(({ id, ...patch }) => ({ id, patch })),
-      tasks: restoredState.tasks.map(({ id, ...patch }) => ({ id, patch })),
-    },
-    deletes: { spaces: ["space-personal"], projects: ["project-current"], tasks: ["todo-current"] },
-  }, { now: () => "2026-07-19T09:00:00.000Z", createId: (kind) => `restore-${kind}` });
-  assert.equal(replacement.ok, true);
+  });
+  assert.ok(changeSet);
+  const replacement = applyInterfaceChangeSetToWorkspace(firstSession.read().snapshot!.document, changeSet!, {
+    now: () => FIXTURE_NOW,
+    createId: (kind) => `restore-${kind}`,
+  });
+  assert.deepEqual(replacement.ok ? [] : replacement.errors, []);
   if (!replacement.ok) return;
-  firstSession.stage(replacement.document, "restore-backup");
-  await firstSession.flush();
 
-  const reopened = createWorkspaceSyncClient(durable, memoryPersistence(), () => "2026-07-19T09:01:00.000Z");
+  firstSession.stage(replacement.document, changeSet!.mutationId);
+  const saved = await firstSession.flush();
+  assert.equal(saved.status, "saved");
+  assert.equal(saved.pendingCount, 0);
+  assert.deepEqual(saved.rejected, []);
+  assert.deepEqual(saved.conflicts, []);
+
+  const reopened = createWorkspaceSyncClient(durable, memoryPersistence(), () => "2026-07-20T09:01:00.000Z");
   const loaded = await reopened.initialize(initialWorkspace);
-  assert.deepEqual(loaded.snapshot!.document.spaces.map((space) => [space.id, space.title]), [["space-restored", "Restored"]]);
-  assert.deepEqual(loaded.snapshot!.document.projects, []);
-  assert.deepEqual(loaded.snapshot!.document.toDos.map((toDo) => [toDo.id, toDo.title, toDo.notes]), [["todo-restored", "Restored item", "From backup"]]);
-  assert.equal(loaded.pendingCount, 0);
   assert.equal(loaded.status, "saved");
+  assert.equal(loaded.pendingCount, 0);
+  assert.deepEqual(loaded.rejected, []);
+  const visibleAfterReopen = workspaceDocumentToInterfaceState(loaded.snapshot!.document, "2026-07-20");
+  visibleAfterReopen.updatedAt = backupState.updatedAt;
+  visibleAfterReopen.syncMutationId = backupState.syncMutationId;
+  const normalizeVirtualOrder = <T extends { workspaceTemplateId?: unknown; order?: unknown }>(state: T) => {
+    if (!state.workspaceTemplateId) return state;
+    const { order: _order, ...rest } = state;
+    return rest;
+  };
+  assert.deepEqual({
+    ...visibleAfterReopen,
+    headings: visibleAfterReopen.headings.map(normalizeVirtualOrder),
+    tasks: visibleAfterReopen.tasks.map(normalizeVirtualOrder),
+  }, {
+    ...backupState,
+    headings: backupState.headings.map(normalizeVirtualOrder),
+    tasks: backupState.tasks.map(normalizeVirtualOrder),
+  });
+  assert.equal(JSON.stringify(visibleAfterReopen).includes("current"), false);
+
+  const secondRefresh = await reopened.refresh();
+  assert.deepEqual(secondRefresh.snapshot!.document, loaded.snapshot!.document);
 });
 
 test("pending changes survive reload and an interrupted acknowledgement", async () => {

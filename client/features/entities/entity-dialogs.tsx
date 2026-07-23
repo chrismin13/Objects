@@ -314,6 +314,6 @@ export function ConfirmDialog({ title, message, label, danger = false, onClose, 
   useWebAwesomeOverlay(dialog, onClose);
   return <WaDialog ref={dialog} class="objects-dialog" label={title}>
     <div class="entity-dialog"><div class={danger ? "entity-danger-copy" : "entity-confirm-copy"}>{message}</div></div>
-    <div slot="footer" class="entity-dialog-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant={danger ? "danger" : "brand"} onClick={() => { onClose(); onConfirm(); }}>{label}</WaButton></div>
+    <div slot="footer" class="entity-dialog-actions entity-confirm-actions"><WaButton size="s" appearance="plain" onClick={(event: Event) => hideWebAwesomeOverlay(event, onClose)}>Cancel</WaButton><WaButton size="s" variant={danger ? "danger" : "brand"} onClick={() => { onClose(); onConfirm(); }}>{label}</WaButton></div>
   </WaDialog>;
 }

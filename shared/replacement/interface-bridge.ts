@@ -1497,6 +1497,14 @@ export function applyInterfaceChangeSetToWorkspace(
   const state = applyChangeSet(workspaceDocumentToInterfaceState(behaviorDocument, today), compatibilityChangeSet);
   const candidate = documentFromInterfaceState(state, behaviorDocument, dependencies);
   if (!candidate) return { ok: false, errors: ["The interface change would leave the Workspace without a Space."] };
+  if (changeSet.replaceWorkspace) {
+    candidate.projectClosures = [];
+    candidate.permanentDeletions = [];
+    candidate.captureReceipts = [];
+    candidate.sync = clone(document.sync);
+    const validationErrors = createWorkspace(candidate, dependencies).validate();
+    return validationErrors.length ? { ok: false, errors: validationErrors } : { ok: true, document: candidate };
+  }
   const synchronizationErrors = syncCandidateThroughWorkspace(workspace, behaviorDocument, candidate, idQueues);
   if (synchronizationErrors.length) return { ok: false, errors: synchronizationErrors };
   const next = workspace.read();
