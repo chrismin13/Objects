@@ -26,9 +26,14 @@ test("restoring a backup replaces active work durably after the app is reopened"
   const durable = store.forOwner("alice");
   const firstSession = createWorkspaceSyncClient(durable, memoryPersistence(), () => "2026-07-19T09:00:00.000Z");
   const current = initialWorkspace();
+  current.projects.push({
+    id: "project-current", title: "Current project", notes: "", location: { kind: "space", spaceId: "space-personal" },
+    schedule: { kind: "anytime" }, deadline: null, outcome: "open", trashedAt: null, logbookAt: null, tags: [],
+    occurrence: null, completedAt: null, order: 0,
+  });
   current.toDos.push({
     id: "todo-current", title: "Current item", notes: "Must disappear", checklist: [],
-    location: { kind: "unfiled", spaceId: "space-personal" }, schedule: { kind: "inbox" }, reminder: null,
+    location: { kind: "project", projectId: "project-current" }, schedule: { kind: "inbox" }, reminder: null,
     deadline: null, outcome: "open", trashedAt: null, logbookAt: null, tags: [], occurrence: null,
     createdAt: "2026-07-19T08:00:00.000Z", completedAt: null, order: 0,
   });
@@ -53,7 +58,7 @@ test("restoring a backup replaces active work durably after the app is reopened"
       spaces: restoredState.spaces.map(({ id, ...patch }) => ({ id, patch })),
       tasks: restoredState.tasks.map(({ id, ...patch }) => ({ id, patch })),
     },
-    deletes: { spaces: ["space-personal"], tasks: ["todo-current"] },
+    deletes: { spaces: ["space-personal"], projects: ["project-current"], tasks: ["todo-current"] },
   }, { now: () => "2026-07-19T09:00:00.000Z", createId: (kind) => `restore-${kind}` });
   assert.equal(replacement.ok, true);
   if (!replacement.ok) return;
@@ -63,6 +68,7 @@ test("restoring a backup replaces active work durably after the app is reopened"
   const reopened = createWorkspaceSyncClient(durable, memoryPersistence(), () => "2026-07-19T09:01:00.000Z");
   const loaded = await reopened.initialize(initialWorkspace);
   assert.deepEqual(loaded.snapshot!.document.spaces.map((space) => [space.id, space.title]), [["space-restored", "Restored"]]);
+  assert.deepEqual(loaded.snapshot!.document.projects, []);
   assert.deepEqual(loaded.snapshot!.document.toDos.map((toDo) => [toDo.id, toDo.title, toDo.notes]), [["todo-restored", "Restored item", "From backup"]]);
   assert.equal(loaded.pendingCount, 0);
   assert.equal(loaded.status, "saved");

@@ -411,7 +411,9 @@ test("skipping a repeating Project uses the distinct Workspace Skip lifecycle", 
 
 test("a restored backup replaces the complete Workspace through the interface bridge", () => {
   const workspace = workspaceFixture();
-  workspace.change({ type: "createToDo", title: "Current item", location: { kind: "unfiled", spaceId: "space-personal" } });
+  workspace.change({ type: "createProject", title: "Current project", location: { kind: "space", spaceId: "space-personal" } });
+  const currentProjectId = workspace.read().projects[0].id;
+  workspace.change({ type: "createToDo", title: "Current item", location: { kind: "project", projectId: currentProjectId } });
   const before = workspace.read();
 
   const next = applyInterfaceChangeSetToWorkspace(before, {
@@ -426,7 +428,7 @@ test("a restored backup replaces the complete Workspace through the interface br
         spaceId: "space-restored", tags: [], checklist: [], repeat: null, createdAt: NOW, completedAt: null, loggedAt: null,
       } }],
     },
-    deletes: { spaces: ["space-personal"], tasks: [before.toDos[0].id] },
+    deletes: { spaces: ["space-personal"], projects: [currentProjectId], tasks: [before.toDos[0].id] },
   }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
 
   assert.equal(next.ok, true);

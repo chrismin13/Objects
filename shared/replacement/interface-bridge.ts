@@ -943,7 +943,14 @@ function applyToDoLifecycleChanges(
 ): string[] {
   const errors: string[] = [];
   const deletedIds = new Set(changes.deletes?.tasks ?? []);
+  const deletedProjectIds = new Set(changes.deletes?.projects ?? []);
+  const headingsInDeletedProjects = new Set(before.headings.flatMap((heading) =>
+    heading.location.kind === "project" && deletedProjectIds.has(heading.location.projectId) ? [heading.id] : []
+  ));
   for (const original of before.toDos) {
+    const removedWithProject = (original.location.kind === "project" && deletedProjectIds.has(original.location.projectId))
+      || (original.location.kind === "heading" && headingsInDeletedProjects.has(original.location.headingId));
+    if (deletedIds.has(original.id) && removedWithProject && changes.replaceWorkspace) continue;
     if (deletedIds.has(original.id)) {
       if (!original.trashedAt && changes.replaceWorkspace) {
         errors.push(...applyWorkspaceChange(workspace, { type: "trashToDo", id: original.id }));
