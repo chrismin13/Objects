@@ -18,7 +18,7 @@ The script uses the `esbuild` copy already bundled with `npx lakebed`; it does n
 After rebuilding these files, run:
 
 ```sh
-node --experimental-strip-types --test tests/replacement/*.test.ts
+node --experimental-strip-types --test tests/workspace/*.test.ts
 npx lakebed build . --target anonymous --json
 node scripts/check-build-artifact.mjs
 ```

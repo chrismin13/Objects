@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createEmptyWorkspace, createWorkspace } from "../../shared/replacement/workspace.ts";
-import type { RepeatingTemplate } from "../../shared/replacement/model.ts";
+import { createEmptyWorkspace, createWorkspace } from "../../shared/workspace/workspace.ts";
+import type { RepeatingTemplate } from "../../shared/workspace/model.ts";
 
 test("creating a to-do is deterministic and returns validation and undo details", () => {
   const document = createEmptyWorkspace("2026-07-19T09:00:00.000Z");

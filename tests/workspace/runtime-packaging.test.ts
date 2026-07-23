@@ -46,7 +46,7 @@ test("the delivered mobile theme keeps drawer contents interactive", async () =>
 });
 
 test("the restored interface save bridge uses named Workspace changes instead of full import", async () => {
-  const source = await readFile("shared/replacement/interface-bridge.ts", "utf8");
+  const source = await readFile("shared/workspace/interface-bridge.ts", "utf8");
 
   assert.doesNotMatch(source, /importPortableBackup|FULL_IMPORT_CONFIRMATION/);
   assert.match(source, /syncCandidateThroughWorkspace/);

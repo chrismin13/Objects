@@ -5,11 +5,11 @@ import {
   applyInterfaceChangeSetToWorkspace,
   interfaceLocationForWorkspaceUrl,
   workspaceDocumentToInterfaceState,
-} from "../../shared/replacement/interface-bridge.ts";
+} from "../../shared/workspace/interface-bridge.ts";
 import {
   createEmptyWorkspace,
   createWorkspace,
-} from "../../shared/replacement/workspace.ts";
+} from "../../shared/workspace/workspace.ts";
 
 const NOW = "2026-07-20T09:00:00.000Z";
 

@@ -1,9 +1,9 @@
 import type {
-  LegacyBucket,
-  LegacyChecklistItem,
-  LegacyInterfaceState,
-  LegacyTask,
-} from "./legacy-types";
+  InterfaceBucket,
+  InterfaceChecklistItem,
+  InterfaceStateSnapshot,
+  InterfaceTask,
+} from "./interface-types";
 
 type ToDoPresentationState = {
   repeat?: { stopped?: unknown } | null;
@@ -32,32 +32,32 @@ export function repeatingEditorAccess(task: ToDoPresentationState): "create" | "
   return task.repeat.stopped ? "read-only" : "edit";
 }
 
-function touch(state: LegacyInterfaceState): void {
+function touch(state: InterfaceStateSnapshot): void {
   state.updatedAt = new Date().toISOString();
 }
 
-function moveReminder(task: LegacyTask, day: string | null): void {
+function moveReminder(task: InterfaceTask, day: string | null): void {
   if (!task.reminderAt) return;
   task.reminderAt = day ? `${day}T${task.reminderAt.slice(11, 16) || "09:00"}` : null;
   task.reminderSentAt = null;
 }
 
-export function reorderChecklist(state: LegacyInterfaceState, taskId: string, orderedIds: string[]): void {
+export function reorderChecklist(state: InterfaceStateSnapshot, taskId: string, orderedIds: string[]): void {
   const task = state.tasks.find((candidate) => candidate.id === taskId);
   if (!task) return;
   const byId = new Map(task.checklist.map((item) => [item.id, item]));
-  task.checklist = orderedIds.map((id) => byId.get(id)).filter((item): item is LegacyChecklistItem => Boolean(item));
+  task.checklist = orderedIds.map((id) => byId.get(id)).filter((item): item is InterfaceChecklistItem => Boolean(item));
   touch(state);
 }
 
 export type TaskOrderDestination = {
   headingId?: string | null;
-  bucket?: LegacyBucket;
+  bucket?: InterfaceBucket;
   scheduledFor?: string | null;
   evening?: boolean;
 };
 
-export function reorderTasks(state: LegacyInterfaceState, movedIds: string[], orderedIds: string[], destination: TaskOrderDestination = {}): void {
+export function reorderTasks(state: InterfaceStateSnapshot, movedIds: string[], orderedIds: string[], destination: TaskOrderDestination = {}): void {
   const moved = new Set(movedIds);
   for (const task of state.tasks) {
     if (!moved.has(task.id) || task.repeat) continue;

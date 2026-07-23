@@ -3,7 +3,7 @@ import type {
   WorkspaceSyncCommand,
   WorkspaceSyncResult,
   WorkspaceSyncSnapshot,
-} from "../../shared/replacement/sync";
+} from "../../shared/workspace/sync";
 
 export type LakebedWorkspaceGateway = {
   readSnapshot(): string | null | undefined;

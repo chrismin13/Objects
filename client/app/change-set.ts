@@ -1,5 +1,5 @@
-import type { InterfaceChangeSet, InterfaceState } from "../../shared/replacement/interface-bridge";
-import type { WorkspaceChange } from "../../shared/replacement/workspace";
+import type { InterfaceChangeSet, InterfaceState } from "../../shared/workspace/interface-bridge";
+import type { WorkspaceChange } from "../../shared/workspace/workspace";
 
 const COLLECTIONS = ["spaces", "areas", "projects", "headings", "calendarEvents", "tasks"] as const;
 type CollectionName = typeof COLLECTIONS[number];

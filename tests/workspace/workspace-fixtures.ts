@@ -1,5 +1,5 @@
-import type { WorkspaceDocument, WorkspaceEntityKind } from "../../shared/replacement/model.ts";
-import { createEmptyWorkspace, createWorkspace } from "../../shared/replacement/workspace.ts";
+import type { WorkspaceDocument, WorkspaceEntityKind } from "../../shared/workspace/model.ts";
+import { createEmptyWorkspace, createWorkspace } from "../../shared/workspace/workspace.ts";
 
 export const FIXTURE_NOW = "2026-07-20T09:00:00.000Z";
 

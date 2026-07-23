@@ -1,8 +1,8 @@
-import type { LegacyBucket } from "./legacy-types";
+import type { InterfaceBucket } from "./interface-types";
 
 export type ParsedTask = {
   title: string;
-  bucket: LegacyBucket | null;
+  bucket: InterfaceBucket | null;
   scheduledFor: string | null;
   deadline: string | null;
   evening: boolean;

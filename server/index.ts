@@ -1,6 +1,6 @@
 import { capsule, endpoint, json, mutation, query, string, table, text } from "lakebed/server";
-import type { WorkspaceSyncCommand, WorkspaceSyncSnapshot } from "../shared/replacement/sync";
-import type { LegacyMigrationIdentity } from "../shared/replacement/legacy-storage";
+import type { WorkspaceSyncCommand, WorkspaceSyncSnapshot } from "../shared/workspace/sync";
+import type { LegacyMigrationIdentity } from "../shared/workspace/legacy-storage";
 import {
   assembleLegacyWorkspace,
   captureIntoSnapshot,

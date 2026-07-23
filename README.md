@@ -128,7 +128,7 @@ Multi-device conflicts follow one fixed rule. Changes to different fields are co
 
 Until an account has a matching migration marker, Objects rebuilds its retained legacy `workspaceChunks` or normalized rows and passes that data through the same tested importer as a manual backup. It safely merges Workspace-only work, then saves the complete result through normal sync. The retained rows remain a read-only migration backup; the restored interface never reads or mutates them directly. Data can still be exported as one portable JSON backup from Settings at any time.
 
-The current interface recovery and verification record is in [docs/replacement-parity-audit.md](docs/replacement-parity-audit.md).
+The current interface recovery and verification record is in [docs/workspace-interface-audit.md](docs/workspace-interface-audit.md).
 
 ## Notes
 

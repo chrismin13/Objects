@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkspaceDocument } from "../../shared/replacement/model.ts";
-import { effectiveTagIdsForRepeatingTemplate, spaceIdForRepeatingTemplate } from "../../shared/replacement/location.ts";
+import type { WorkspaceDocument } from "../../shared/workspace/model.ts";
+import { effectiveTagIdsForRepeatingTemplate, spaceIdForRepeatingTemplate } from "../../shared/workspace/location.ts";
 import {
   directTargetUrl,
   moveQuickFindSelection,
@@ -10,8 +10,8 @@ import {
   recoverDirectTargetAfterLoad,
   resolveDirectTarget,
   searchWorkspace,
-} from "../../shared/replacement/discovery.ts";
-import { createEmptyWorkspace } from "../../shared/replacement/workspace.ts";
+} from "../../shared/workspace/discovery.ts";
+import { createEmptyWorkspace } from "../../shared/workspace/workspace.ts";
 
 const TODAY = "2026-07-19";
 

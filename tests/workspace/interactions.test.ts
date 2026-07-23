@@ -6,7 +6,7 @@ import {
   toDoRowCapabilities,
 } from "../../client/app/actions.ts";
 import { changesForIntent, changesForProjectRepetition, changesForToDoRepetition, toDoActionForShortcut, touchActionForDistance, updateSelection } from "../../client/workspace/interactions.ts";
-import { createEmptyWorkspace, createWorkspace } from "../../shared/replacement/workspace.ts";
+import { createEmptyWorkspace, createWorkspace } from "../../shared/workspace/workspace.ts";
 
 test("row, inspector, keyboard, menu, bulk, drag, and touch completion use the same Workspace operation", () => {
   const sources = ["row", "inspector", "keyboard", "menu", "bulk", "drag", "touch"] as const;

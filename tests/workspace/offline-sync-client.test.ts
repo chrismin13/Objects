@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createInterfaceChangeSet } from "../../client/app/change-set.ts";
-import { applyInterfaceChangeSetToWorkspace, workspaceDocumentToInterfaceState } from "../../shared/replacement/interface-bridge.ts";
-import { createEmptyWorkspace } from "../../shared/replacement/workspace.ts";
-import { createWorkspaceSyncClient, type WorkspaceSyncPersistence } from "../../shared/replacement/sync-client.ts";
-import { createInMemorySyncStore, type WorkspaceSyncAdapter } from "../../shared/replacement/sync.ts";
+import { applyInterfaceChangeSetToWorkspace, workspaceDocumentToInterfaceState } from "../../shared/workspace/interface-bridge.ts";
+import { createEmptyWorkspace } from "../../shared/workspace/workspace.ts";
+import { createWorkspaceSyncClient, type WorkspaceSyncPersistence } from "../../shared/workspace/sync-client.ts";
+import { createInMemorySyncStore, type WorkspaceSyncAdapter } from "../../shared/workspace/sync.ts";
 import { FIXTURE_NOW, representativeWorkspace } from "./workspace-fixtures.ts";
 
 function initialWorkspace() {

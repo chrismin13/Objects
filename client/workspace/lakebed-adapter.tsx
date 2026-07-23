@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "lakebed/client";
 import { useEffect, useMemo, useRef } from "preact/hooks";
 
-import type { WorkspaceSyncAdapter } from "../../shared/replacement/sync";
+import type { WorkspaceSyncAdapter } from "../../shared/workspace/sync";
 import {
   createLakebedWorkspaceAdapter,
   migrationCommandForQuery,

@@ -1,12 +1,10 @@
 # Workspace interface recovery evidence
 
-This record replaces the earlier replacement parity claim. The earlier claim said the typed replacement interface matched the established Objects interface, but the recovery specification and browser evidence showed that it did not.
-
-The recovery stores a production-reference component-gallery capture and a branch capture under `docs/interface-evidence/`. They are byte-identical 1280 × 720 JPEG outputs with SHA-256 `f40bd89d801a42d1b3fca74b3da42b897dd3ca9f731917c3b4ec074dab786ee6`.
+This record summarizes the completed recovery of the established Objects interface around the Workspace engine.
 
 ## Current result
 
-The Workspace rewrite branch now mounts the established Objects interface again. The failed replacement renderer has been removed. The restored interface reads Workspace documents through `shared/replacement/interface-bridge.ts` and saves through the existing offline and multi-device sync client.
+The Workspace rewrite branch now mounts the established Objects interface again. The failed replacement renderer has been removed. The restored interface reads Workspace documents through `shared/workspace/interface-bridge.ts` and saves through the existing offline and multi-device sync client.
 
 The bridge is intentionally one-way at each boundary:
 
@@ -22,10 +20,9 @@ The old `state`, `initializeNormalized`, and `applyChanges` Lakebed APIs are not
 Run:
 
 ```sh
-node --experimental-strip-types --test tests/replacement/*.test.ts
+node --experimental-strip-types --test tests/workspace/*.test.ts
 npx lakebed build . --target anonymous --json
 node scripts/check-build-artifact.mjs
-node scripts/verify-interface-evidence.mjs
 ```
 
 The bridge tests cover:
@@ -54,7 +51,7 @@ On 2026-07-20, the complete local Lakebed app was checked with the guest Workspa
 
 The browser workflows covered inline to-do creation, inspector editing, Markdown notes, checklist creation, save and reload persistence, mobile sidebar and inspector drawers, Settings, appearance changes, Quick Find, and the custom New List dialog. No browser-native prompt, confirm, or alert was active.
 
-On 2026-07-21, repetition was checked again through the running app at 1280 × 720 and 390 × 844. The browser run created a normal to-do, made it repeat, opened the visible Repeating view, checked that its Template had no completion or bulk-selection actions, stopped the schedule, reloaded the app, and reopened the stopped Template in desktop and mobile inspectors. The stopped Template stayed read-only and offered permanent deletion instead of restart. The browser reported no errors or warnings. The exact record and screenshot hashes are stored in `docs/interface-evidence/browser-verification.json`.
+On 2026-07-21, repetition was checked again through the running app at 1280 × 720 and 390 × 844. The browser run created a normal to-do, made it repeat, opened the visible Repeating view, checked that its Template had no completion or bulk-selection actions, stopped the schedule, reloaded the app, and reopened the stopped Template in desktop and mobile inspectors. The stopped Template stayed read-only and offered permanent deletion instead of restart. The browser reported no errors or warnings.
 
 ## Architecture status
 

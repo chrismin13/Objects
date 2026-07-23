@@ -1,8 +1,8 @@
 import { SignInWithGoogle, signOut, useAuth } from "lakebed/client";
 import { Component } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { InterfaceChangeSet } from "../shared/replacement/interface-bridge";
-import type { WorkspaceSyncClient } from "../shared/replacement/sync-client";
+import type { InterfaceChangeSet } from "../shared/workspace/interface-bridge";
+import type { WorkspaceSyncClient } from "../shared/workspace/sync-client";
 import { initializePwa } from "./pwa";
 import { useLakebedWorkspaceAdapter } from "./workspace/lakebed-adapter";
 import { scopeWorkspaceAdapter } from "./workspace/lakebed-adapter-core";

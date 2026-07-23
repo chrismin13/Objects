@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { RepeatingPattern } from "../../shared/replacement/model.ts";
+import type { RepeatingPattern } from "../../shared/workspace/model.ts";
 import {
   DELETE_REPEATING_TEMPLATE_CONFIRMATION,
   createEmptyWorkspace,
   createWorkspace,
-} from "../../shared/replacement/workspace.ts";
+} from "../../shared/workspace/workspace.ts";
 
 const NOW = "2026-07-19T09:30:00.000Z";
 

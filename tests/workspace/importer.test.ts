@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assembleLegacyWorkspace, mergeMigratedLegacySnapshot } from "../../shared/replacement/legacy-storage.ts";
-import { createEmptyWorkspace, createWorkspace, exportPortableBackup, FULL_IMPORT_CONFIRMATION } from "../../shared/replacement/workspace.ts";
+import { assembleLegacyWorkspace, mergeMigratedLegacySnapshot } from "../../shared/workspace/legacy-storage.ts";
+import { createEmptyWorkspace, createWorkspace, exportPortableBackup, FULL_IMPORT_CONFIRMATION } from "../../shared/workspace/workspace.ts";
 
 function deterministicWorkspace() {
   const counters = new Map<string, number>();

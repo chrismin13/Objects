@@ -7,13 +7,13 @@ import {
   parseLakebedWorkspaceQuery,
   scopeWorkspaceAdapter,
 } from "../../client/workspace/lakebed-adapter-core.ts";
-import { createEmptyWorkspace } from "../../shared/replacement/workspace.ts";
+import { createEmptyWorkspace } from "../../shared/workspace/workspace.ts";
 import {
   createInMemorySyncStore,
   createWorkspaceDelta,
   type WorkspaceSyncAdapter,
   type WorkspaceSyncSnapshot,
-} from "../../shared/replacement/sync.ts";
+} from "../../shared/workspace/sync.ts";
 
 function changedDocument(snapshot: WorkspaceSyncSnapshot, change: (document: WorkspaceSyncSnapshot["document"]) => void) {
   const document = structuredClone(snapshot.document);

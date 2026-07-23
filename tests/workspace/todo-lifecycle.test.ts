@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Project, ToDo } from "../../shared/replacement/model.ts";
+import type { Project, ToDo } from "../../shared/workspace/model.ts";
 import {
   EMPTY_TRASH_CONFIRMATION,
   PERMANENT_DELETE_CONFIRMATION,
   createEmptyWorkspace,
   createWorkspace,
-} from "../../shared/replacement/workspace.ts";
+} from "../../shared/workspace/workspace.ts";
 
 const NOW = "2026-07-19T09:30:00.000Z";
 

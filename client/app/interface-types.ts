@@ -1,25 +1,25 @@
-export type LegacyBucket = "inbox" | "today" | "upcoming" | "anytime" | "someday";
+export type InterfaceBucket = "inbox" | "today" | "upcoming" | "anytime" | "someday";
 
-export type LegacyChecklistItem = {
+export type InterfaceChecklistItem = {
   id: string;
   title: string;
   done: boolean;
 };
 
-export type LegacyTask = {
+export type InterfaceTask = {
   id: string;
   reminderAt: string | null;
   reminderSentAt: string | null;
-  checklist: LegacyChecklistItem[];
+  checklist: InterfaceChecklistItem[];
   repeat: Record<string, unknown> | null;
   headingId: string | null;
-  bucket: LegacyBucket;
+  bucket: InterfaceBucket;
   scheduledFor: string | null;
   evening: boolean;
   order: number;
 };
 
-export type LegacyInterfaceState = {
+export type InterfaceStateSnapshot = {
   updatedAt: string;
-  tasks: LegacyTask[];
+  tasks: InterfaceTask[];
 };

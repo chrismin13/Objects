@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { agendaForView, parseIcsCalendar } from "../../shared/replacement/calendar.ts";
-import { dateInTimeZone } from "../../shared/replacement/dates.ts";
-import { createEmptyWorkspace, createWorkspace } from "../../shared/replacement/workspace.ts";
+import { agendaForView, parseIcsCalendar } from "../../shared/workspace/calendar.ts";
+import { dateInTimeZone } from "../../shared/workspace/dates.ts";
+import { createEmptyWorkspace, createWorkspace } from "../../shared/workspace/workspace.ts";
 
 const NOW = "2026-07-19T08:00:00.000Z";
 

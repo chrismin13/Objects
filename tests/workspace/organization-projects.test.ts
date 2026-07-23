@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ToDo } from "../../shared/replacement/model.ts";
+import type { ToDo } from "../../shared/workspace/model.ts";
 import {
   DELETE_SPACE_CONFIRMATION,
   DELETE_HEADING_CONFIRMATION,
@@ -10,7 +10,7 @@ import {
   REMOVE_AREA_CONFIRMATION,
   createEmptyWorkspace,
   createWorkspace,
-} from "../../shared/replacement/workspace.ts";
+} from "../../shared/workspace/workspace.ts";
 
 const NOW = "2026-07-19T12:00:00.000Z";
 

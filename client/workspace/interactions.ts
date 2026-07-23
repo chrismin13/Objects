@@ -1,5 +1,5 @@
-import type { Schedule, ToDoLocation } from "../../shared/replacement/model.ts";
-import type { WorkspaceChange } from "../../shared/replacement/workspace.ts";
+import type { Schedule, ToDoLocation } from "../../shared/workspace/model.ts";
+import type { WorkspaceChange } from "../../shared/workspace/workspace.ts";
 
 export type InteractionSource = "row" | "inspector" | "keyboard" | "menu" | "bulk" | "drag" | "touch";
 

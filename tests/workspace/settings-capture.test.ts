@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createEmptyWorkspace, createWorkspace } from "../../shared/replacement/workspace.ts";
-import { resolveAppearance, selectLaunchSpace, shouldRememberManualSpace } from "../../shared/replacement/settings.ts";
-import { captureInputFromRecord, captureInputFromUrl } from "../../shared/replacement/capture.ts";
-import { createInMemorySyncStore } from "../../shared/replacement/sync.ts";
-import { dateInTimeZone } from "../../shared/replacement/dates.ts";
-import { captureIntoSnapshot, selectCaptureBase } from "../../shared/replacement/http-capture.ts";
+import { createEmptyWorkspace, createWorkspace } from "../../shared/workspace/workspace.ts";
+import { resolveAppearance, selectLaunchSpace, shouldRememberManualSpace } from "../../shared/workspace/settings.ts";
+import { captureInputFromRecord, captureInputFromUrl } from "../../shared/workspace/capture.ts";
+import { createInMemorySyncStore } from "../../shared/workspace/sync.ts";
+import { dateInTimeZone } from "../../shared/workspace/dates.ts";
+import { captureIntoSnapshot, selectCaptureBase } from "../../shared/workspace/http-capture.ts";
 
 function settingsDocument() {
   const document = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
