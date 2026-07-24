@@ -39,10 +39,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .auth-footnote { margin: 18px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; text-align: center; }
 
 /* Boot shell: a skeleton of the real app shell shown until the workspace is
-   ready, with dialogs layered on top for sign-in, offline, and recovery. */
+   ready, with dialogs layered on top for sign-in, offline, and recovery.
+   Placeholder shapes match the things-styles metrics of the real chrome. */
 .boot-shell { pointer-events: none; user-select: none; }
 .boot-shell .sidebar-nav, .boot-shell .content { overflow: hidden; }
-.boot-window-actions { display: flex; align-items: center; gap: 2px; }
 
 .skeleton { position: relative; display: block; overflow: hidden; border-radius: 6px; background: var(--surface-hover); }
 .skeleton::after {
@@ -56,20 +56,28 @@ button { -webkit-tap-highlight-color: transparent; }
 @keyframes skeleton-sweep { to { transform: translateX(100%); } }
 
 .skeleton-icon { width: 17px; height: 17px; border-radius: 5px; flex: none; }
-.boot-window-actions .skeleton-icon, .sidebar-tools .skeleton-icon, .mobile-header .skeleton-icon { width: 18px; height: 18px; }
-.skeleton-space { width: 96px; height: 22px; border-radius: 7px; }
-.skeleton-section { width: 38%; height: 10px; margin: 19px 11px 8px 13px; }
+.skeleton-icon-16 { width: 16px; height: 16px; border-radius: 5px; flex: none; }
+.skeleton-btn { width: 34px; height: 34px; display: grid; place-items: center; flex: none; }
+.skeleton-btn .skeleton-icon { width: 18px; height: 18px; }
+.skeleton-btn-settings { width: 28px; }
+.skeleton-btn-search { width: 30px; }
+.skeleton-segment { flex: 1; border-radius: 6px; }
+.skeleton-section { width: 38%; height: 10px; margin: 17px 10px 7px; }
 .boot-nav-item { cursor: default; }
 .boot-nav-item:hover { background: transparent; }
 .skeleton-line { height: 10px; }
-.skeleton-check { width: 19px; height: 19px; border-radius: 50%; margin-top: 1px; }
+.skeleton-check { width: 19px; height: 19px; border-radius: 50%; }
 .boot-task-row { cursor: default; }
 .boot-task-row:hover { background: transparent; }
-.skeleton-task-title { height: 12px; margin-top: 4px; }
-.skeleton-task-meta { height: 9px; margin-top: 7px; }
-.skeleton-eyebrow { width: 84px; height: 11px; margin-bottom: 12px; }
-.skeleton-title { width: min(320px, 55%); height: clamp(30px, 4vw, 38px); border-radius: 8px; }
+.skeleton-task-title { height: 12px; margin-top: 3px; }
+.skeleton-task-meta { height: 9px; margin-top: 6px; }
+.skeleton-view-icon { width: 27px; height: 27px; border-radius: 7px; flex: none; }
+.skeleton-title { width: min(280px, 50%); height: clamp(30px, 3vw, 35px); border-radius: 8px; }
 .skeleton-progress { width: 100%; height: 3px; margin-top: 20px; border-radius: 10px; background: var(--surface-subtle); }
+
+@media (max-width: 820px) {
+  .mobile-header .skeleton-btn { width: 42px; height: 42px; }
+}
 
 .boot-overlay {
   position: fixed;

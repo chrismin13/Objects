@@ -58,15 +58,20 @@ function SkeletonTaskRow({ title, meta }: { title: string; meta?: string }) {
 
 // Mirrors the real shell geometry (sidebar + main pane) with shimmering
 // placeholders, so the app appears to "fill in" once the workspace is ready.
+// Placeholders reuse the real layout classes; shapes inside match the
+// things-styles metrics (34px button boxes, 30px space pill, 42px mobile
+// header buttons) so the swap doesn't shift.
 function ShellSkeleton() {
   return (
     <div className="app-shell boot-shell" aria-hidden="true">
       <aside className="sidebar">
         <div className="window-bar">
-          <div className="space-controls"><SkeletonBar className="skeleton-space" /></div>
-          <div className="window-actions boot-window-actions">
-            <SkeletonBar className="skeleton-icon" />
-            <SkeletonBar className="skeleton-icon" />
+          <div className="space-controls">
+            <div className="space-pill"><SkeletonBar className="skeleton-segment" /></div>
+          </div>
+          <div className="window-actions">
+            <span className="skeleton-btn skeleton-btn-settings"><SkeletonBar className="skeleton-icon" /></span>
+            <span className="skeleton-btn skeleton-btn-search"><SkeletonBar className="skeleton-icon" /></span>
           </div>
         </div>
         <nav className="sidebar-nav">
@@ -84,25 +89,28 @@ function ShellSkeleton() {
           </ul>
         </nav>
         <div className="sidebar-footer">
-          <SkeletonBar className="skeleton-line" width="72px" />
+          <span className="quiet-button">
+            <SkeletonBar className="skeleton-icon-16" />
+            <SkeletonBar className="skeleton-line" width="58px" />
+          </span>
           <div className="sidebar-tools">
-            <SkeletonBar className="skeleton-icon" />
-            <SkeletonBar className="skeleton-icon" />
-            <SkeletonBar className="skeleton-icon" />
+            <span className="skeleton-btn"><SkeletonBar className="skeleton-icon" /></span>
+            <span className="skeleton-btn"><SkeletonBar className="skeleton-icon" /></span>
           </div>
         </div>
       </aside>
       <main className="main-pane">
         <header className="mobile-header">
-          <SkeletonBar className="skeleton-icon" />
-          <SkeletonBar className="skeleton-line" width="64px" />
-          <SkeletonBar className="skeleton-icon" />
+          <span className="skeleton-btn"><SkeletonBar className="skeleton-icon" /></span>
+          <span className="skeleton-btn"><SkeletonBar className="skeleton-icon" /></span>
         </header>
         <section className="content">
           <div className="content-inner">
             <div className="view-header">
-              <SkeletonBar className="skeleton-eyebrow" />
-              <SkeletonBar className="skeleton-title" />
+              <div className="view-title-row">
+                <SkeletonBar className="skeleton-view-icon" />
+                <SkeletonBar className="skeleton-title" />
+              </div>
               <SkeletonBar className="skeleton-progress" />
             </div>
             <ul className="task-list">
@@ -115,7 +123,7 @@ function ShellSkeleton() {
           </div>
         </section>
         <span className="magic-add">
-          <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
         </span>
       </main>
     </div>
