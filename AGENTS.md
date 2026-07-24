@@ -14,6 +14,7 @@ Your role is to build software within this capsule. Lakebed is the runtime, the 
 - Data needed on client should be fetched through queries. User-driven changes should be done via mutations. Endpoints should be treated as an "escape hatch" for exposing functionality over endpoints for HTTP-based flows.
 - Styling must be done via raw CSS or Tailwind classes in the JSX.
 - Do not add a CSS, PostCSS, or Tailwind build pipeline. They are built in.
+- Theme CSS is layered by `client/theme/index.ts`: `client/styles.ts` is the legacy base, while the later `client/things-styles.ts` layer owns much of the effective app-chrome geometry. Check later layers before trusting base values.
 - Favicons can live at `favicon.svg` or `favicon.ico`; for another capsule path, set `favicon: "assets/icon.svg"` in `server/index.ts`.
 - There is no file based routing. Use the built-in client router from `lakebed/client` when you need pages.
 - All imports must be from Lakebed or from relative paths. Client Preact code may import `preact` and `preact/hooks`, which are provided by the Lakebed runtime.

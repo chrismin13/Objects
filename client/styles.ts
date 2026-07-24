@@ -1,3 +1,8 @@
+// NOTE: This is the legacy base layer. `things-styles.ts` loads later and
+// owns the effective geometry for much of the app chrome; check both files
+// before treating a value here as authoritative.
+// TODO: Consolidate duplicate selectors into one component-oriented style
+// source so geometry is not determined by cross-file source-order overrides.
 export const styles = `
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
