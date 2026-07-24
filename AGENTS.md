@@ -55,13 +55,13 @@ Deploy:
 npx lakebed deploy
 ```
 
-### Deployment target
+### Deployment targets
 
-- This Workspace rewrite branch must always be published through `https://objects-next.lakebed.app`.
-- Keep `lakebed.json` bound to the claimed deploy that owns `objects-next.lakebed.app`, and verify the named hostname after every deploy before reporting completion.
-- Lakebed also prints a generated slug URL for the backing deploy. Do not report that generated URL as this branch's deployment target, and do not create a replacement deploy merely because the generated backing URL is visible.
+- `main` is production: it must stay bound to the claimed deploy that owns `https://objects.lakebed.app` (`dep_rarwdUj4I9LZJWoX`). Deploys from `main` publish to production.
+- `https://objects-next.lakebed.app` (`dep_0mZ9yLy8aEA6dEoL`) is the staging target for feature branches. A branch that deploys for verification should temporarily bind `lakebed.json` to the staging deploy, never to production, and restore the production binding before merging to `main`.
+- Keep `lakebed.json` bound to the intended claimed deploy, and verify the named hostname after every deploy before reporting completion.
+- Lakebed also prints a generated slug URL for the backing deploy. Do not report that generated URL as a named deployment target, and do not create a replacement deploy merely because the generated backing URL is visible.
 - Separate random-slug preview deploys may be used for short-lived verification only; terminate them after the named deployment is verified.
-- Do not deploy this branch to the production `objects.lakebed.app` app unless the owner explicitly requests a production cutover.
 
 Inspect local state while `npx lakebed dev` is running:
 
