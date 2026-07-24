@@ -115,7 +115,7 @@ function ShellSkeleton() {
           </div>
         </section>
         <span className="magic-add">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+          <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
         </span>
       </main>
     </div>
@@ -418,6 +418,11 @@ export function App() {
       window.removeEventListener("offline", syncOnlineState);
     };
   }, []);
+
+  // Hold all UI until the theme stylesheet is injected: boot.ts has already
+  // painted <html> in the resolved theme, so the gap reads as a blank themed
+  // page instead of a flash of unstyled skeleton markup.
+  if (!themeCss) return null;
 
   return (
     <>
