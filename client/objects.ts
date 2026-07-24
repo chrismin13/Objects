@@ -10,6 +10,7 @@ import { QuickFind } from './features/search/quick-find';
 import { SettingsDialog } from './features/settings/settings-dialog';
 import { AreaDialog, BulkTagsDialog, ConfirmDialog, FinishProjectDialog, HeadingDialog, MoveTasksDialog, NewListDialog, ProjectDialog, RepeatingTemplateDialog, SpacesSettingsDialog, SpaceSwitcherDialog } from './features/entities/entity-dialogs';
 import { hideEmptyToastLayer, placeToastLayer, showToastLayer } from './toast-layer';
+import { applyThemeToDocument, writeThemeChoice } from './theme/boot';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -1124,15 +1125,12 @@ function handleContextMenuClick(event) {
 function applyTheme() {
   if (!ui.state) return;
   const choice = ui.state.settings.theme || 'system';
-  const resolved = choice === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : choice;
-  document.documentElement.dataset.theme = resolved;
-  document.documentElement.classList.toggle('wa-dark', resolved === 'dark');
-  document.documentElement.classList.toggle('wa-light', resolved !== 'dark');
+  applyThemeToDocument(choice);
+  // Cache the choice on the device so the boot screens match before sign-in.
+  writeThemeChoice(choice);
   const themeIcons = { system: 'monitor', light: 'sun', dark: 'moon' };
   $('#theme-button').innerHTML = icon(themeIcons[choice]);
   $('#theme-button').setAttribute('aria-label', `Theme: ${choice}`);
-  const themeMeta = document.querySelector('meta[name="theme-color"]');
-  if (themeMeta) themeMeta.content = resolved === 'dark' ? '#222321' : '#f6f5f2';
 }
 
 function cycleTheme() {

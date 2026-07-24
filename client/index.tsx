@@ -1,5 +1,6 @@
 import { SignInWithGoogle, signOut, useAuth } from "lakebed/client";
 import { Component } from "preact";
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { InterfaceChangeSet } from "../shared/workspace/interface-bridge";
 import type { WorkspaceSyncClient } from "../shared/workspace/sync-client";
@@ -7,11 +8,14 @@ import { initializePwa } from "./pwa";
 import { useLakebedWorkspaceAdapter } from "./workspace/lakebed-adapter";
 import { scopeWorkspaceAdapter } from "./workspace/lakebed-adapter-core";
 import { workspaceRuntimeReady } from "./workspace/runtime-loader";
+import { initThemeBoot } from "./theme/boot";
 import { objectsThemeReady } from "./theme/loader";
 import { webAwesomeReady } from "./vendor/webawesome/loader";
 import { objectsRuntimeReady } from "./runtime/loader";
 
 type AuthIdentity = ReturnType<typeof useAuth>;
+
+initThemeBoot();
 
 void webAwesomeReady;
 
@@ -27,55 +31,142 @@ function BrandMark() {
   return <div className="auth-mark" aria-hidden="true"><span /><span /><span /></div>;
 }
 
-function SignInScreen({ loading = false }: { loading?: boolean }) {
+function SkeletonBar({ className, width }: { className: string; width?: string }) {
+  return <span className={`skeleton ${className}`} style={width ? { width } : undefined} />;
+}
+
+function SkeletonNavRow({ width }: { width: string }) {
   return (
-    <main className="auth-screen">
-      <section className="auth-card" aria-labelledby="auth-title">
-        <BrandMark />
-        <p className="auth-brand">Objects on Lakebed</p>
-        <h1 id="auth-title">{loading ? "Opening Objects" : "Your tasks, privately yours"}</h1>
-        <p className="auth-copy">
-          {loading
-            ? "Lakebed is checking your session."
-            : "Sign in with Google to create a private workspace that follows you across devices."}
-        </p>
-        {loading ? (
-          <div className="auth-loading" role="status"><span /> Checking session…</div>
-        ) : (
-          <SignInWithGoogle className="button primary auth-submit" />
-        )}
-        <p className="auth-footnote">Authentication and identity are provided by Lakebed. Objects never uses your email as an authorization key.</p>
-      </section>
-    </main>
+    <li className="nav-item boot-nav-item">
+      <SkeletonBar className="skeleton-icon" />
+      <SkeletonBar className="skeleton-line" width={width} />
+    </li>
   );
 }
 
-function OfflineScreen() {
+function SkeletonTaskRow({ title, meta }: { title: string; meta?: string }) {
   return (
-    <main className="auth-screen">
-      <section className="auth-card" aria-labelledby="offline-title">
-        <BrandMark />
-        <p className="auth-brand">Objects on Lakebed</p>
-        <h1 id="offline-title">Objects is offline</h1>
-        <p className="auth-copy">The installed app shell is ready. Reconnect to unlock your private workspace and resume syncing.</p>
-        <div className="auth-loading" role="status"><span /> Waiting for a connection…</div>
-        <p className="auth-footnote">Objects deliberately does not store private Lakebed API or authentication responses in the shared app cache.</p>
-      </section>
-    </main>
+    <li className="task-row boot-task-row">
+      <SkeletonBar className="skeleton-check" />
+      <div className="task-main">
+        <SkeletonBar className="skeleton-line skeleton-task-title" width={title} />
+        {meta ? <SkeletonBar className="skeleton-line skeleton-task-meta" width={meta} /> : null}
+      </div>
+    </li>
   );
 }
 
-function SessionRecoveryScreen() {
+// Mirrors the real shell geometry (sidebar + main pane) with shimmering
+// placeholders, so the app appears to "fill in" once the workspace is ready.
+function ShellSkeleton() {
   return (
-    <main className="auth-screen">
-      <section className="auth-card" aria-labelledby="session-title">
-        <BrandMark />
-        <p className="auth-brand">Objects on Lakebed</p>
-        <h1 id="session-title">The session check is taking longer than expected</h1>
-        <p className="auth-copy">Your data is safe. Reconnect the current tab to Lakebed without closing it.</p>
-        <button className="button primary auth-submit" type="button" onClick={() => window.location.reload()}>Retry session</button>
-      </section>
-    </main>
+    <div className="app-shell boot-shell" aria-hidden="true">
+      <aside className="sidebar">
+        <div className="window-bar">
+          <div className="space-controls"><SkeletonBar className="skeleton-space" /></div>
+          <div className="window-actions boot-window-actions">
+            <SkeletonBar className="skeleton-icon" />
+            <SkeletonBar className="skeleton-icon" />
+          </div>
+        </div>
+        <nav className="sidebar-nav">
+          <ul className="nav-list">
+            <SkeletonNavRow width="38%" />
+            <SkeletonNavRow width="52%" />
+            <SkeletonNavRow width="45%" />
+            <SkeletonNavRow width="60%" />
+          </ul>
+          <SkeletonBar className="skeleton-section" />
+          <ul className="nav-list">
+            <SkeletonNavRow width="55%" />
+            <SkeletonNavRow width="42%" />
+            <SkeletonNavRow width="64%" />
+          </ul>
+        </nav>
+        <div className="sidebar-footer">
+          <SkeletonBar className="skeleton-line" width="72px" />
+          <div className="sidebar-tools">
+            <SkeletonBar className="skeleton-icon" />
+            <SkeletonBar className="skeleton-icon" />
+            <SkeletonBar className="skeleton-icon" />
+          </div>
+        </div>
+      </aside>
+      <main className="main-pane">
+        <header className="mobile-header">
+          <SkeletonBar className="skeleton-icon" />
+          <SkeletonBar className="skeleton-line" width="64px" />
+          <SkeletonBar className="skeleton-icon" />
+        </header>
+        <section className="content">
+          <div className="content-inner">
+            <div className="view-header">
+              <SkeletonBar className="skeleton-eyebrow" />
+              <SkeletonBar className="skeleton-title" />
+              <SkeletonBar className="skeleton-progress" />
+            </div>
+            <ul className="task-list">
+              <SkeletonTaskRow title="82%" meta="24%" />
+              <SkeletonTaskRow title="64%" />
+              <SkeletonTaskRow title="71%" meta="18%" />
+              <SkeletonTaskRow title="48%" />
+              <SkeletonTaskRow title="76%" meta="31%" />
+            </ul>
+          </div>
+        </section>
+        <span className="magic-add">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+        </span>
+      </main>
+    </div>
+  );
+}
+
+function BootScreen({ status, children }: { status: string; children?: ComponentChildren }) {
+  return (
+    <>
+      <ShellSkeleton />
+      <span className="boot-status" role="status">{status}</span>
+      {children ? <div className="boot-overlay">{children}</div> : null}
+    </>
+  );
+}
+
+function SignInCard() {
+  return (
+    <section className="auth-card" aria-labelledby="auth-title">
+      <BrandMark />
+      <p className="auth-brand">Objects on Lakebed</p>
+      <h1 id="auth-title">Your tasks, privately yours</h1>
+      <p className="auth-copy">Sign in with Google to create a private workspace that follows you across devices.</p>
+      <SignInWithGoogle className="button primary auth-submit" />
+      <p className="auth-footnote">Authentication and identity are provided by Lakebed. Objects never uses your email as an authorization key.</p>
+    </section>
+  );
+}
+
+function OfflineCard() {
+  return (
+    <section className="auth-card" aria-labelledby="offline-title">
+      <BrandMark />
+      <p className="auth-brand">Objects on Lakebed</p>
+      <h1 id="offline-title">Objects is offline</h1>
+      <p className="auth-copy">The installed app shell is ready. Reconnect to unlock your private workspace and resume syncing.</p>
+      <div className="auth-loading" role="status"><span /> Waiting for a connection…</div>
+      <p className="auth-footnote">Objects deliberately does not store private Lakebed API or authentication responses in the shared app cache.</p>
+    </section>
+  );
+}
+
+function RecoveryCard() {
+  return (
+    <section className="auth-card" aria-labelledby="session-title">
+      <BrandMark />
+      <p className="auth-brand">Objects on Lakebed</p>
+      <h1 id="session-title">The session check is taking longer than expected</h1>
+      <p className="auth-copy">Your data is safe. Reconnect the current tab to Lakebed without closing it.</p>
+      <button className="button primary auth-submit" type="button" onClick={() => window.location.reload()}>Retry session</button>
+    </section>
   );
 }
 
@@ -248,7 +339,11 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
     return () => window.clearTimeout(timer);
   }, [ready]);
 
-  if (!ready) return !online ? <OfflineScreen /> : stateTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading />;
+  if (!ready) {
+    if (!online) return <BootScreen status="Objects is offline."><OfflineCard /></BootScreen>;
+    if (stateTimedOut) return <BootScreen status="The session check is taking longer than expected."><RecoveryCard /></BootScreen>;
+    return <BootScreen status="Opening your workspace…" />;
+  }
 
   return <StableObjectsDom />;
 }
@@ -272,7 +367,7 @@ export function App() {
     const metadata = [
       ["meta", "meta[name='viewport']", { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" }],
       ["link", "link[rel='manifest']", { rel: "manifest", href: "/manifest.webmanifest" }],
-      ["meta", "meta[name='theme-color']", { name: "theme-color", content: "#2f80ed" }],
+      ["meta", "meta[name='theme-color']", { name: "theme-color", content: document.documentElement.dataset.theme === "dark" ? "#222321" : "#f6f5f2" }],
       ["meta", "meta[name='mobile-web-app-capable']", { name: "mobile-web-app-capable", content: "yes" }],
       ["meta", "meta[name='apple-mobile-web-app-capable']", { name: "apple-mobile-web-app-capable", content: "yes" }],
       ["meta", "meta[name='apple-mobile-web-app-title']", { name: "apple-mobile-web-app-title", content: "Objects" }],
@@ -327,7 +422,15 @@ export function App() {
   return (
     <>
       <style>{themeCss}</style>
-      {auth.isLoading ? !online ? <OfflineScreen /> : authTimedOut ? <SessionRecoveryScreen /> : <SignInScreen loading /> : auth.isGuest && !localGuest ? <SignInScreen /> : <ObjectsShell auth={auth} online={online} />}
+      {auth.isLoading
+        ? !online
+          ? <BootScreen status="Objects is offline."><OfflineCard /></BootScreen>
+          : authTimedOut
+            ? <BootScreen status="The session check is taking longer than expected."><RecoveryCard /></BootScreen>
+            : <BootScreen status="Checking your session…" />
+        : auth.isGuest && !localGuest
+          ? <BootScreen status="Sign in to Objects."><SignInCard /></BootScreen>
+          : <ObjectsShell auth={auth} online={online} />}
     </>
   );
 }

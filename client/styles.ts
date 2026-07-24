@@ -16,18 +16,6 @@ body {
 button, input, textarea, select { font: inherit; color: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 
-.auth-screen {
-  width: 100vw;
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  padding: 32px 18px;
-  overflow-y: auto;
-  background:
-    radial-gradient(circle at 15% 18%, color-mix(in srgb, var(--blue) 10%, transparent), transparent 34%),
-    radial-gradient(circle at 88% 84%, color-mix(in srgb, var(--yellow) 11%, transparent), transparent 31%),
-    var(--bg);
-}
 .auth-card { width: min(430px, 100%); padding: 34px; border: 1px solid var(--border); border-radius: 20px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow); }
 .auth-mark { width: 48px; height: 48px; display: grid; gap: 4px; padding: 10px; border-radius: 14px; background: var(--text); }
 .auth-mark span { display: block; height: 3px; border-radius: 9px; background: var(--surface); }
@@ -37,6 +25,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .auth-brand { margin: 20px 0 7px; color: var(--muted); font-size: 12px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .auth-card h1 { font-size: 30px; }
 .auth-copy { margin: 9px 0 24px; color: var(--muted); line-height: 1.5; }
+.auth-loading { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
+.auth-loading span { width: 14px; height: 14px; border: 2px solid var(--border-strong); border-top-color: var(--blue); border-radius: 50%; animation: auth-spin .8s linear infinite; }
+@keyframes auth-spin { to { transform: rotate(360deg); } }
 .auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 10px; background: var(--surface-subtle); }
 .auth-tab { min-height: 36px; padding: 6px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
 .auth-tab.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.08); font-weight: 650; }
@@ -46,6 +37,53 @@ button { -webkit-tap-highlight-color: transparent; }
 .auth-submit { width: 100%; min-height: 43px; margin-top: 8px; }
 .auth-submit:disabled { opacity: .62; cursor: wait; }
 .auth-footnote { margin: 18px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; text-align: center; }
+
+/* Boot shell: a skeleton of the real app shell shown until the workspace is
+   ready, with dialogs layered on top for sign-in, offline, and recovery. */
+.boot-shell { pointer-events: none; user-select: none; }
+.boot-shell .sidebar-nav, .boot-shell .content { overflow: hidden; }
+.boot-window-actions { display: flex; align-items: center; gap: 2px; }
+
+.skeleton { position: relative; display: block; overflow: hidden; border-radius: 6px; background: var(--surface-hover); }
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--surface) 65%, transparent), transparent);
+  animation: skeleton-sweep 1.6s var(--ease) infinite;
+}
+@keyframes skeleton-sweep { to { transform: translateX(100%); } }
+
+.skeleton-icon { width: 17px; height: 17px; border-radius: 5px; flex: none; }
+.boot-window-actions .skeleton-icon, .sidebar-tools .skeleton-icon, .mobile-header .skeleton-icon { width: 18px; height: 18px; }
+.skeleton-space { width: 96px; height: 22px; border-radius: 7px; }
+.skeleton-section { width: 38%; height: 10px; margin: 19px 11px 8px 13px; }
+.boot-nav-item { cursor: default; }
+.boot-nav-item:hover { background: transparent; }
+.skeleton-line { height: 10px; }
+.skeleton-check { width: 19px; height: 19px; border-radius: 50%; margin-top: 1px; }
+.boot-task-row { cursor: default; }
+.boot-task-row:hover { background: transparent; }
+.skeleton-task-title { height: 12px; margin-top: 4px; }
+.skeleton-task-meta { height: 9px; margin-top: 7px; }
+.skeleton-eyebrow { width: 84px; height: 11px; margin-bottom: 12px; }
+.skeleton-title { width: min(320px, 55%); height: clamp(30px, 4vw, 38px); border-radius: 8px; }
+.skeleton-progress { width: 100%; height: 3px; margin-top: 20px; border-radius: 10px; background: var(--surface-subtle); }
+
+.boot-overlay {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px 18px;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.boot-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 
 .app-shell {
   display: grid;
@@ -407,8 +445,8 @@ h1 { margin: 0; font-size: clamp(30px, 4vw, 38px); line-height: 1.08; letter-spa
 }
 
 @media (max-width: 520px) {
-  .auth-screen { padding: 0; }
-  .auth-card { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; padding: 28px 22px; border: 0; border-radius: 0; box-shadow: none; }
+  .boot-overlay { padding: 20px 14px; }
+  .boot-overlay .auth-card { padding: 28px 22px; }
   .content { padding-left: 16px; padding-right: 16px; }
   .view-header { margin-bottom: 24px; padding: 0 5px; }
   .view-title-row { gap: 9px; }
