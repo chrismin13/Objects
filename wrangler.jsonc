@@ -3,6 +3,9 @@
   "name": "objects",
   "compatibility_date": "2026-07-25",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "WORKOS_CLIENT_ID": "client_01KYCD74DQYZY1A1B6V4NBGQBV",
+  },
   "main": "./worker/index.ts",
   "assets": {
     "not_found_handling": "single-page-application",

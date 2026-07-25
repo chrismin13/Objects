@@ -5,8 +5,44 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Objects</title>
+    <style>
+      body {
+        font-family: system-ui;
+        max-width: 36rem;
+        margin: 3rem auto;
+        padding: 0 1rem;
+      }
+      code {
+        background: #eee;
+        padding: 0 0.25rem;
+        border-radius: 3px;
+      }
+    </style>
   </head>
   <body>
-    <p>Objects — Cloudflare build skeleton. The client lands here in Phase 4.</p>
+    <h1>Objects — auth preview</h1>
+    <p id="status">Checking session…</p>
+    <p>
+      <a href="/auth/login" id="login" hidden>Sign in with WorkOS</a>
+      <a href="/auth/logout" id="logout" hidden>Sign out</a>
+    </p>
+    <p id="workspace"></p>
+    <script type="module">
+      const me = await fetch("/api/me");
+      if (me.ok) {
+        const { user } = await me.json();
+        document.getElementById("status").innerHTML =
+          `Signed in as <code>${user.email}</code> (<code>${user.userId}</code>)`;
+        document.getElementById("logout").hidden = false;
+        const workspace = await fetch("/api/workspace");
+        const body = await workspace.json();
+        document.getElementById("workspace").textContent = body.snapshot
+          ? `Workspace at revision ${body.snapshot.revision}.`
+          : "No workspace yet.";
+      } else {
+        document.getElementById("status").textContent = "Not signed in.";
+        document.getElementById("login").hidden = false;
+      }
+    </script>
   </body>
 </html>

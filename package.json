@@ -13,6 +13,7 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
+    "iron-session": "^8.0.4",
     "preact": "^10.29.7"
   },
   "devDependencies": {

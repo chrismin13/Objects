@@ -1,21 +1,65 @@
+import {
+  authorizationUrl,
+  clearSessionCookieHeader,
+  exchangeCodeForSession,
+  readSession,
+  sealSession,
+  sessionCookieHeader,
+  type Session,
+} from "./auth.ts";
+
 export { WorkspaceDO } from "./workspace-do.ts";
 
 /**
  * Objects API Worker.
  *
- * Auth is stubbed for Phase 1–2: the owner identity comes from the
- * `x-owner` header. Phase 3 replaces this with a WorkOS sealed-cookie
- * session that yields the same opaque owner string.
+ * Auth: hosted WorkOS AuthKit. `/auth/login` redirects to AuthKit,
+ * `/auth/callback` exchanges the code and seals an Objects session cookie,
+ * `/auth/logout` clears it. API routes require the session; the WorkOS user
+ * ID is the opaque owner key scoping every Durable Object.
  */
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname === "/auth/login" && request.method === "GET") {
+      return Response.redirect(authorizationUrl(env, callbackUrl(url)), 302);
+    }
+
+    if (url.pathname === "/auth/callback" && request.method === "GET") {
+      const code = url.searchParams.get("code");
+      if (!code)
+        return Response.json({ ok: false, error: "Missing authorization code." }, { status: 400 });
+      const exchanged = await exchangeCodeForSession(env, code);
+      if ("error" in exchanged)
+        return Response.json({ ok: false, error: exchanged.error }, { status: 502 });
+      const sealed = await sealSession(env, exchanged.session);
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "/", "Set-Cookie": sessionCookieHeader(sealed) },
+      });
+    }
+
+    if (url.pathname === "/auth/logout") {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "/", "Set-Cookie": clearSessionCookieHeader() },
+      });
+    }
+
+    if (url.pathname === "/api/me" && request.method === "GET") {
+      const session = await readSession(request, env);
+      if (!session) return Response.json({ authenticated: false }, { status: 401 });
+      return Response.json({ authenticated: true, user: session });
+    }
+
     if (url.pathname === "/api/workspace" && request.method === "GET") {
-      const stub = workspaceStub(request, env);
+      const session = await requireSession(request, env);
+      if (session instanceof Response) return session;
+      const stub = workspaceStub(session, env);
       const snapshot = await stub.load();
       return Response.json({
-        ownerIdentity: ownerOf(request),
+        ownerIdentity: session.userId,
         snapshot,
         migrationReport: null,
         migrationRequired: false,
@@ -23,13 +67,17 @@ export default {
     }
 
     if (url.pathname === "/api/workspace" && request.method === "POST") {
-      const stub = workspaceStub(request, env);
+      const session = await requireSession(request, env);
+      if (session instanceof Response) return session;
+      const stub = workspaceStub(session, env);
       const result = await stub.save(await request.text());
       return new Response(result, { headers: { "Content-Type": "application/json" } });
     }
 
     if (url.pathname === "/api/tasks" && request.method === "POST") {
-      const stub = workspaceStub(request, env);
+      const session = await requireSession(request, env);
+      if (session instanceof Response) return session;
+      const stub = workspaceStub(session, env);
       const input = (await request.json()) as Record<string, unknown>;
       const headerIdentity = request.headers.get("idempotency-key");
       if (!input.submissionId && headerIdentity) input.submissionId = headerIdentity;
@@ -47,11 +95,18 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function ownerOf(request: Request): string {
-  return request.headers.get("x-owner") ?? "local-dev-user";
+function callbackUrl(url: URL): string {
+  return `${url.origin}/auth/callback`;
 }
 
-function workspaceStub(request: Request, env: Env) {
-  const id = env.WORKSPACE_DO.idFromName(ownerOf(request));
+async function requireSession(request: Request, env: Env): Promise<Session | Response> {
+  const session = await readSession(request, env);
+  if (!session)
+    return Response.json({ ok: false, error: "Authentication required" }, { status: 401 });
+  return session;
+}
+
+function workspaceStub(session: Session, env: Env) {
+  const id = env.WORKSPACE_DO.idFromName(session.userId);
   return env.WORKSPACE_DO.get(id);
 }
