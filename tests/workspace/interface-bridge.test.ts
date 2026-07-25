@@ -1,22 +1,25 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vite-plus/test";
 
 import {
   applyInterfaceChangeSetToWorkspace,
   interfaceLocationForWorkspaceUrl,
   workspaceDocumentToInterfaceState,
 } from "../../shared/workspace/interface-bridge.ts";
-import {
-  createEmptyWorkspace,
-  createWorkspace,
-} from "../../shared/workspace/workspace.ts";
+import { createEmptyWorkspace, createWorkspace } from "../../shared/workspace/workspace.ts";
 
 const NOW = "2026-07-20T09:00:00.000Z";
 
 function workspaceFixture() {
   let sequence = 0;
   const document = createEmptyWorkspace(NOW);
-  document.spaces.push({ id: "space-personal", title: "Personal", color: "#e49b3c", pinned: true, order: 0 });
+  document.spaces.push({
+    id: "space-personal",
+    title: "Personal",
+    color: "#e49b3c",
+    pinned: true,
+    order: 0,
+  });
   document.settings.defaultSpaceId = "space-personal";
   return createWorkspace(document, {
     now: () => NOW,
@@ -43,9 +46,14 @@ test("the restored interface reads Workspace data without changing its domain me
   assert.equal(toDo?.bucket, "today");
   assert.equal(toDo?.scheduledFor, "2026-07-20");
   assert.equal(toDo?.evening, true);
-  assert.equal(toDo?.reminderAt, "2026-07-20T14:30");
+  // The suite runs in workerd, which pins Date to UTC; the browser formats
+  // this reminder in the user's local timezone instead (14:30 at +03:00).
+  assert.equal(toDo?.reminderAt, "2026-07-20T11:30");
   assert.equal(toDo?.deadline, "2026-07-22");
-  assert.deepEqual(toDo?.checklist.map((item) => item.title), ["Read final copy", "Confirm analytics"]);
+  assert.deepEqual(
+    toDo?.checklist.map((item) => item.title),
+    ["Read final copy", "Confirm analytics"],
+  );
 });
 
 test("repeating Schedule and Deadline stay separate in the restored interface", () => {
@@ -63,7 +71,9 @@ test("repeating Schedule and Deadline stay separate in the restored interface", 
     },
   });
 
-  const template = workspaceDocumentToInterfaceState(workspace.read()).tasks.find((item) => item.workspaceTemplate);
+  const template = workspaceDocumentToInterfaceState(workspace.read()).tasks.find(
+    (item) => item.workspaceTemplate,
+  );
 
   assert.equal(template?.scheduledFor, "2026-07-27");
   assert.equal(template?.deadline, "2026-07-29");
@@ -94,37 +104,52 @@ test("interface edits cross the public Workspace seam and preserve Workspace-onl
   const before = workspace.read();
   before.captureReceipts.push({ submissionId: "capture-1", toDoId, createdAt: NOW });
 
-  const next = applyInterfaceChangeSetToWorkspace(before, {
-    mutationId: "mutation-interface-edit",
-    entities: {
-      tasks: [{
-        id: toDoId,
-        patch: {
-          title: "Draft final copy",
-          checklist: [
-            { id: before.toDos[0].checklist[1].id, title: "Body", done: false },
-            { id: before.toDos[0].checklist[0].id, title: "Headline", done: true },
-          ],
-        },
-      }],
+  const next = applyInterfaceChangeSetToWorkspace(
+    before,
+    {
+      mutationId: "mutation-interface-edit",
+      entities: {
+        tasks: [
+          {
+            id: toDoId,
+            patch: {
+              title: "Draft final copy",
+              checklist: [
+                { id: before.toDos[0].checklist[1].id, title: "Body", done: false },
+                { id: before.toDos[0].checklist[0].id, title: "Headline", done: true },
+              ],
+            },
+          },
+        ],
+      },
     },
-  }, {
-    now: () => NOW,
-    createId: (kind) => `bridge-${kind}`,
-  });
+    {
+      now: () => NOW,
+      createId: (kind) => `bridge-${kind}`,
+    },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
   assert.equal(next.document.toDos[0].title, "Draft final copy");
-  assert.deepEqual(next.document.toDos[0].checklist.map((item) => [item.title, item.completed, item.order]), [
-    ["Body", false, 0],
-    ["Headline", true, 1],
-  ]);
+  assert.deepEqual(
+    next.document.toDos[0].checklist.map((item) => [item.title, item.completed, item.order]),
+    [
+      ["Body", false, 0],
+      ["Headline", true, 1],
+    ],
+  );
   assert.equal(next.document.repeatingTemplates[0].title, "Weekly review");
   assert.equal(next.document.repeatingTemplates[0].id, before.repeatingTemplates[0].id);
-  assert.equal(next.document.toDos.find((item) => item.occurrence)?.occurrence?.templateId, before.repeatingTemplates[0].id);
+  assert.equal(
+    next.document.toDos.find((item) => item.occurrence)?.occurrence?.templateId,
+    before.repeatingTemplates[0].id,
+  );
   assert.deepEqual(next.document.captureReceipts, before.captureReceipts);
-  assert.deepEqual(createWorkspace(next.document, { now: () => NOW, createId: () => "unused" }).validate(), []);
+  assert.deepEqual(
+    createWorkspace(next.document, { now: () => NOW, createId: () => "unused" }).validate(),
+    [],
+  );
 });
 
 test("interface completion keeps after-completion repetition behavior inside Workspace", () => {
@@ -144,10 +169,16 @@ test("interface completion keeps after-completion repetition behavior inside Wor
   const before = workspace.read();
   const occurrence = before.toDos[0];
 
-  const next = applyInterfaceChangeSetToWorkspace(before, {
-    mutationId: "mutation-complete-occurrence",
-    entities: { tasks: [{ id: occurrence.id, patch: { status: "completed", completedAt: NOW } }] },
-  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+  const next = applyInterfaceChangeSetToWorkspace(
+    before,
+    {
+      mutationId: "mutation-complete-occurrence",
+      entities: {
+        tasks: [{ id: occurrence.id, patch: { status: "completed", completedAt: NOW } }],
+      },
+    },
+    { now: () => NOW, createId: (kind) => `bridge-${kind}` },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
@@ -165,11 +196,15 @@ test("explicit Workspace lifecycle changes are authoritative over compatibility 
   assert.equal(created.status, "changed");
   const toDoId = created.affected.find((item) => item.kind === "toDo")!.id;
 
-  const next = applyInterfaceChangeSetToWorkspace(workspace.read(), {
-    mutationId: "mutation-explicit-cancel",
-    workspaceChanges: [{ type: "cancelToDo", id: toDoId }],
-    entities: { tasks: [{ id: toDoId, patch: { status: "completed", completedAt: NOW } }] },
-  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+  const next = applyInterfaceChangeSetToWorkspace(
+    workspace.read(),
+    {
+      mutationId: "mutation-explicit-cancel",
+      workspaceChanges: [{ type: "cancelToDo", id: toDoId }],
+      entities: { tasks: [{ id: toDoId, patch: { status: "completed", completedAt: NOW } }] },
+    },
+    { now: () => NOW, createId: (kind) => `bridge-${kind}` },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
@@ -188,67 +223,85 @@ test("making an existing to-do repeat keeps the to-do as the first Occurrence", 
   const toDoId = created.affected.find((item) => item.kind === "toDo")!.id;
   const before = workspace.read();
 
-  const next = applyInterfaceChangeSetToWorkspace(before, {
-    mutationId: "mutation-start-repeat",
-    workspaceChanges: [{
-      type: "makeToDoRepeating",
-      id: toDoId,
-      nextDate: "2026-07-27",
-      pattern: { frequency: "weekly", interval: 1, weekdays: [] },
-      mode: "on-schedule",
-    }],
-    entities: {
-      tasks: [{
-        id: toDoId,
-        patch: {
-          repeatTemplateId: "repeat-weekly-review",
+  const next = applyInterfaceChangeSetToWorkspace(
+    before,
+    {
+      mutationId: "mutation-start-repeat",
+      workspaceChanges: [
+        {
+          type: "makeToDoRepeating",
+          id: toDoId,
+          nextDate: "2026-07-27",
+          pattern: { frequency: "weekly", interval: 1, weekdays: [] },
+          mode: "on-schedule",
         },
-      }, {
-        id: "repeat-weekly-review",
-        patch: {
-          title: "Weekly review",
-          notes: "",
-          status: "open",
-          bucket: "upcoming",
-          scheduledFor: "2026-07-27",
-          evening: false,
-          reminderAt: null,
-          reminderSentAt: null,
-          deadline: null,
-          projectId: null,
-          headingId: null,
-          areaId: null,
-          spaceId: "space-personal",
-          tags: [],
-          checklist: [],
-          repeat: {
-            mode: "fixed",
-            frequency: "weekly",
-            interval: 1,
-            weekdays: [],
-            nextDate: "2026-07-27",
-            reminderTime: "",
-            deadlineOffset: null,
-            paused: false,
+      ],
+      entities: {
+        tasks: [
+          {
+            id: toDoId,
+            patch: {
+              repeatTemplateId: "repeat-weekly-review",
+            },
           },
-          repeatTemplateId: null,
-          workspaceTemplate: true,
-          createdAt: NOW,
-          completedAt: null,
-          loggedAt: null,
-          order: 1,
-        },
-      }],
+          {
+            id: "repeat-weekly-review",
+            patch: {
+              title: "Weekly review",
+              notes: "",
+              status: "open",
+              bucket: "upcoming",
+              scheduledFor: "2026-07-27",
+              evening: false,
+              reminderAt: null,
+              reminderSentAt: null,
+              deadline: null,
+              projectId: null,
+              headingId: null,
+              areaId: null,
+              spaceId: "space-personal",
+              tags: [],
+              checklist: [],
+              repeat: {
+                mode: "fixed",
+                frequency: "weekly",
+                interval: 1,
+                weekdays: [],
+                nextDate: "2026-07-27",
+                reminderTime: "",
+                deadlineOffset: null,
+                paused: false,
+              },
+              repeatTemplateId: null,
+              workspaceTemplate: true,
+              createdAt: NOW,
+              completedAt: null,
+              loggedAt: null,
+              order: 1,
+            },
+          },
+        ],
+      },
     },
-  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+    { now: () => NOW, createId: (kind) => `bridge-${kind}` },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
-  assert.equal(next.document.toDos.some((item) => item.id === toDoId), true);
-  assert.equal(next.document.toDos.find((item) => item.id === toDoId)?.occurrence?.templateId, "repeat-weekly-review");
+  assert.equal(
+    next.document.toDos.some((item) => item.id === toDoId),
+    true,
+  );
+  assert.equal(
+    next.document.toDos.find((item) => item.id === toDoId)?.occurrence?.templateId,
+    "repeat-weekly-review",
+  );
   assert.equal(next.document.repeatingTemplates.length, 1);
   assert.equal(next.document.repeatingTemplates[0].id, "repeat-weekly-review");
-  assert.deepEqual(createWorkspace(next.document, { now: () => NOW, createId: () => "unused" }).validate(), []);
+  assert.deepEqual(
+    createWorkspace(next.document, { now: () => NOW, createId: () => "unused" }).validate(),
+    [],
+  );
 });
 
 test("an interface-materialized Occurrence is generated through Workspace with the same identity", () => {
@@ -268,37 +321,43 @@ test("an interface-materialized Occurrence is generated through Workspace with t
   const templateId = created.affected.find((item) => item.kind === "repeatingTemplate")!.id;
   const before = workspace.read();
 
-  const next = applyInterfaceChangeSetToWorkspace(before, {
-    mutationId: "mutation-generate-interface-occurrence",
-    entities: {
-      tasks: [{
-        id: "occurrence-water-plants",
-        patch: {
-          title: "Water plants",
-          notes: "",
-          status: "open",
-          bucket: "today",
-          scheduledFor: "2026-07-20",
-          evening: false,
-          reminderAt: null,
-          reminderSentAt: null,
-          deadline: null,
-          projectId: null,
-          headingId: null,
-          areaId: null,
-          spaceId: "space-personal",
-          tags: [],
-          checklist: [],
-          repeat: null,
-          repeatTemplateId: templateId,
-          createdAt: NOW,
-          completedAt: null,
-          loggedAt: null,
-          order: 0,
-        },
-      }],
+  const next = applyInterfaceChangeSetToWorkspace(
+    before,
+    {
+      mutationId: "mutation-generate-interface-occurrence",
+      entities: {
+        tasks: [
+          {
+            id: "occurrence-water-plants",
+            patch: {
+              title: "Water plants",
+              notes: "",
+              status: "open",
+              bucket: "today",
+              scheduledFor: "2026-07-20",
+              evening: false,
+              reminderAt: null,
+              reminderSentAt: null,
+              deadline: null,
+              projectId: null,
+              headingId: null,
+              areaId: null,
+              spaceId: "space-personal",
+              tags: [],
+              checklist: [],
+              repeat: null,
+              repeatTemplateId: templateId,
+              createdAt: NOW,
+              completedAt: null,
+              loggedAt: null,
+              order: 0,
+            },
+          },
+        ],
+      },
     },
-  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+    { now: () => NOW, createId: (kind) => `bridge-${kind}` },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
@@ -321,28 +380,34 @@ test("unrelated interface changes preserve repeating Project child defaults", ()
       firstDate: "2026-07-27",
       projectContents: {
         headings: [],
-        toDos: [{
-          key: "send-brief",
-          title: "Send brief",
-          notes: "",
-          headingKey: null,
-          tags: [],
-          checklist: [],
-          schedule: { kind: "scheduled", offsetDays: 2, evening: false },
-          reminder: { kind: "offset", days: 2, time: "08:30" },
-          deadline: { kind: "offset", days: 4 },
-          order: 0,
-        }],
+        toDos: [
+          {
+            key: "send-brief",
+            title: "Send brief",
+            notes: "",
+            headingKey: null,
+            tags: [],
+            checklist: [],
+            schedule: { kind: "scheduled", offsetDays: 2, evening: false },
+            reminder: { kind: "offset", days: 2, time: "08:30" },
+            deadline: { kind: "offset", days: 4 },
+            order: 0,
+          },
+        ],
       },
     },
   });
   assert.equal(created.status, "changed");
   const before = workspace.read();
 
-  const next = applyInterfaceChangeSetToWorkspace(before, {
-    mutationId: "mutation-unrelated-setting",
-    settings: { theme: "dark" },
-  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+  const next = applyInterfaceChangeSetToWorkspace(
+    before,
+    {
+      mutationId: "mutation-unrelated-setting",
+      settings: { theme: "dark" },
+    },
+    { now: () => NOW, createId: (kind) => `bridge-${kind}` },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
@@ -354,21 +419,33 @@ test("unrelated interface changes preserve repeating Project child defaults", ()
 
 test("interface Project completion records Workspace Project Closure", () => {
   const workspace = workspaceFixture();
-  workspace.change({ type: "createProject", title: "Launch", location: { kind: "space", spaceId: "space-personal" } });
+  workspace.change({
+    type: "createProject",
+    title: "Launch",
+    location: { kind: "space", spaceId: "space-personal" },
+  });
   const projectId = workspace.read().projects[0].id;
   for (let index = 0; index < 25; index += 1) {
-    workspace.change({ type: "createToDo", title: `Launch step ${index + 1}`, location: { kind: "project", projectId } });
+    workspace.change({
+      type: "createToDo",
+      title: `Launch step ${index + 1}`,
+      location: { kind: "project", projectId },
+    });
   }
   const toDoIds = workspace.read().toDos.map((item) => item.id);
   const before = workspace.read();
 
-  const next = applyInterfaceChangeSetToWorkspace(before, {
-    mutationId: "mutation-close-project",
-    entities: {
-      projects: [{ id: projectId, patch: { status: "completed", completedAt: NOW } }],
-      tasks: toDoIds.map((id) => ({ id, patch: { status: "completed", completedAt: NOW } })),
+  const next = applyInterfaceChangeSetToWorkspace(
+    before,
+    {
+      mutationId: "mutation-close-project",
+      entities: {
+        projects: [{ id: projectId, patch: { status: "completed", completedAt: NOW } }],
+        tasks: toDoIds.map((id) => ({ id, patch: { status: "completed", completedAt: NOW } })),
+      },
     },
-  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+    { now: () => NOW, createId: (kind) => `bridge-${kind}` },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
@@ -378,9 +455,17 @@ test("interface Project completion records Workspace Project Closure", () => {
 
 test("skipping a repeating Project uses the distinct Workspace Skip lifecycle", () => {
   const workspace = workspaceFixture();
-  workspace.change({ type: "createProject", title: "Weekly reset", location: { kind: "space", spaceId: "space-personal" } });
+  workspace.change({
+    type: "createProject",
+    title: "Weekly reset",
+    location: { kind: "space", spaceId: "space-personal" },
+  });
   const projectId = workspace.read().projects[0].id;
-  workspace.change({ type: "createToDo", title: "Clear desk", location: { kind: "project", projectId } });
+  workspace.change({
+    type: "createToDo",
+    title: "Clear desk",
+    location: { kind: "project", projectId },
+  });
   const toDoId = workspace.read().toDos[0].id;
   workspace.change({
     type: "makeProjectRepeating",
@@ -391,13 +476,19 @@ test("skipping a repeating Project uses the distinct Workspace Skip lifecycle", 
   });
   const before = workspace.read();
 
-  const next = applyInterfaceChangeSetToWorkspace(before, {
-    mutationId: "mutation-skip-project-occurrence",
-    entities: {
-      projects: [{ id: projectId, patch: { status: "canceled", completedAt: NOW, loggedAt: NOW } }],
-      tasks: [{ id: toDoId, patch: { status: "canceled", completedAt: NOW, loggedAt: NOW } }],
+  const next = applyInterfaceChangeSetToWorkspace(
+    before,
+    {
+      mutationId: "mutation-skip-project-occurrence",
+      entities: {
+        projects: [
+          { id: projectId, patch: { status: "canceled", completedAt: NOW, loggedAt: NOW } },
+        ],
+        tasks: [{ id: toDoId, patch: { status: "canceled", completedAt: NOW, loggedAt: NOW } }],
+      },
     },
-  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+    { now: () => NOW, createId: (kind) => `bridge-${kind}` },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
@@ -411,30 +502,78 @@ test("skipping a repeating Project uses the distinct Workspace Skip lifecycle", 
 
 test("a restored backup replaces the complete Workspace through the interface bridge", () => {
   const workspace = workspaceFixture();
-  workspace.change({ type: "createProject", title: "Current project", location: { kind: "space", spaceId: "space-personal" } });
+  workspace.change({
+    type: "createProject",
+    title: "Current project",
+    location: { kind: "space", spaceId: "space-personal" },
+  });
   const currentProjectId = workspace.read().projects[0].id;
-  workspace.change({ type: "createToDo", title: "Current item", location: { kind: "project", projectId: currentProjectId } });
+  workspace.change({
+    type: "createToDo",
+    title: "Current item",
+    location: { kind: "project", projectId: currentProjectId },
+  });
   const before = workspace.read();
 
-  const next = applyInterfaceChangeSetToWorkspace(before, {
-    mutationId: "restore-backup",
-    replaceWorkspace: true,
-    settings: { defaultSpaceId: "space-restored", tags: [] },
-    entities: {
-      spaces: [{ id: "space-restored", patch: { title: "Restored", color: "#123456", pinned: true, order: 0 } }],
-      tasks: [{ id: "todo-restored", patch: {
-        title: "Restored item", notes: "", status: "open", bucket: "inbox", scheduledFor: null, evening: false,
-        reminderAt: null, reminderSentAt: null, deadline: null, projectId: null, headingId: null, areaId: null,
-        spaceId: "space-restored", tags: [], checklist: [], repeat: null, createdAt: NOW, completedAt: null, loggedAt: null,
-      } }],
+  const next = applyInterfaceChangeSetToWorkspace(
+    before,
+    {
+      mutationId: "restore-backup",
+      replaceWorkspace: true,
+      settings: { defaultSpaceId: "space-restored", tags: [] },
+      entities: {
+        spaces: [
+          {
+            id: "space-restored",
+            patch: { title: "Restored", color: "#123456", pinned: true, order: 0 },
+          },
+        ],
+        tasks: [
+          {
+            id: "todo-restored",
+            patch: {
+              title: "Restored item",
+              notes: "",
+              status: "open",
+              bucket: "inbox",
+              scheduledFor: null,
+              evening: false,
+              reminderAt: null,
+              reminderSentAt: null,
+              deadline: null,
+              projectId: null,
+              headingId: null,
+              areaId: null,
+              spaceId: "space-restored",
+              tags: [],
+              checklist: [],
+              repeat: null,
+              createdAt: NOW,
+              completedAt: null,
+              loggedAt: null,
+            },
+          },
+        ],
+      },
+      deletes: {
+        spaces: ["space-personal"],
+        projects: [currentProjectId],
+        tasks: [before.toDos[0].id],
+      },
     },
-    deletes: { spaces: ["space-personal"], projects: [currentProjectId], tasks: [before.toDos[0].id] },
-  }, { now: () => NOW, createId: (kind) => `bridge-${kind}` });
+    { now: () => NOW, createId: (kind) => `bridge-${kind}` },
+  );
 
   assert.equal(next.ok, true);
   if (!next.ok) return;
-  assert.deepEqual(next.document.spaces.map((item) => item.id), ["space-restored"]);
-  assert.deepEqual(next.document.toDos.map((item) => item.id), ["todo-restored"]);
+  assert.deepEqual(
+    next.document.spaces.map((item) => item.id),
+    ["space-restored"],
+  );
+  assert.deepEqual(
+    next.document.toDos.map((item) => item.id),
+    ["todo-restored"],
+  );
   assert.equal(next.document.toDos[0].title, "Restored item");
 });
 
@@ -442,7 +581,11 @@ test("published Workspace links open the matching restored interface target", ()
   const workspace = workspaceFixture();
   workspace.change({ type: "createArea", title: "Studio", spaceId: "space-personal" });
   const areaId = workspace.read().areas[0].id;
-  workspace.change({ type: "createHeading", title: "Final polish", location: { kind: "area", areaId } });
+  workspace.change({
+    type: "createHeading",
+    title: "Final polish",
+    location: { kind: "area", areaId },
+  });
   const headingId = workspace.read().headings[0].id;
   workspace.change({
     type: "createToDo",
@@ -455,10 +598,13 @@ test("published Workspace links open the matching restored interface target", ()
     search: `?task=${toDoId}`,
     activeSpaceId: "space-personal",
   });
-  assert.deepEqual(interfaceLocationForWorkspaceUrl(workspace.read(), `?open=heading&id=${headingId}`), {
-    search: `?view=area&id=${areaId}`,
-    activeSpaceId: "space-personal",
-  });
+  assert.deepEqual(
+    interfaceLocationForWorkspaceUrl(workspace.read(), `?open=heading&id=${headingId}`),
+    {
+      search: `?view=area&id=${areaId}`,
+      activeSpaceId: "space-personal",
+    },
+  );
   assert.deepEqual(interfaceLocationForWorkspaceUrl(workspace.read(), "?open=view&view=today"), {
     search: "?view=today",
     activeSpaceId: null,

@@ -68,18 +68,39 @@ function sessionExpired(error: unknown): boolean {
 function validSnapshot(value: unknown): value is WorkspaceSyncSnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const snapshot = value as Partial<WorkspaceSyncSnapshot>;
-  return Number.isInteger(snapshot.revision) && snapshot.revision! >= 0 && validateSyncDocument(snapshot.document).length === 0;
+  return (
+    Number.isInteger(snapshot.revision) &&
+    snapshot.revision! >= 0 &&
+    validateSyncDocument(snapshot.document).length === 0
+  );
 }
 
 function parseStored(serialized: string | null): StoredWorkspaceSyncState | null {
   if (!serialized) return null;
   try {
     const value = JSON.parse(serialized) as Partial<StoredWorkspaceSyncState>;
-    if (value.version !== 1 || !validSnapshot(value.snapshot) || !Array.isArray(value.pending) || !Array.isArray(value.rejected)) return null;
-    const pending = value.pending.filter((item): item is PendingWorkspaceMutation => Boolean(
-      item && typeof item.mutationId === "string" && item.mutationId && item.changes && Array.isArray(item.changes.operations)
-    ));
-    return { version: 1, snapshot: cloneJsonValue(value.snapshot), pending: cloneJsonValue(pending), rejected: cloneJsonValue(value.rejected) };
+    if (
+      value.version !== 1 ||
+      !validSnapshot(value.snapshot) ||
+      !Array.isArray(value.pending) ||
+      !Array.isArray(value.rejected)
+    )
+      return null;
+    const pending = value.pending.filter((item): item is PendingWorkspaceMutation =>
+      Boolean(
+        item &&
+        typeof item.mutationId === "string" &&
+        item.mutationId &&
+        item.changes &&
+        Array.isArray(item.changes.operations),
+      ),
+    );
+    return {
+      version: 1,
+      snapshot: cloneJsonValue(value.snapshot),
+      pending: cloneJsonValue(pending),
+      rejected: cloneJsonValue(value.rejected),
+    };
   } catch {
     return null;
   }
@@ -139,7 +160,9 @@ export function createWorkspaceSyncClient(
     }
   }
 
-  async function initialize(createInitial: () => WorkspaceDocument): Promise<WorkspaceSyncClientState> {
+  async function initialize(
+    createInitial: () => WorkspaceDocument,
+  ): Promise<WorkspaceSyncClientState> {
     const stored = parseStored(persistence.load());
     base = stored?.snapshot ?? { revision: 0, document: createInitial() };
     pending = stored?.pending ?? [];
@@ -176,7 +199,8 @@ export function createWorkspaceSyncClient(
 
   async function runFlush(): Promise<WorkspaceSyncClientState> {
     if (!base || !pending.length) {
-      if (status === "saving" || status === "retrying") status = needsRecoveryFeedback ? "recovered" : "saved";
+      if (status === "saving" || status === "retrying")
+        status = needsRecoveryFeedback ? "recovered" : "saved";
       return emit();
     }
     status = needsRecoveryFeedback ? "retrying" : "saving";
@@ -239,7 +263,9 @@ export function createWorkspaceSyncClient(
 
   function flush(): Promise<WorkspaceSyncClientState> {
     if (flushing) return flushing;
-    flushing = runFlush().finally(() => { flushing = null; });
+    flushing = runFlush().finally(() => {
+      flushing = null;
+    });
     return flushing;
   }
 

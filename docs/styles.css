@@ -44,10 +44,16 @@ body {
   min-height: 100%;
   margin: 0;
   background:
-    radial-gradient(circle at 73% 16%, color-mix(in srgb, var(--blue) 7%, transparent) 0, transparent 28rem),
+    radial-gradient(
+      circle at 73% 16%,
+      color-mix(in srgb, var(--blue) 7%, transparent) 0,
+      transparent 28rem
+    ),
     var(--background);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial,
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -89,7 +95,9 @@ h1 {
   box-shadow: var(--card-shadow);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  transition: box-shadow 280ms var(--ease), background-color 280ms ease;
+  transition:
+    box-shadow 280ms var(--ease),
+    background-color 280ms ease;
 }
 
 .prompt::after {
@@ -133,7 +141,9 @@ h1 {
   border-color: transparent;
   background: linear-gradient(145deg, var(--blue-bright), var(--blue));
   color: #ffffff;
-  box-shadow: 0 22px 55px var(--blue-shadow), 0 3px 9px rgba(27, 83, 159, 0.12);
+  box-shadow:
+    0 22px 55px var(--blue-shadow),
+    0 3px 9px rgba(27, 83, 159, 0.12);
 }
 
 .prompt-one::after {
@@ -190,7 +200,9 @@ h1 {
   font-weight: 650;
   letter-spacing: -0.01em;
   text-decoration: none;
-  transition: background-color 220ms ease, box-shadow 220ms ease;
+  transition:
+    background-color 220ms ease,
+    box-shadow 220ms ease;
 }
 
 .cta svg {
@@ -207,7 +219,9 @@ h1 {
   .prompt:hover {
     z-index: 4;
     background: var(--surface-hover);
-    box-shadow: 0 24px 65px rgba(43, 44, 40, 0.13), 0 3px 10px rgba(43, 44, 40, 0.06);
+    box-shadow:
+      0 24px 65px rgba(43, 44, 40, 0.13),
+      0 3px 10px rgba(43, 44, 40, 0.06);
   }
 
   .prompt:hover::after {
@@ -216,7 +230,9 @@ h1 {
 
   .prompt-one:hover {
     background: linear-gradient(145deg, var(--blue-bright), var(--blue));
-    box-shadow: 0 27px 68px var(--blue-shadow), 0 4px 12px rgba(27, 83, 159, 0.14);
+    box-shadow:
+      0 27px 68px var(--blue-shadow),
+      0 4px 12px rgba(27, 83, 159, 0.14);
   }
 
   .prompt-one:hover::after {
@@ -225,7 +241,9 @@ h1 {
 
   .cta:hover {
     background: var(--blue-bright);
-    box-shadow: 0 14px 34px var(--blue-shadow), 0 3px 8px rgba(47, 128, 237, 0.16);
+    box-shadow:
+      0 14px 34px var(--blue-shadow),
+      0 3px 8px rgba(47, 128, 237, 0.16);
   }
 }
 
@@ -249,7 +267,10 @@ h1 {
   box-shadow: var(--card-shadow);
   color: var(--muted);
   text-decoration: none;
-  transition: background-color 220ms ease, box-shadow 220ms ease, color 220ms ease;
+  transition:
+    background-color 220ms ease,
+    box-shadow 220ms ease,
+    color 220ms ease;
 }
 
 .github-link svg {
@@ -260,7 +281,9 @@ h1 {
 
 .github-link:hover {
   background: var(--surface-hover);
-  box-shadow: 0 14px 34px rgba(43, 44, 40, 0.1), 0 2px 7px rgba(43, 44, 40, 0.05);
+  box-shadow:
+    0 14px 34px rgba(43, 44, 40, 0.1),
+    0 2px 7px rgba(43, 44, 40, 0.05);
   color: var(--text);
 }
 
@@ -276,7 +299,11 @@ h1 {
 @media (max-width: 760px) {
   body {
     background:
-      radial-gradient(circle at 80% 7%, color-mix(in srgb, var(--blue) 8%, transparent) 0, transparent 20rem),
+      radial-gradient(
+        circle at 80% 7%,
+        color-mix(in srgb, var(--blue) 8%, transparent) 0,
+        transparent 20rem
+      ),
       var(--background);
   }
 

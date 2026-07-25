@@ -2,7 +2,7 @@ import type { InterfaceChangeSet, InterfaceState } from "../../shared/workspace/
 import type { WorkspaceChange } from "../../shared/workspace/workspace";
 
 const COLLECTIONS = ["spaces", "areas", "projects", "headings", "calendarEvents", "tasks"] as const;
-type CollectionName = typeof COLLECTIONS[number];
+type CollectionName = (typeof COLLECTIONS)[number];
 type JsonRecord = Record<string, unknown>;
 
 function clone<T>(value: T): T {
@@ -16,7 +16,8 @@ function sameValue(left: unknown, right: unknown): boolean {
 function recordPatch(previous: JsonRecord = {}, current: JsonRecord = {}): JsonRecord {
   const patch: JsonRecord = {};
   for (const key of new Set([...Object.keys(previous), ...Object.keys(current)])) {
-    if (key === "id" || current[key] === undefined || sameValue(previous[key], current[key])) continue;
+    if (key === "id" || current[key] === undefined || sameValue(previous[key], current[key]))
+      continue;
     patch[key] = clone(current[key]);
   }
   return patch;
@@ -37,16 +38,23 @@ export function createInterfaceChangeSet(input: {
     entities: {},
     deletes: {},
   };
-  let changed = Boolean(changes.workspaceChanges?.length || Object.keys(changes.settings ?? {}).length);
+  let changed = Boolean(
+    changes.workspaceChanges?.length || Object.keys(changes.settings ?? {}).length,
+  );
   for (const kind of COLLECTIONS) {
-    const previous = new Map(input.previous[kind].map((item) => [item.id, item as JsonRecord & { id: string }]));
-    const current = new Map(input.current[kind].map((item) => [item.id, item as JsonRecord & { id: string }]));
+    const previous = new Map(
+      input.previous[kind].map((item) => [item.id, item as JsonRecord & { id: string }]),
+    );
+    const current = new Map(
+      input.current[kind].map((item) => [item.id, item as JsonRecord & { id: string }]),
+    );
     const patches: Array<{ id: string; patch: JsonRecord }> = [];
     const deletes: string[] = [];
     for (const [id, item] of current) {
       const patch = recordPatch(previous.get(id), item);
       if (!previous.has(id)) {
-        for (const [key, value] of Object.entries(item)) if (key !== "id") patch[key] = clone(value);
+        for (const [key, value] of Object.entries(item))
+          if (key !== "id") patch[key] = clone(value);
       }
       if (Object.keys(patch).length) patches.push({ id, patch });
     }

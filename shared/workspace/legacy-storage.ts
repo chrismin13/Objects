@@ -42,7 +42,7 @@ function parseRecord(serialized: string): JsonRecord {
 
 function inflate(rows: LegacyEntityRow[]): JsonRecord[] {
   return rows
-    .map((row) => ({ ...parseRecord(row.data), id: row.entityId }))
+    .map((row): JsonRecord => ({ ...parseRecord(row.data), id: row.entityId }))
     .sort((left, right) => {
       const order = Number(left.order ?? 0) - Number(right.order ?? 0);
       return order || String(left.id).localeCompare(String(right.id));
@@ -51,7 +51,9 @@ function inflate(rows: LegacyEntityRow[]): JsonRecord[] {
 
 export function assembleLegacyWorkspace(rows: LegacyWorkspaceRows): string {
   const checklistByToDo = new Map<string, JsonRecord[]>();
-  for (const row of [...rows.checklistItems].sort((left, right) => left.position.localeCompare(right.position))) {
+  for (const row of [...rows.checklistItems].sort((left, right) =>
+    left.position.localeCompare(right.position),
+  )) {
     const checklist = checklistByToDo.get(row.taskId) ?? [];
     checklist.push({ ...parseRecord(row.data), id: row.entityId });
     checklistByToDo.set(row.taskId, checklist);
@@ -82,7 +84,10 @@ function mergeByKey<T>(legacy: T[], current: T[], key: (value: T) => string): T[
   return [...merged.values()];
 }
 
-function mergeSettings(legacy: WorkspaceDocument["settings"], current: WorkspaceDocument["settings"]): WorkspaceDocument["settings"] {
+function mergeSettings(
+  legacy: WorkspaceDocument["settings"],
+  current: WorkspaceDocument["settings"],
+): WorkspaceDocument["settings"] {
   // The retained Workspace is the settings source of truth for the one-time cutover.
   // A replacement-only draft and rules are content, so keep them as well.
   return {
@@ -106,8 +111,12 @@ function removeDurablyDeletedEntities(document: WorkspaceDocument): void {
   document.headings = document.headings.filter((item) => keep("heading", item.id));
   document.spaces = document.spaces.filter((item) => keep("space", item.id));
   document.tags = document.tags.filter((item) => keep("tag", item.id));
-  document.repeatingTemplates = document.repeatingTemplates.filter((item) => keep("repeatingTemplate", item.id));
-  document.calendarEvents = document.calendarEvents.filter((item) => keep("calendarEvent", item.id));
+  document.repeatingTemplates = document.repeatingTemplates.filter((item) =>
+    keep("repeatingTemplate", item.id),
+  );
+  document.calendarEvents = document.calendarEvents.filter((item) =>
+    keep("calendarEvent", item.id),
+  );
 }
 
 export function mergeMigratedLegacySnapshot(
@@ -116,9 +125,10 @@ export function mergeMigratedLegacySnapshot(
   source: LegacyMigrationIdentity,
 ): WorkspaceSyncSnapshot {
   if (
-    current?.document.sync.legacyMigration?.updatedAt === source.updatedAt
-    && current.document.sync.legacyMigration.mutationId === source.mutationId
-  ) return current;
+    current?.document.sync.legacyMigration?.updatedAt === source.updatedAt &&
+    current.document.sync.legacyMigration.mutationId === source.mutationId
+  )
+    return current;
 
   const currentDocument = current?.document;
   const document = structuredClone(migrated.document);
@@ -130,15 +140,31 @@ export function mergeMigratedLegacySnapshot(
     document.headings = mergeByKey(document.headings, currentDocument.headings, (item) => item.id);
     document.tags = mergeByKey(document.tags, currentDocument.tags, (item) => item.id);
     document.toDos = mergeByKey(document.toDos, currentDocument.toDos, (item) => item.id);
-    document.repeatingTemplates = mergeByKey(document.repeatingTemplates, currentDocument.repeatingTemplates, (item) => item.id);
-    document.projectClosures = mergeByKey(document.projectClosures, currentDocument.projectClosures, (item) => item.projectId);
-    document.calendarEvents = mergeByKey(document.calendarEvents, currentDocument.calendarEvents, (item) => item.id);
+    document.repeatingTemplates = mergeByKey(
+      document.repeatingTemplates,
+      currentDocument.repeatingTemplates,
+      (item) => item.id,
+    );
+    document.projectClosures = mergeByKey(
+      document.projectClosures,
+      currentDocument.projectClosures,
+      (item) => item.projectId,
+    );
+    document.calendarEvents = mergeByKey(
+      document.calendarEvents,
+      currentDocument.calendarEvents,
+      (item) => item.id,
+    );
     document.permanentDeletions = mergeByKey(
       document.permanentDeletions,
       currentDocument.permanentDeletions,
       (item) => `${item.entityKind}:${item.entityId}`,
     );
-    document.captureReceipts = mergeByKey(document.captureReceipts, currentDocument.captureReceipts, (item) => item.submissionId);
+    document.captureReceipts = mergeByKey(
+      document.captureReceipts,
+      currentDocument.captureReceipts,
+      (item) => item.submissionId,
+    );
     document.sync = { ...currentDocument.sync };
   }
   document.sync.legacyMigration = { ...source };
@@ -147,7 +173,7 @@ export function mergeMigratedLegacySnapshot(
     document.settings.defaultSpaceId = document.spaces[0]?.id ?? null;
   }
   document.settings.launchRules = document.settings.launchRules.filter((rule) =>
-    document.spaces.some((space) => space.id === rule.spaceId)
+    document.spaces.some((space) => space.id === rule.spaceId),
   );
   return { revision: current?.revision ?? migrated.revision, document };
 }

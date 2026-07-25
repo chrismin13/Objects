@@ -30,23 +30,37 @@ const PWA_MANIFEST = JSON.stringify({
   dir: "ltr",
   categories: ["productivity", "utilities"],
   shortcuts: [
-    { name: "Today", short_name: "Today", url: "/?open=view&view=today", icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }] },
-    { name: "Inbox", short_name: "Inbox", url: "/?open=view&view=inbox", icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }] },
-    { name: "New to-do", short_name: "New to-do", url: "/?capture=1", icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }] }
+    {
+      name: "Today",
+      short_name: "Today",
+      url: "/?open=view&view=today",
+      icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }],
+    },
+    {
+      name: "Inbox",
+      short_name: "Inbox",
+      url: "/?open=view&view=inbox",
+      icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }],
+    },
+    {
+      name: "New to-do",
+      short_name: "New to-do",
+      url: "/?capture=1",
+      icons: [{ src: "/favicon.svg", sizes: "any", type: "image/svg+xml" }],
+    },
   ],
   share_target: {
     action: "/",
     method: "GET",
     enctype: "application/x-www-form-urlencoded",
-    params: { title: "title", text: "text", url: "url" }
+    params: { title: "title", text: "text", url: "url" },
   },
   icons: [
     { src: "/favicon.svg", sizes: "192x192", type: "image/svg+xml", purpose: "any" },
     { src: "/favicon.svg", sizes: "512x512", type: "image/svg+xml", purpose: "any" },
-    { src: "/favicon.svg", sizes: "512x512", type: "image/svg+xml", purpose: "maskable" }
-  ]
+    { src: "/favicon.svg", sizes: "512x512", type: "image/svg+xml", purpose: "maskable" },
+  ],
 });
-
 
 const SERVICE_WORKER = `const CACHE = "objects-pwa-v11";
 const CORE = ["/", "/client.js", "/manifest.webmanifest", "/favicon.svg"];
@@ -155,11 +169,15 @@ function parseReplacementCommand(serialized: string): WorkspaceSyncCommand {
     throw new Error("Replacement Workspace data is too large");
   }
   const value: unknown = JSON.parse(serialized);
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid replacement Workspace change");
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid replacement Workspace change");
   return value as WorkspaceSyncCommand;
 }
 
-async function replacementSnapshot(ctx: any, ownerId: string): Promise<WorkspaceSyncSnapshot | null> {
+async function replacementSnapshot(
+  ctx: any,
+  ownerId: string,
+): Promise<WorkspaceSyncSnapshot | null> {
   const meta = await ctx.db.replacementWorkspaceMeta
     .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
     .first();
@@ -172,10 +190,17 @@ async function replacementSnapshot(ctx: any, ownerId: string): Promise<Workspace
     .sort((left: any, right: any) => left.part.localeCompare(right.part))
     .map((chunk: any) => chunk.data)
     .join("");
-  return { revision: Number(meta.revision), document: JSON.parse(document) } as WorkspaceSyncSnapshot;
+  return {
+    revision: Number(meta.revision),
+    document: JSON.parse(document),
+  } as WorkspaceSyncSnapshot;
 }
 
-async function writeReplacementSnapshot(ctx: any, ownerId: string, snapshot: WorkspaceSyncSnapshot): Promise<void> {
+async function writeReplacementSnapshot(
+  ctx: any,
+  ownerId: string,
+  snapshot: WorkspaceSyncSnapshot,
+): Promise<void> {
   const existingMeta = await ctx.db.replacementWorkspaceMeta
     .withIndex("by_owner", (range: any) => range.eq("ownerId", ownerId))
     .first();
@@ -184,16 +209,21 @@ async function writeReplacementSnapshot(ctx: any, ownerId: string, snapshot: Wor
     .order("asc")
     .collect();
   const document = JSON.stringify(snapshot.document);
-  if (document.length > MAX_REPLACEMENT_WORKSPACE_SIZE) throw new Error("Replacement Workspace data is too large");
+  if (document.length > MAX_REPLACEMENT_WORKSPACE_SIZE)
+    throw new Error("Replacement Workspace data is too large");
   const chunks: string[] = [];
-  for (let start = 0; start < document.length; start += REPLACEMENT_CHUNK_SIZE) chunks.push(document.slice(start, start + REPLACEMENT_CHUNK_SIZE));
+  for (let start = 0; start < document.length; start += REPLACEMENT_CHUNK_SIZE)
+    chunks.push(document.slice(start, start + REPLACEMENT_CHUNK_SIZE));
   for (let index = 0; index < chunks.length; index += 1) {
     const part = String(index).padStart(6, "0");
     const existing = existingChunks.find((chunk: any) => chunk.part === part);
-    if (existing) await ctx.db.replacementWorkspaceChunks.update(existing.id, { data: chunks[index] });
+    if (existing)
+      await ctx.db.replacementWorkspaceChunks.update(existing.id, { data: chunks[index] });
     else await ctx.db.replacementWorkspaceChunks.insert({ ownerId, part, data: chunks[index] });
   }
-  for (const existing of existingChunks) if (Number(existing.part) >= chunks.length) await ctx.db.replacementWorkspaceChunks.delete(existing.id);
+  for (const existing of existingChunks)
+    if (Number(existing.part) >= chunks.length)
+      await ctx.db.replacementWorkspaceChunks.delete(existing.id);
   const meta = {
     ownerId,
     revision: String(snapshot.revision),
@@ -208,7 +238,13 @@ async function writeReplacementSnapshot(ctx: any, ownerId: string, snapshot: Wor
 function newServerWorkspace(now: string) {
   const document = createEmptyWorkspace(now);
   const spaceId = `space-${now}-${Math.random().toString(36).slice(2, 10)}`;
-  document.spaces.push({ id: spaceId, title: "Personal", color: "#e49b3c", pinned: true, order: 0 });
+  document.spaces.push({
+    id: spaceId,
+    title: "Personal",
+    color: "#e49b3c",
+    pinned: true,
+    order: 0,
+  });
   document.settings.defaultSpaceId = spaceId;
   return document;
 }
@@ -258,7 +294,8 @@ async function retainedLegacyWorkspace(ctx: any, ownerId: string): Promise<strin
   const latestByPart = new Map<string, any>();
   for (const chunk of chunks) {
     const current = latestByPart.get(chunk.part);
-    if (!current || String(chunk.updatedAt ?? "") > String(current.updatedAt ?? "")) latestByPart.set(chunk.part, chunk);
+    if (!current || String(chunk.updatedAt ?? "") > String(current.updatedAt ?? ""))
+      latestByPart.set(chunk.part, chunk);
   }
   return [...latestByPart.values()]
     .sort((left, right) => left.part.localeCompare(right.part))
@@ -275,8 +312,10 @@ function migratedLegacySnapshot(serialized: string): {
   let mutationId = "legacy-retained-workspace";
   try {
     const source = JSON.parse(serialized) as { updatedAt?: unknown; syncMutationId?: unknown };
-    if (typeof source.updatedAt === "string" && !Number.isNaN(Date.parse(source.updatedAt))) updatedAt = source.updatedAt;
-    if (typeof source.syncMutationId === "string" && source.syncMutationId) mutationId = source.syncMutationId;
+    if (typeof source.updatedAt === "string" && !Number.isNaN(Date.parse(source.updatedAt)))
+      updatedAt = source.updatedAt;
+    if (typeof source.syncMutationId === "string" && source.syncMutationId)
+      mutationId = source.syncMutationId;
   } catch {
     // The importer below returns the useful validation error.
   }
@@ -296,7 +335,10 @@ function migratedLegacySnapshot(serialized: string): {
   };
 }
 
-async function preparedReplacementSnapshot(ctx: any, ownerId: string): Promise<{
+async function preparedReplacementSnapshot(
+  ctx: any,
+  ownerId: string,
+): Promise<{
   snapshot: WorkspaceSyncSnapshot | null;
   migrationReport: unknown;
   migrationRequired: boolean;
@@ -306,8 +348,9 @@ async function preparedReplacementSnapshot(ctx: any, ownerId: string): Promise<{
   if (!legacy) return { snapshot: saved, migrationReport: null, migrationRequired: false };
   const migrated = migratedLegacySnapshot(legacy);
   const existingMarker = saved?.document.sync.legacyMigration;
-  const migrationRequired = existingMarker?.updatedAt !== migrated.source.updatedAt
-    || existingMarker.mutationId !== migrated.source.mutationId;
+  const migrationRequired =
+    existingMarker?.updatedAt !== migrated.source.updatedAt ||
+    existingMarker.mutationId !== migrated.source.mutationId;
   return {
     snapshot: mergeMigratedLegacySnapshot(saved, migrated.snapshot, migrated.source),
     migrationReport: migrationRequired ? migrated.report : null,
@@ -323,27 +366,45 @@ export default capsule({
     workspaceChunks: table({
       ownerId: string(),
       part: string(),
-      data: string()
+      data: string(),
     }).index("by_owner_part", ["ownerId", "part"]),
     workspaceMeta: table({
       ownerId: string(),
       version: string(),
       settingsData: string(),
       stateUpdatedAt: string(),
-      lastMutationId: string()
+      lastMutationId: string(),
     }).index("by_owner", ["ownerId"]),
-    spaces: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
-    areas: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
-    projects: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
-    headings: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
-    calendarEvents: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
-    tasks: table({ ownerId: string(), entityId: string(), data: string() }).index("by_owner_entity", ["ownerId", "entityId"]),
+    spaces: table({ ownerId: string(), entityId: string(), data: string() }).index(
+      "by_owner_entity",
+      ["ownerId", "entityId"],
+    ),
+    areas: table({ ownerId: string(), entityId: string(), data: string() }).index(
+      "by_owner_entity",
+      ["ownerId", "entityId"],
+    ),
+    projects: table({ ownerId: string(), entityId: string(), data: string() }).index(
+      "by_owner_entity",
+      ["ownerId", "entityId"],
+    ),
+    headings: table({ ownerId: string(), entityId: string(), data: string() }).index(
+      "by_owner_entity",
+      ["ownerId", "entityId"],
+    ),
+    calendarEvents: table({ ownerId: string(), entityId: string(), data: string() }).index(
+      "by_owner_entity",
+      ["ownerId", "entityId"],
+    ),
+    tasks: table({ ownerId: string(), entityId: string(), data: string() }).index(
+      "by_owner_entity",
+      ["ownerId", "entityId"],
+    ),
     checklistItems: table({
       ownerId: string(),
       entityId: string(),
       taskId: string(),
       position: string(),
-      data: string()
+      data: string(),
     })
       .index("by_owner_entity", ["ownerId", "entityId"])
       .index("by_owner_task", ["ownerId", "taskId"]),
@@ -352,19 +413,19 @@ export default capsule({
       revision: string(),
       mutationId: string(),
       syncUpdatedAt: string(),
-      partCount: string()
+      partCount: string(),
     }).index("by_owner", ["ownerId"]),
     replacementWorkspaceChunks: table({
       ownerId: string(),
       part: string(),
-      data: string()
+      data: string(),
     }).index("by_owner_part", ["ownerId", "part"]),
     replacementMutationReceipts: table({
       ownerId: string(),
       mutationId: string(),
       revision: string(),
-      conflictsData: string()
-    }).index("by_owner_mutation", ["ownerId", "mutationId"])
+      conflictsData: string(),
+    }).index("by_owner_mutation", ["ownerId", "mutationId"]),
   },
 
   queries: {
@@ -377,7 +438,7 @@ export default capsule({
         migrationReport: prepared.migrationReport,
         migrationRequired: prepared.migrationRequired,
       });
-    })
+    }),
   },
 
   mutations: {
@@ -386,7 +447,9 @@ export default capsule({
       const command = parseReplacementCommand(serialized);
       const current = (await preparedReplacementSnapshot(ctx, ownerId)).snapshot;
       const known = await ctx.db.replacementMutationReceipts
-        .withIndex("by_owner_mutation", (range: any) => range.eq("ownerId", ownerId).eq("mutationId", command.mutationId))
+        .withIndex("by_owner_mutation", (range: any) =>
+          range.eq("ownerId", ownerId).eq("mutationId", command.mutationId),
+        )
         .first();
       if (known && current) {
         return JSON.stringify({
@@ -404,22 +467,36 @@ export default capsule({
           ownerId,
           mutationId: command.mutationId,
           revision: String(resolved.next.revision),
-          conflictsData: JSON.stringify(resolved.result.status === "acknowledged" ? resolved.result.conflicts : []),
+          conflictsData: JSON.stringify(
+            resolved.result.status === "acknowledged" ? resolved.result.conflicts : [],
+          ),
         });
       }
       return JSON.stringify(resolved.result);
-    })
+    }),
   },
 
   endpoints: {
     manifest: endpoint({ method: "GET", path: "/manifest.webmanifest" }, () =>
-      text(PWA_MANIFEST, { headers: { "Content-Type": "application/manifest+json; charset=utf-8", "Cache-Control": "public, max-age=3600" } })
+      text(PWA_MANIFEST, {
+        headers: {
+          "Content-Type": "application/manifest+json; charset=utf-8",
+          "Cache-Control": "public, max-age=3600",
+        },
+      }),
     ),
     serviceWorker: endpoint({ method: "GET", path: "/sw.js" }, () =>
-      text(SERVICE_WORKER, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache", "Service-Worker-Allowed": "/" } })
+      text(SERVICE_WORKER, {
+        headers: {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cache-Control": "no-cache",
+          "Service-Worker-Allowed": "/",
+        },
+      }),
     ),
     captureTask: endpoint({ method: "POST", path: "/api/tasks" }, async (ctx, req) => {
-      if (!ctx.auth.isAuthenticated) return json({ ok: false, error: "Authentication required" }, { status: 401 });
+      if (!ctx.auth.isAuthenticated)
+        return json({ ok: false, error: "Authentication required" }, { status: 401 });
       try {
         const ownerId = replacementOwner(ctx);
         const input = await req.json<Record<string, unknown>>();
@@ -427,12 +504,22 @@ export default capsule({
         if (!input.submissionId && headerIdentity) input.submissionId = headerIdentity;
         const now = new Date().toISOString();
         const requestedTimeZone = input.timeZone ?? req.headers.get("x-time-zone") ?? "UTC";
-        if (typeof requestedTimeZone !== "string") return json({ ok: false, errors: ["timeZone must be an IANA time-zone name."] }, { status: 400 });
+        if (typeof requestedTimeZone !== "string")
+          return json(
+            { ok: false, errors: ["timeZone must be an IANA time-zone name."] },
+            { status: 400 },
+          );
         let today: string;
         try {
           today = dateInTimeZone(new Date(now), requestedTimeZone);
         } catch {
-          return json({ ok: false, errors: ["timeZone must be an IANA time-zone name such as Europe/Athens."] }, { status: 400 });
+          return json(
+            {
+              ok: false,
+              errors: ["timeZone must be an IANA time-zone name such as Europe/Athens."],
+            },
+            { status: 400 },
+          );
         }
         const current = (await preparedReplacementSnapshot(ctx, ownerId)).snapshot;
         const base = selectCaptureBase(current, null, () => newServerWorkspace(now));
@@ -440,15 +527,27 @@ export default capsule({
         const captured = captureIntoSnapshot(base.current, base.initial, input, {
           now,
           today,
-          createId: (kind) => `${kind}-${Date.now().toString(36)}-${++sequence}-${Math.random().toString(36).slice(2, 8)}`,
+          createId: (kind) =>
+            `${kind}-${Date.now().toString(36)}-${++sequence}-${Math.random().toString(36).slice(2, 8)}`,
         });
-        if (captured.status === "conflict") return json({ ok: false, error: "The Workspace changed. Retry this same submission." }, { status: 409 });
-        if (captured.status === "invalid") return json({ ok: false, errors: captured.errors }, { status: 400 });
+        if (captured.status === "conflict")
+          return json(
+            { ok: false, error: "The Workspace changed. Retry this same submission." },
+            { status: 409 },
+          );
+        if (captured.status === "invalid")
+          return json({ ok: false, errors: captured.errors }, { status: 400 });
         if (captured.next) await writeReplacementSnapshot(ctx, ownerId, captured.next);
-        return json({ ok: true, duplicate: captured.status === "duplicate", toDo: captured.toDo }, { status: captured.status === "duplicate" ? 200 : 201 });
+        return json(
+          { ok: true, duplicate: captured.status === "duplicate", toDo: captured.toDo },
+          { status: captured.status === "duplicate" ? 200 : 201 },
+        );
       } catch (error) {
-        return json({ ok: false, error: error instanceof Error ? error.message : "Invalid request" }, { status: 400 });
+        return json(
+          { ok: false, error: error instanceof Error ? error.message : "Invalid request" },
+          { status: 400 },
+        );
       }
-    })
-  }
+    }),
+  },
 });

@@ -15,7 +15,7 @@ async function loadWorkspaceRuntime(): Promise<WorkspaceRuntime> {
   const source = await new Response(stream).text();
   const moduleUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
   try {
-    return await import(moduleUrl) as WorkspaceRuntime;
+    return (await import(moduleUrl)) as WorkspaceRuntime;
   } finally {
     URL.revokeObjectURL(moduleUrl);
   }

@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vite-plus/test";
 
 import { createEmptyWorkspace, createWorkspace } from "../../shared/workspace/workspace.ts";
 import type { RepeatingTemplate } from "../../shared/workspace/model.ts";
 
 test("creating a to-do is deterministic and returns validation and undo details", () => {
   const document = createEmptyWorkspace("2026-07-19T09:00:00.000Z");
-  document.spaces.push({ id: "space-personal", title: "Personal", color: "#e49b3c", pinned: true, order: 0 });
+  document.spaces.push({
+    id: "space-personal",
+    title: "Personal",
+    color: "#e49b3c",
+    pinned: true,
+    order: 0,
+  });
   document.settings.defaultSpaceId = "space-personal";
 
   const workspace = createWorkspace(document, {
@@ -50,27 +56,72 @@ test("derived Today results and inherited locations come from the Workspace", ()
     { id: "space-personal", title: "Personal", color: "#e49b3c", pinned: true, order: 0 },
     { id: "space-work", title: "Work", color: "#5b7cfa", pinned: true, order: 1 },
   );
-  document.areas.push({ id: "area-work", title: "Work", spaceId: "space-work", color: "#5b7cfa", tags: [], order: 0 });
+  document.areas.push({
+    id: "area-work",
+    title: "Work",
+    spaceId: "space-work",
+    color: "#5b7cfa",
+    tags: [],
+    order: 0,
+  });
   document.projects.push({
-    id: "project-site", title: "Website", notes: "", location: { kind: "area", areaId: "area-work" },
-    schedule: { kind: "anytime" }, deadline: null, outcome: "open", trashedAt: null, logbookAt: null,
-    tags: [], occurrence: null, completedAt: null, order: 0,
+    id: "project-site",
+    title: "Website",
+    notes: "",
+    location: { kind: "area", areaId: "area-work" },
+    schedule: { kind: "anytime" },
+    deadline: null,
+    outcome: "open",
+    trashedAt: null,
+    logbookAt: null,
+    tags: [],
+    occurrence: null,
+    completedAt: null,
+    order: 0,
   });
   document.headings.push({
-    id: "heading-polish", title: "Polish", location: { kind: "project", projectId: "project-site" }, archivedAt: null, order: 0,
+    id: "heading-polish",
+    title: "Polish",
+    location: { kind: "project", projectId: "project-site" },
+    archivedAt: null,
+    order: 0,
   });
   document.toDos.push(
     {
-      id: "todo-overdue", title: "Overdue", notes: "", checklist: [], location: { kind: "heading", headingId: "heading-polish" },
-      schedule: { kind: "scheduled", date: "2026-07-18", evening: false }, reminder: null, deadline: null,
-      outcome: "open", trashedAt: null, logbookAt: null, tags: [], occurrence: null,
-      createdAt: "2026-07-18T08:00:00.000Z", completedAt: null, order: 0,
+      id: "todo-overdue",
+      title: "Overdue",
+      notes: "",
+      checklist: [],
+      location: { kind: "heading", headingId: "heading-polish" },
+      schedule: { kind: "scheduled", date: "2026-07-18", evening: false },
+      reminder: null,
+      deadline: null,
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      tags: [],
+      occurrence: null,
+      createdAt: "2026-07-18T08:00:00.000Z",
+      completedAt: null,
+      order: 0,
     },
     {
-      id: "todo-future", title: "Future", notes: "", checklist: [], location: { kind: "unfiled", spaceId: "space-personal" },
-      schedule: { kind: "scheduled", date: "2026-07-20", evening: false }, reminder: null, deadline: null,
-      outcome: "open", trashedAt: null, logbookAt: null, tags: [], occurrence: null,
-      createdAt: "2026-07-18T08:00:00.000Z", completedAt: null, order: 1,
+      id: "todo-future",
+      title: "Future",
+      notes: "",
+      checklist: [],
+      location: { kind: "unfiled", spaceId: "space-personal" },
+      schedule: { kind: "scheduled", date: "2026-07-20", evening: false },
+      reminder: null,
+      deadline: null,
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      tags: [],
+      occurrence: null,
+      createdAt: "2026-07-18T08:00:00.000Z",
+      completedAt: null,
+      order: 1,
     },
   );
 
@@ -79,7 +130,10 @@ test("derived Today results and inherited locations come from the Workspace", ()
     createId: (kind) => `${kind}-fixed`,
   });
 
-  assert.deepEqual(workspace.view({ kind: "today", date: "2026-07-19" }).map((item) => item.id), ["todo-overdue"]);
+  assert.deepEqual(
+    workspace.view({ kind: "today", date: "2026-07-19" }).map((item) => item.id),
+    ["todo-overdue"],
+  );
   assert.deepEqual(workspace.locationOfToDo("todo-overdue"), {
     headingId: "heading-polish",
     projectId: "project-site",
@@ -109,11 +163,21 @@ test("changes that would create a dangling Location are rejected", () => {
 test("validation rejects an impossible Repeating Template Location from synced data", () => {
   const document = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
   document.repeatingTemplates.push({
-    id: "template-1", itemKind: "project", title: "Broken", notes: "",
-    location: { kind: "heading", headingId: "missing-heading" }, tags: [], checklist: [],
-    pattern: { frequency: "weekly", interval: 1, weekdays: [1] }, mode: "on-schedule", state: "active",
-    nextDate: "2026-07-20", reminderTime: null, deadlineOffsetDays: null,
-    projectContents: { headings: [], toDos: [] }, createdAt: "2026-07-19T08:00:00.000Z",
+    id: "template-1",
+    itemKind: "project",
+    title: "Broken",
+    notes: "",
+    location: { kind: "heading", headingId: "missing-heading" },
+    tags: [],
+    checklist: [],
+    pattern: { frequency: "weekly", interval: 1, weekdays: [1] },
+    mode: "on-schedule",
+    state: "active",
+    nextDate: "2026-07-20",
+    reminderTime: null,
+    deadlineOffsetDays: null,
+    projectContents: { headings: [], toDos: [] },
+    createdAt: "2026-07-19T08:00:00.000Z",
   } as unknown as RepeatingTemplate);
   const workspace = createWorkspace(document, {
     now: () => "2026-07-19T09:00:00.000Z",

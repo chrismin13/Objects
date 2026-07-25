@@ -28,7 +28,9 @@ function migrationMutationId(updatedAt: string, sourceMutationId: string): strin
   return `legacy-migration-${updatedAt}-${sourceMutationId.length}-${(hash >>> 0).toString(16)}`;
 }
 
-export function migrationCommandForQuery(query: LakebedWorkspaceQuery): WorkspaceSyncCommand | null {
+export function migrationCommandForQuery(
+  query: LakebedWorkspaceQuery,
+): WorkspaceSyncCommand | null {
   const snapshot = query.snapshot;
   const migration = snapshot?.document.sync.legacyMigration;
   if (!query.migrationRequired || !snapshot || !migration) return null;
@@ -40,32 +42,42 @@ export function migrationCommandForQuery(query: LakebedWorkspaceQuery): Workspac
 }
 
 export function parseLakebedWorkspaceQuery(value: unknown): LakebedWorkspaceQuery | undefined {
-  if (value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0)) return undefined;
+  if (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  )
+    return undefined;
   const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
   if (
-    !parsed
-    || typeof parsed !== "object"
-    || Array.isArray(parsed)
-    || typeof (parsed as { ownerIdentity?: unknown }).ownerIdentity !== "string"
-    || !("snapshot" in parsed)
-  ) throw new Error("Invalid Lakebed Workspace query result");
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    typeof (parsed as { ownerIdentity?: unknown }).ownerIdentity !== "string" ||
+    !("snapshot" in parsed)
+  )
+    throw new Error("Invalid Lakebed Workspace query result");
   const snapshot = (parsed as { snapshot: unknown }).snapshot;
   if (snapshot !== null && (typeof snapshot !== "object" || Array.isArray(snapshot))) {
     throw new Error("Invalid Lakebed Workspace snapshot");
   }
   if (
-    "migrationRequired" in parsed
-    && typeof (parsed as { migrationRequired?: unknown }).migrationRequired !== "boolean"
-  ) throw new Error("Invalid Lakebed Workspace migration state");
+    "migrationRequired" in parsed &&
+    typeof (parsed as { migrationRequired?: unknown }).migrationRequired !== "boolean"
+  )
+    throw new Error("Invalid Lakebed Workspace migration state");
   return parsed as LakebedWorkspaceQuery;
 }
 
-export function createLakebedWorkspaceAdapter(gateway: LakebedWorkspaceGateway): WorkspaceSyncAdapter {
+export function createLakebedWorkspaceAdapter(
+  gateway: LakebedWorkspaceGateway,
+): WorkspaceSyncAdapter {
   return {
     async load(): Promise<WorkspaceSyncSnapshot | null> {
       const serialized = gateway.readSnapshot();
       if (serialized === undefined) throw new Error("Session unavailable");
-      return serialized === null ? null : JSON.parse(serialized) as WorkspaceSyncSnapshot;
+      return serialized === null ? null : (JSON.parse(serialized) as WorkspaceSyncSnapshot);
     },
     async save(command: WorkspaceSyncCommand): Promise<WorkspaceSyncResult> {
       const result = await gateway.saveCommand(JSON.stringify(command));
@@ -83,11 +95,15 @@ export function scopeWorkspaceAdapter(
   const identityMatches = () => confirmedOwnerIdentity() === expectedOwnerIdentity;
   const unavailable = () => Promise.reject(new Error("Session unavailable"));
   return {
-    load: () => identityMatches() ? adapter.load() : unavailable(),
-    save: (command) => identityMatches() ? adapter.save(command) : unavailable(),
+    load: () => (identityMatches() ? adapter.load() : unavailable()),
+    save: (command) => (identityMatches() ? adapter.save(command) : unavailable()),
     subscribe(listener) {
       if (!identityMatches()) return () => undefined;
-      return adapter.subscribe?.(() => { if (identityMatches()) listener(); }) ?? (() => undefined);
+      return (
+        adapter.subscribe?.(() => {
+          if (identityMatches()) listener();
+        }) ?? (() => undefined)
+      );
     },
   };
 }

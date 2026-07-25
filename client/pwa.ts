@@ -20,14 +20,18 @@ let reloadForUpdate = false;
 let updateAvailable = false;
 
 function isIos(): boolean {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent)
-    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
 }
 
 function isInstalled(): boolean {
-  return window.matchMedia("(display-mode: standalone)").matches
-    || window.matchMedia("(display-mode: fullscreen)").matches
-    || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches ||
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+  );
 }
 
 function emitStatus(): void {
@@ -58,15 +62,25 @@ export function initializePwa(): () => void {
 
   if (["localhost", "127.0.0.1"].includes(window.location.hostname)) {
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.getRegistrations().then((registrations) =>
-        Promise.all(registrations.map((item) => item.unregister()))
-      );
+      void navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) => Promise.all(registrations.map((item) => item.unregister())));
     }
     if ("caches" in window) {
-      void caches.keys().then((names) => Promise.all(names.filter((name) => name.startsWith("objects-pwa-")).map((name) => caches.delete(name))));
+      void caches
+        .keys()
+        .then((names) =>
+          Promise.all(
+            names
+              .filter((name) => name.startsWith("objects-pwa-"))
+              .map((name) => caches.delete(name)),
+          ),
+        );
     }
     emitStatus();
-    return () => { initialized = false; };
+    return () => {
+      initialized = false;
+    };
   }
 
   const onInstallPrompt = (event: Event) => {
@@ -94,7 +108,8 @@ export function initializePwa(): () => void {
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
-    registrationPromise = navigator.serviceWorker.register("/sw.js", { scope: "/" })
+    registrationPromise = navigator.serviceWorker
+      .register("/sw.js", { scope: "/" })
       .then((next) => {
         watchRegistration(next);
         return navigator.serviceWorker.ready;
@@ -134,7 +149,9 @@ export function getPwaStatus(): PwaStatus {
   };
 }
 
-export async function requestPwaInstall(): Promise<"accepted" | "dismissed" | "instructions" | "installed"> {
+export async function requestPwaInstall(): Promise<
+  "accepted" | "dismissed" | "instructions" | "installed"
+> {
   if (isInstalled()) return "installed";
   if (!installPrompt) return "instructions";
   const prompt = installPrompt;
@@ -151,7 +168,7 @@ export async function requestNotificationAccess(): Promise<NotificationPermissio
   emitStatus();
   if (permission !== "granted") return permission;
 
-  const ready = registration ?? await registrationPromise;
+  const ready = registration ?? (await registrationPromise);
   if (ready?.active) {
     await ready.showNotification("Objects notifications are ready", {
       body: "Task reminders will appear here while Objects is running.",
@@ -163,7 +180,11 @@ export async function requestNotificationAccess(): Promise<NotificationPermissio
   return permission;
 }
 
-export async function showTaskReminder(task: { id: string; title: string; notes?: string }): Promise<boolean> {
+export async function showTaskReminder(task: {
+  id: string;
+  title: string;
+  notes?: string;
+}): Promise<boolean> {
   if (!("Notification" in window) || Notification.permission !== "granted") return false;
   const notificationOptions: NotificationOptions = {
     body: task.notes || "Scheduled in Objects",
@@ -178,7 +199,7 @@ export async function showTaskReminder(task: { id: string; title: string; notes?
   };
 
   try {
-    const ready = registration ?? await registrationPromise;
+    const ready = registration ?? (await registrationPromise);
     if (ready?.active) {
       await ready.showNotification(task.title, notificationOptions);
     } else {

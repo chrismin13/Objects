@@ -5,7 +5,10 @@ export type DeviceSpacePreferences = {
   manualSpaceId: string | null;
 };
 
-export function shouldRememberManualSpace(targetKind: string, usedDirectNavigation: boolean): boolean {
+export function shouldRememberManualSpace(
+  targetKind: string,
+  usedDirectNavigation: boolean,
+): boolean {
   return usedDirectNavigation && targetKind === "space";
 }
 
@@ -26,7 +29,10 @@ function minutesFromClock(value: string): number | null {
   return hours * 60 + minutes;
 }
 
-function ruleMatches(rule: WorkspaceDocument["settings"]["launchRules"][number], date: Date): boolean {
+function ruleMatches(
+  rule: WorkspaceDocument["settings"]["launchRules"][number],
+  date: Date,
+): boolean {
   const start = minutesFromClock(rule.start);
   const end = minutesFromClock(rule.end);
   if (start === null || end === null || start === end || !rule.weekdays.length) return false;
@@ -43,9 +49,10 @@ export function selectLaunchSpace(
   date: Date,
 ): string | null {
   const availableSpaceIds = new Set(document.spaces.map((space) => space.id));
-  const defaultSpaceId = document.settings.defaultSpaceId && availableSpaceIds.has(document.settings.defaultSpaceId)
-    ? document.settings.defaultSpaceId
-    : document.spaces[0]?.id ?? null;
+  const defaultSpaceId =
+    document.settings.defaultSpaceId && availableSpaceIds.has(document.settings.defaultSpaceId)
+      ? document.settings.defaultSpaceId
+      : (document.spaces[0]?.id ?? null);
 
   if (preferences.launchRulesEnabled) {
     const match = [...document.settings.launchRules]

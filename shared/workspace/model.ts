@@ -148,7 +148,9 @@ export type RepeatingProjectToDoBlueprint = {
   headingKey: string | null;
   tags: EntityId[];
   checklist: Array<Omit<ChecklistItem, "id">>;
-  schedule?: Exclude<Schedule, { kind: "scheduled" }> | { kind: "scheduled"; offsetDays: number; evening: boolean };
+  schedule?:
+    | Exclude<Schedule, { kind: "scheduled" }>
+    | { kind: "scheduled"; offsetDays: number; evening: boolean };
   reminder: RepeatingReminderDefault | null;
   deadline: RepeatingDeadlineDefault | null;
   order: number;
@@ -175,10 +177,11 @@ type RepeatingTemplateBase = {
   createdAt: IsoDateTime;
 };
 
-export type RepeatingTemplate = RepeatingTemplateBase & (
-  | { itemKind: "toDo"; location: ToDoLocation; projectContents: null }
-  | { itemKind: "project"; location: ProjectLocation; projectContents: RepeatingProjectContents }
-);
+export type RepeatingTemplate = RepeatingTemplateBase &
+  (
+    | { itemKind: "toDo"; location: ToDoLocation; projectContents: null }
+    | { itemKind: "project"; location: ProjectLocation; projectContents: RepeatingProjectContents }
+  );
 
 export type RepeatingPreview = {
   id: string;
@@ -224,7 +227,15 @@ export type WorkspaceSettings = {
 };
 
 export type PermanentDeletion = {
-  entityKind: "toDo" | "project" | "area" | "heading" | "space" | "tag" | "repeatingTemplate" | "calendarEvent";
+  entityKind:
+    | "toDo"
+    | "project"
+    | "area"
+    | "heading"
+    | "space"
+    | "tag"
+    | "repeatingTemplate"
+    | "calendarEvent";
   entityId: EntityId;
   deletedAt: IsoDateTime;
 };
@@ -290,7 +301,12 @@ export type WorkspaceChangeResult =
     }
   | {
       status: "rejected";
-      outcome: "validation-failed" | "not-found" | "undo-unavailable" | "confirmation-required" | "import-rejected";
+      outcome:
+        | "validation-failed"
+        | "not-found"
+        | "undo-unavailable"
+        | "confirmation-required"
+        | "import-rejected";
       affected: [];
       undo: null;
       errors: string[];

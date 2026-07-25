@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vite-plus/test";
 
-import { hideEmptyToastLayer, placeToastLayer, raiseToastLayer, showToastLayer } from "../../client/toast-layer.ts";
+import {
+  hideEmptyToastLayer,
+  placeToastLayer,
+  raiseToastLayer,
+  showToastLayer,
+} from "../../client/toast-layer.ts";
 
 type FakeToastRegion = {
   childElementCount: number;
@@ -17,15 +22,27 @@ function toastRegion(childElementCount = 1): FakeToastRegion {
     childElementCount,
     open: false,
     calls: [],
-    matches(selector) { return selector === ":popover-open" && this.open; },
-    showPopover() { this.calls.push("show"); this.open = true; },
-    hidePopover() { this.calls.push("hide"); this.open = false; },
+    matches(selector) {
+      return selector === ":popover-open" && this.open;
+    },
+    showPopover() {
+      this.calls.push("show");
+      this.open = true;
+    },
+    hidePopover() {
+      this.calls.push("hide");
+      this.open = false;
+    },
   };
 }
 
 test("toasts enter the browser top layer and move above a dialog opened later", () => {
   const region = toastRegion();
-  const overlay = { append(child: FakeToastRegion) { child.calls.push("append-to-overlay"); } };
+  const overlay = {
+    append(child: FakeToastRegion) {
+      child.calls.push("append-to-overlay");
+    },
+  };
 
   showToastLayer(region);
   placeToastLayer(region, overlay);

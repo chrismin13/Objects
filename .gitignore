@@ -3,3 +3,11 @@
 .DS_Store
 .DS_Store
 npm-debug.log*
+
+# Cloudflare / Vite toolchain
+node_modules
+dist
+.wrangler
+worker-configuration.d.ts
+.dev.vars
+*.local

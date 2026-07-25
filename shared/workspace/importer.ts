@@ -47,8 +47,14 @@ export type ParsedImport =
 export function createEmptyImportReport(): ImportReport {
   return {
     imported: {
-      spaces: 0, areas: 0, projects: 0, headings: 0, tags: 0, toDos: 0,
-      repeatingTemplates: 0, calendarEvents: 0,
+      spaces: 0,
+      areas: 0,
+      projects: 0,
+      headings: 0,
+      tags: 0,
+      toDos: 0,
+      repeatingTemplates: 0,
+      calendarEvents: 0,
     },
     corrected: 0,
     skipped: 0,
@@ -58,7 +64,9 @@ export function createEmptyImportReport(): ImportReport {
 }
 
 function record(value: unknown): JsonRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
 }
 
 function text(value: unknown): string | null {
@@ -100,7 +108,10 @@ function deduplicateToDoOccurrences(toDos: ToDo[], report: ImportReport): void {
     } else {
       removed.add(toDo);
     }
-    correction(report, `Removed a duplicate Repeating occurrence for ${toDo.occurrence.scheduledDate}.`);
+    correction(
+      report,
+      `Removed a duplicate Repeating occurrence for ${toDo.occurrence.scheduledDate}.`,
+    );
   }
   if (removed.size) toDos.splice(0, toDos.length, ...toDos.filter((toDo) => !removed.has(toDo)));
 }
@@ -141,10 +152,16 @@ function outcomeValue(value: unknown, report: ImportReport, label: string): Outc
   return "open";
 }
 
-function scheduleFromLegacy(item: JsonRecord, today: string, report: ImportReport, label: string): Schedule {
+function scheduleFromLegacy(
+  item: JsonRecord,
+  today: string,
+  report: ImportReport,
+  label: string,
+): Schedule {
   const bucket = item.bucket;
   const scheduledFor = optionalText(item.scheduledFor);
-  if (scheduledFor) return { kind: "scheduled", date: scheduledFor, evening: Boolean(item.evening) };
+  if (scheduledFor)
+    return { kind: "scheduled", date: scheduledFor, evening: Boolean(item.evening) };
   if (bucket === "inbox" || bucket === "anytime" || bucket === "someday") return { kind: bucket };
   if (bucket === "today" || bucket === "upcoming") {
     correction(report, `${label}: supplied a missing scheduled date.`);
@@ -177,7 +194,10 @@ function repeatingReminderDefault(toDo: ToDo, firstDate: string) {
   const time = /T(\d{2}:\d{2})/.exec(toDo.reminder.at)?.[1];
   if (time) {
     const reminderDate = toDo.reminder.at.slice(0, 10);
-    const days = Math.round((Date.parse(`${reminderDate}T00:00:00.000Z`) - Date.parse(`${firstDate}T00:00:00.000Z`)) / 86_400_000);
+    const days = Math.round(
+      (Date.parse(`${reminderDate}T00:00:00.000Z`) - Date.parse(`${firstDate}T00:00:00.000Z`)) /
+        86_400_000,
+    );
     return { kind: "offset" as const, days, time };
   }
   return { kind: "fixed" as const, at: toDo.reminder.at };
@@ -203,16 +223,23 @@ function legacyRepeat(
   const repeat = record(item.repeat);
   if (!repeat) return null;
   const frequency = ["daily", "weekly", "monthly", "yearly"].includes(String(repeat.frequency))
-    ? repeat.frequency as RepeatingTemplate["pattern"]["frequency"]
+    ? (repeat.frequency as RepeatingTemplate["pattern"]["frequency"])
     : "daily";
-  if (frequency !== repeat.frequency) correction(report, `${String(item.title)}: repaired an unknown repeat frequency.`);
+  if (frequency !== repeat.frequency)
+    correction(report, `${String(item.title)}: repaired an unknown repeat frequency.`);
   const interval = Math.max(1, Math.floor(numberOr(repeat.interval, 1)));
   const weekdays = Array.isArray(repeat.weekdays)
-    ? repeat.weekdays.filter((day): day is number => typeof day === "number" && day >= 0 && day <= 6)
+    ? repeat.weekdays.filter(
+        (day): day is number => typeof day === "number" && day >= 0 && day <= 6,
+      )
     : [];
   const nextDate = optionalText(repeat.nextDate) ?? dependencies.now().slice(0, 10);
-  if (!optionalText(repeat.nextDate)) correction(report, `${String(item.title)}: supplied a missing next repeat date.`);
-  correction(report, `${String(item.title)}: moved legacy repetition into a separate Repeating Template.`);
+  if (!optionalText(repeat.nextDate))
+    correction(report, `${String(item.title)}: supplied a missing next repeat date.`);
+  correction(
+    report,
+    `${String(item.title)}: moved legacy repetition into a separate Repeating Template.`,
+  );
   const template = {
     id: dependencies.createId("repeatingTemplate"),
     title: text(item.title) ?? "Untitled",
@@ -220,8 +247,9 @@ function legacyRepeat(
     tags,
     checklist,
     pattern: { frequency, interval, weekdays },
-    mode: repeat.mode === "afterCompletion" ? "after-completion" as const : "on-schedule" as const,
-    state: repeat.paused ? "paused" as const : "active" as const,
+    mode:
+      repeat.mode === "afterCompletion" ? ("after-completion" as const) : ("on-schedule" as const),
+    state: repeat.paused ? ("paused" as const) : ("active" as const),
     firstDate: optionalText(item.scheduledFor) ?? nextDate,
     nextDate,
     reminderTime: optionalText(repeat.reminderTime),
@@ -239,7 +267,10 @@ function legacyRepeat(
   };
 }
 
-export function parsePortableBackup(serialized: string, dependencies: ImportDependencies): ParsedImport {
+export function parsePortableBackup(
+  serialized: string,
+  dependencies: ImportDependencies,
+): ParsedImport {
   const report = createEmptyImportReport();
   let source: JsonRecord | null = null;
   try {
@@ -250,12 +281,27 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
   if (!source) return reject(report, "The backup must contain one JSON object.");
   if (source.format === "objects-workspace") {
     const requiredCollections = [
-      "spaces", "areas", "projects", "headings", "tags", "toDos", "repeatingTemplates",
-      "projectClosures", "calendarEvents", "permanentDeletions",
+      "spaces",
+      "areas",
+      "projects",
+      "headings",
+      "tags",
+      "toDos",
+      "repeatingTemplates",
+      "projectClosures",
+      "calendarEvents",
+      "permanentDeletions",
     ];
     const settings = record(source.settings);
-    if (source.version !== 1 || !settings || requiredCollections.some((name) => !Array.isArray(source![name]))) {
-      return reject(report, "The current Objects backup is incomplete or uses an unsupported version.");
+    if (
+      source.version !== 1 ||
+      !settings ||
+      requiredCollections.some((name) => !Array.isArray(source![name]))
+    ) {
+      return reject(
+        report,
+        "The current Objects backup is incomplete or uses an unsupported version.",
+      );
     }
     if (!Array.isArray(source.captureReceipts)) source.captureReceipts = [];
     const document = source as unknown as WorkspaceDocument;
@@ -272,7 +318,11 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
     };
     return { ok: true, document, report };
   }
-  if (!Array.isArray(source.tasks) || !Array.isArray(source.projects) || !Array.isArray(source.areas)) {
+  if (
+    !Array.isArray(source.tasks) ||
+    !Array.isArray(source.projects) ||
+    !Array.isArray(source.areas)
+  ) {
     return reject(report, "The backup does not match the current Objects portable format.");
   }
 
@@ -291,7 +341,10 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
     }
     spaceIds.add(id);
     spaces.push({
-      id, title, color: optionalText(item.color) ?? "#5b7cfa", pinned: item.pinned !== false,
+      id,
+      title,
+      color: optionalText(item.color) ?? "#5b7cfa",
+      pinned: item.pinned !== false,
       order: numberOr(item.order, spaces.length),
     });
   }
@@ -306,8 +359,12 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
 
   const settingsSource = record(source.settings) ?? {};
   const requestedDefaultSpaceId = optionalText(settingsSource.defaultSpaceId);
-  const defaultSpaceId = requestedDefaultSpaceId && spaceIds.has(requestedDefaultSpaceId) ? requestedDefaultSpaceId : fallbackSpaceId;
-  if (requestedDefaultSpaceId !== defaultSpaceId) correction(report, "Replaced the missing default Space with the Imported Space.");
+  const defaultSpaceId =
+    requestedDefaultSpaceId && spaceIds.has(requestedDefaultSpaceId)
+      ? requestedDefaultSpaceId
+      : fallbackSpaceId;
+  if (requestedDefaultSpaceId !== defaultSpaceId)
+    correction(report, "Replaced the missing default Space with the Imported Space.");
 
   const tagNames = new Set<string>();
   if (Array.isArray(settingsSource.tags)) {
@@ -320,11 +377,20 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
       for (const tag of item.tags) if (text(tag)) tagNames.add(text(tag)!);
     }
   }
-  const tags: Tag[] = [...tagNames].map((title, order) => ({ id: dependencies.createId("tag"), title, order }));
+  const tags: Tag[] = [...tagNames].map((title, order) => ({
+    id: dependencies.createId("tag"),
+    title,
+    order,
+  }));
   const tagIdByTitle = new Map(tags.map((tag) => [tag.title, tag.id]));
-  const tagIds = (value: unknown) => Array.isArray(value)
-    ? value.map(text).filter((tag): tag is string => Boolean(tag)).map((tag) => tagIdByTitle.get(tag)).filter((id): id is string => Boolean(id))
-    : [];
+  const tagIds = (value: unknown) =>
+    Array.isArray(value)
+      ? value
+          .map(text)
+          .filter((tag): tag is string => Boolean(tag))
+          .map((tag) => tagIdByTitle.get(tag))
+          .filter((id): id is string => Boolean(id))
+      : [];
   report.imported.tags = tags.length;
 
   const areas: Area[] = [];
@@ -343,7 +409,14 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
       correction(report, `Area “${title}”: replaced its missing Space.`);
     }
     areaIds.add(id);
-    areas.push({ id, title, spaceId, color: optionalText(item.color) ?? "#5b7cfa", tags: tagIds(item.tags), order: numberOr(item.order, areas.length) });
+    areas.push({
+      id,
+      title,
+      spaceId,
+      color: optionalText(item.color) ?? "#5b7cfa",
+      tags: tagIds(item.tags),
+      order: numberOr(item.order, areas.length),
+    });
   }
   report.imported.areas = areas.length;
 
@@ -359,19 +432,37 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
       continue;
     }
     const areaId = optionalText(item.areaId);
-    const location: Project["location"] = areaId && areaIds.has(areaId)
-      ? { kind: "area", areaId }
-      : { kind: "space", spaceId: optionalText(item.spaceId) && spaceIds.has(String(item.spaceId)) ? String(item.spaceId) : fallbackSpaceId };
-    if (location.kind === "area" && item.spaceId) correction(report, `Project “${title}”: removed its copied Space.`);
-    if (location.kind === "space" && optionalText(item.spaceId) !== location.spaceId) correction(report, `Project “${title}”: replaced its missing Space.`);
+    const location: Project["location"] =
+      areaId && areaIds.has(areaId)
+        ? { kind: "area", areaId }
+        : {
+            kind: "space",
+            spaceId:
+              optionalText(item.spaceId) && spaceIds.has(String(item.spaceId))
+                ? String(item.spaceId)
+                : fallbackSpaceId,
+          };
+    if (location.kind === "area" && item.spaceId)
+      correction(report, `Project “${title}”: removed its copied Space.`);
+    if (location.kind === "space" && optionalText(item.spaceId) !== location.spaceId)
+      correction(report, `Project “${title}”: replaced its missing Space.`);
     const outcome = outcomeFromLegacy(item, report, `Project “${title}”`);
     projects.push({
-      id, title, notes: typeof item.notes === "string" ? item.notes : "", location,
+      id,
+      title,
+      notes: typeof item.notes === "string" ? item.notes : "",
+      location,
       schedule: scheduleFromLegacy(item, today, report, `Project “${title}”`),
-      deadline: optionalText(item.deadline), outcome,
-      trashedAt: item.status === "trashed" || item.status === "trash" ? optionalText(item.trashedAt) ?? now : null,
-      logbookAt: optionalText(item.loggedAt), tags: tagIds(item.tags), occurrence: null,
-      completedAt: outcome === "completed" ? optionalText(item.completedAt) ?? now : null,
+      deadline: optionalText(item.deadline),
+      outcome,
+      trashedAt:
+        item.status === "trashed" || item.status === "trash"
+          ? (optionalText(item.trashedAt) ?? now)
+          : null,
+      logbookAt: optionalText(item.loggedAt),
+      tags: tagIds(item.tags),
+      occurrence: null,
+      completedAt: outcome === "completed" ? (optionalText(item.completedAt) ?? now) : null,
       order: numberOr(item.order, projects.length),
     });
     projectIds.add(id);
@@ -392,15 +483,25 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
     }
     const projectId = optionalText(item.projectId);
     const areaId = optionalText(item.areaId);
-    const location: Heading["location"] | null = projectId && projectIds.has(projectId)
-      ? { kind: "project", projectId }
-      : areaId && areaIds.has(areaId) ? { kind: "area", areaId } : null;
+    const location: Heading["location"] | null =
+      projectId && projectIds.has(projectId)
+        ? { kind: "project", projectId }
+        : areaId && areaIds.has(areaId)
+          ? { kind: "area", areaId }
+          : null;
     if (!location) {
       skip(report, `Skipped Heading “${title}” because its parent is missing.`);
       continue;
     }
-    if (location.kind === "project" && areaId) correction(report, `Heading “${title}”: removed its copied Area.`);
-    headings.push({ id, title, location, archivedAt: item.archived ? now : null, order: numberOr(item.order, headings.length) });
+    if (location.kind === "project" && areaId)
+      correction(report, `Heading “${title}”: removed its copied Area.`);
+    headings.push({
+      id,
+      title,
+      location,
+      archivedAt: item.archived ? now : null,
+      order: numberOr(item.order, headings.length),
+    });
     headingIds.add(id);
   }
   report.imported.headings = headings.length;
@@ -409,7 +510,15 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
   const templateIdByLegacyItemId = new Map<string, string>();
   for (const project of projects) {
     const sourceProject = projectSources.get(project.id)!;
-    const template = legacyRepeat(sourceProject, "project", project.location, project.tags, [], dependencies, report);
+    const template = legacyRepeat(
+      sourceProject,
+      "project",
+      project.location,
+      project.tags,
+      [],
+      dependencies,
+      report,
+    );
     if (template) {
       repeatingTemplates.push(template);
       templateIdByLegacyItemId.set(project.id, template.id);
@@ -440,28 +549,60 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
     else if (areaId && areaIds.has(areaId)) location = { kind: "area", areaId };
     else {
       const requestedSpaceId = optionalText(item.spaceId);
-      location = { kind: "unfiled", spaceId: requestedSpaceId && spaceIds.has(requestedSpaceId) ? requestedSpaceId : fallbackSpaceId };
-      if (requestedSpaceId !== location.spaceId) correction(report, `To-do “${title}”: replaced its missing Space.`);
+      location = {
+        kind: "unfiled",
+        spaceId:
+          requestedSpaceId && spaceIds.has(requestedSpaceId) ? requestedSpaceId : fallbackSpaceId,
+      };
+      if (requestedSpaceId !== location.spaceId)
+        correction(report, `To-do “${title}”: replaced its missing Space.`);
     }
-    const copiedParentCount = [headingId, projectId, areaId, optionalText(item.spaceId)].filter(Boolean).length;
-    if (copiedParentCount > 1) correction(report, `To-do “${title}”: kept only its closest parent Location.`);
+    const copiedParentCount = [headingId, projectId, areaId, optionalText(item.spaceId)].filter(
+      Boolean,
+    ).length;
+    if (copiedParentCount > 1)
+      correction(report, `To-do “${title}”: kept only its closest parent Location.`);
     const outcome = outcomeFromLegacy(item, report, `To-do “${title}”`);
     const checklist = checklistFromLegacy(item.checklist, report, `To-do “${title}”`);
-    const template = legacyRepeat(item, "toDo", location, tagIds(item.tags), checklist, dependencies, report);
+    const template = legacyRepeat(
+      item,
+      "toDo",
+      location,
+      tagIds(item.tags),
+      checklist,
+      dependencies,
+      report,
+    );
     if (template) {
       repeatingTemplates.push(template);
       templateIdByLegacyItemId.set(id, template.id);
     }
     toDos.push({
-      id, title, notes: typeof item.notes === "string" ? item.notes : "", checklist, location,
+      id,
+      title,
+      notes: typeof item.notes === "string" ? item.notes : "",
+      checklist,
+      location,
       schedule: scheduleFromLegacy(item, today, report, `To-do “${title}”`),
-      reminder: optionalText(item.reminderAt) ? { at: String(item.reminderAt), sentAt: optionalText(item.reminderSentAt) } : null,
-      deadline: optionalText(item.deadline), outcome,
-      trashedAt: item.status === "trashed" || item.status === "trash" ? optionalText(item.trashedAt) ?? now : null,
-      logbookAt: optionalText(item.loggedAt), tags: tagIds(item.tags),
-      occurrence: template ? { templateId: template.id, scheduledDate: optionalText(item.scheduledFor) ?? template.nextDate } : null,
+      reminder: optionalText(item.reminderAt)
+        ? { at: String(item.reminderAt), sentAt: optionalText(item.reminderSentAt) }
+        : null,
+      deadline: optionalText(item.deadline),
+      outcome,
+      trashedAt:
+        item.status === "trashed" || item.status === "trash"
+          ? (optionalText(item.trashedAt) ?? now)
+          : null,
+      logbookAt: optionalText(item.loggedAt),
+      tags: tagIds(item.tags),
+      occurrence: template
+        ? {
+            templateId: template.id,
+            scheduledDate: optionalText(item.scheduledFor) ?? template.nextDate,
+          }
+        : null,
       createdAt: optionalText(item.createdAt) ?? now,
-      completedAt: outcome === "completed" ? optionalText(item.completedAt) ?? now : null,
+      completedAt: outcome === "completed" ? (optionalText(item.completedAt) ?? now) : null,
       order: numberOr(item.order, toDos.length),
     });
     toDoIds.add(id);
@@ -482,7 +623,10 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
       };
       correction(report, `Project “${project.title}”: restored its Repeating Template connection.`);
     } else if (legacyTemplateId) {
-      correction(report, `Project “${project.title}”: removed a missing Repeating Template connection.`);
+      correction(
+        report,
+        `Project “${project.title}”: removed a missing Repeating Template connection.`,
+      );
     }
   }
   for (const toDo of toDos) {
@@ -509,11 +653,14 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
     const template = templateById.get(project.occurrence.templateId);
     if (!template || template.itemKind !== "project") continue;
     if (templateIdByLegacyItemId.get(project.id) !== template.id) continue;
-    const projectHeadings = headings.filter((heading) => heading.location.kind === "project" && heading.location.projectId === project.id);
+    const projectHeadings = headings.filter(
+      (heading) => heading.location.kind === "project" && heading.location.projectId === project.id,
+    );
     const headingIdsForProject = new Set(projectHeadings.map((heading) => heading.id));
-    const projectToDos = toDos.filter((toDo) =>
-      (toDo.location.kind === "project" && toDo.location.projectId === project.id)
-      || (toDo.location.kind === "heading" && headingIdsForProject.has(toDo.location.headingId))
+    const projectToDos = toDos.filter(
+      (toDo) =>
+        (toDo.location.kind === "project" && toDo.location.projectId === project.id) ||
+        (toDo.location.kind === "heading" && headingIdsForProject.has(toDo.location.headingId)),
     );
     template.projectContents = {
       headings: projectHeadings.map((heading) => ({
@@ -529,13 +676,18 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
         headingKey: toDo.location.kind === "heading" ? toDo.location.headingId : null,
         tags: [...toDo.tags],
         checklist: toDo.checklist.map(({ id: _id, ...item }) => item),
-        schedule: toDo.schedule.kind === "scheduled"
-          ? {
-              kind: "scheduled" as const,
-              offsetDays: Math.round((Date.parse(`${toDo.schedule.date}T00:00:00.000Z`) - Date.parse(`${template.nextDate}T00:00:00.000Z`)) / 86_400_000),
-              evening: toDo.schedule.evening,
-            }
-          : toDo.schedule,
+        schedule:
+          toDo.schedule.kind === "scheduled"
+            ? {
+                kind: "scheduled" as const,
+                offsetDays: Math.round(
+                  (Date.parse(`${toDo.schedule.date}T00:00:00.000Z`) -
+                    Date.parse(`${template.nextDate}T00:00:00.000Z`)) /
+                    86_400_000,
+                ),
+                evening: toDo.schedule.evening,
+              }
+            : toDo.schedule,
         reminder: repeatingReminderDefault(toDo, template.firstDate ?? template.nextDate),
         deadline: repeatingDeadlineDefault(toDo),
         order: toDo.order,
@@ -559,8 +711,10 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
       continue;
     }
     const requestedSpaceId = optionalText(item.spaceId);
-    const spaceId = requestedSpaceId && spaceIds.has(requestedSpaceId) ? requestedSpaceId : fallbackSpaceId;
-    if (requestedSpaceId !== spaceId) correction(report, `Calendar event “${title}”: replaced its missing Space.`);
+    const spaceId =
+      requestedSpaceId && spaceIds.has(requestedSpaceId) ? requestedSpaceId : fallbackSpaceId;
+    if (requestedSpaceId !== spaceId)
+      correction(report, `Calendar event “${title}”: replaced its missing Space.`);
     calendarEvents.push({
       id,
       title,
@@ -576,30 +730,58 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
   report.imported.calendarEvents = calendarEvents.length;
 
   const theme = ["system", "light", "dark"].includes(String(settingsSource.theme))
-    ? settingsSource.theme as "system" | "light" | "dark" : "system";
-  const logCompletedItems = ["immediately", "daily", "manually"].includes(String(settingsSource.logCompletedItems))
-    ? settingsSource.logCompletedItems as "immediately" | "daily" | "manually" : "daily";
+    ? (settingsSource.theme as "system" | "light" | "dark")
+    : "system";
+  const logCompletedItems = ["immediately", "daily", "manually"].includes(
+    String(settingsSource.logCompletedItems),
+  )
+    ? (settingsSource.logCompletedItems as "immediately" | "daily" | "manually")
+    : "daily";
   const launchRulesSource = record(settingsSource.spaceSchedule);
   const launchRules = Array.isArray(launchRulesSource?.rules)
-    ? launchRulesSource!.rules.map(record).filter((rule): rule is JsonRecord => Boolean(rule)).flatMap((rule, order) => {
-      const id = text(rule.id);
-      if (!id) return [];
-      const requestedSpaceId = optionalText(rule.spaceId);
-      return [{
-        id, spaceId: requestedSpaceId && spaceIds.has(requestedSpaceId) ? requestedSpaceId : fallbackSpaceId,
-        weekdays: Array.isArray(rule.weekdays) ? rule.weekdays.filter((day): day is number => typeof day === "number" && day >= 0 && day <= 6) : [],
-        start: optionalText(rule.start) ?? "00:00", end: optionalText(rule.end) ?? "23:59", order: numberOr(rule.order, order),
-      }];
-    }) : [];
+    ? launchRulesSource!.rules
+        .map(record)
+        .filter((rule): rule is JsonRecord => Boolean(rule))
+        .flatMap((rule, order) => {
+          const id = text(rule.id);
+          if (!id) return [];
+          const requestedSpaceId = optionalText(rule.spaceId);
+          return [
+            {
+              id,
+              spaceId:
+                requestedSpaceId && spaceIds.has(requestedSpaceId)
+                  ? requestedSpaceId
+                  : fallbackSpaceId,
+              weekdays: Array.isArray(rule.weekdays)
+                ? rule.weekdays.filter(
+                    (day): day is number => typeof day === "number" && day >= 0 && day <= 6,
+                  )
+                : [],
+              start: optionalText(rule.start) ?? "00:00",
+              end: optionalText(rule.end) ?? "23:59",
+              order: numberOr(rule.order, order),
+            },
+          ];
+        })
+    : [];
   const quickDraftSource = record(settingsSource.quickDraft);
   let quickDraft: WorkspaceDocument["settings"]["quickDraft"] = null;
   if (quickDraftSource && typeof quickDraftSource.value === "string") {
     quickDraft = {
       value: quickDraftSource.value,
-      ...(optionalText(quickDraftSource.updatedAt) ? { updatedAt: String(quickDraftSource.updatedAt) } : {}),
-      ...(optionalText(quickDraftSource.viewType) ? { viewType: String(quickDraftSource.viewType) } : {}),
-      ...(typeof quickDraftSource.viewId === "string" || quickDraftSource.viewId === null ? { viewId: quickDraftSource.viewId as string | null } : {}),
-      ...(optionalText(quickDraftSource.sectionKey) ? { sectionKey: String(quickDraftSource.sectionKey) } : {}),
+      ...(optionalText(quickDraftSource.updatedAt)
+        ? { updatedAt: String(quickDraftSource.updatedAt) }
+        : {}),
+      ...(optionalText(quickDraftSource.viewType)
+        ? { viewType: String(quickDraftSource.viewType) }
+        : {}),
+      ...(typeof quickDraftSource.viewId === "string" || quickDraftSource.viewId === null
+        ? { viewId: quickDraftSource.viewId as string | null }
+        : {}),
+      ...(optionalText(quickDraftSource.sectionKey)
+        ? { sectionKey: String(quickDraftSource.sectionKey) }
+        : {}),
     };
   } else if (settingsSource.quickDraft !== undefined && settingsSource.quickDraft !== null) {
     correction(report, "Removed a malformed unfinished quick entry.");
@@ -622,8 +804,17 @@ export function parsePortableBackup(serialized: string, dependencies: ImportDepe
         launchRules,
         quickDraft,
       },
-      spaces, areas, projects, headings, tags, toDos, repeatingTemplates,
-      projectClosures: [], calendarEvents, permanentDeletions: [], captureReceipts: [],
+      spaces,
+      areas,
+      projects,
+      headings,
+      tags,
+      toDos,
+      repeatingTemplates,
+      projectClosures: [],
+      calendarEvents,
+      permanentDeletions: [],
+      captureReceipts: [],
       sync: { revision: 0, lastMutationId: null, updatedAt: now },
     },
   };

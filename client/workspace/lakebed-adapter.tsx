@@ -18,7 +18,12 @@ export function useLakebedWorkspaceAdapter(): LakebedAdapterState {
   const serializedWorkspace = useQuery<string>("replacementWorkspace");
   const saveWorkspace = useMutation<[serialized: string], string>("saveReplacementWorkspace");
   const workspace = parseLakebedWorkspaceQuery(serializedWorkspace);
-  const serializedSnapshot = workspace === undefined ? undefined : workspace.snapshot ? JSON.stringify(workspace.snapshot) : null;
+  const serializedSnapshot =
+    workspace === undefined
+      ? undefined
+      : workspace.snapshot
+        ? JSON.stringify(workspace.snapshot)
+        : null;
   const ownerIdentity = workspace?.ownerIdentity;
   const snapshotRef = useRef<string | null | undefined>(serializedSnapshot);
   const saveRef = useRef(saveWorkspace);
@@ -47,14 +52,18 @@ export function useLakebedWorkspaceAdapter(): LakebedAdapterState {
     });
   }, [workspace?.migrationRequired, serializedSnapshot, ownerIdentity, saveWorkspace]);
 
-  const adapter = useMemo<WorkspaceSyncAdapter>(() => createLakebedWorkspaceAdapter({
-    readSnapshot: () => snapshotRef.current,
-    saveCommand: (serialized) => saveRef.current(serialized),
-    subscribe(listener) {
-      listeners.current.add(listener);
-      return () => listeners.current.delete(listener);
-    },
-  }), []);
+  const adapter = useMemo<WorkspaceSyncAdapter>(
+    () =>
+      createLakebedWorkspaceAdapter({
+        readSnapshot: () => snapshotRef.current,
+        saveCommand: (serialized) => saveRef.current(serialized),
+        subscribe(listener) {
+          listeners.current.add(listener);
+          return () => listeners.current.delete(listener);
+        },
+      }),
+    [],
+  );
 
   return { adapter, loading: workspace === undefined, ownerIdentity: ownerIdentity ?? "guest" };
 }

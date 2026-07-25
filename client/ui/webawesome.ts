@@ -30,7 +30,9 @@ export function eventValue(event: Event): string {
 
 export function eventChecked(event: Event): boolean {
   const source = event.composedPath()[0] as { checked?: boolean } | undefined;
-  return typeof source?.checked === "boolean" ? source.checked : (event.currentTarget as ValueElement).checked;
+  return typeof source?.checked === "boolean"
+    ? source.checked
+    : (event.currentTarget as ValueElement).checked;
 }
 
 export function useWebAwesomeChecked(ref: RefObject<ValueElement>, initialChecked: boolean): void {
@@ -41,7 +43,9 @@ export function useWebAwesomeChecked(ref: RefObject<ValueElement>, initialChecke
     void customElements.whenDefined(element.localName).then(() => {
       if (active && element.isConnected) element.toggleAttribute("checked", initialChecked);
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 }
 
@@ -51,7 +55,11 @@ export function hideWebAwesomeOverlay(event: Event, onClose: () => void): void {
   else onClose();
 }
 
-export function useWebAwesomeOverlay(ref: RefObject<OverlayElement>, onClose: () => void, onOpen?: () => void): void {
+export function useWebAwesomeOverlay(
+  ref: RefObject<OverlayElement>,
+  onClose: () => void,
+  onOpen?: () => void,
+): void {
   useEffect(() => {
     let active = true;
     const element = ref.current;

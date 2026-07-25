@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vite-plus/test";
 
+import { repeatingEditorAccess, toDoRowCapabilities } from "../../client/app/actions.ts";
 import {
-  repeatingEditorAccess,
-  toDoRowCapabilities,
-} from "../../client/app/actions.ts";
-import { changesForIntent, changesForProjectRepetition, changesForToDoRepetition, toDoActionForShortcut, touchActionForDistance, updateSelection } from "../../client/workspace/interactions.ts";
+  changesForIntent,
+  changesForProjectRepetition,
+  changesForToDoRepetition,
+  toDoActionForShortcut,
+  touchActionForDistance,
+  updateSelection,
+} from "../../client/workspace/interactions.ts";
 import { createEmptyWorkspace, createWorkspace } from "../../shared/workspace/workspace.ts";
 
 test("row, inspector, keyboard, menu, bulk, drag, and touch completion use the same Workspace operation", () => {
@@ -19,35 +23,79 @@ test("row, inspector, keyboard, menu, bulk, drag, and touch completion use the s
 });
 
 test("interaction actions map to typed Workspace changes for every selected to-do", () => {
-  assert.deepEqual(changesForIntent({ source: "bulk", ids: ["a", "b", "a"], action: { type: "schedule", schedule: { kind: "someday" } } }), [
-    { type: "updateToDo", id: "a", changes: { schedule: { kind: "someday" } } },
-    { type: "updateToDo", id: "b", changes: { schedule: { kind: "someday" } } },
-  ]);
-  assert.deepEqual(changesForIntent({ source: "drag", ids: ["a", "b"], action: { type: "move", location: { kind: "project", projectId: "project-1" } } }), [
-    { type: "updateToDo", id: "a", changes: { location: { kind: "project", projectId: "project-1" } } },
-    { type: "updateToDo", id: "b", changes: { location: { kind: "project", projectId: "project-1" } } },
-  ]);
-  assert.deepEqual(changesForIntent({ source: "menu", ids: ["a"], action: { type: "tag", titles: ["Home"] } }), [
-    { type: "setToDoTags", id: "a", titles: ["Home"] },
-  ]);
+  assert.deepEqual(
+    changesForIntent({
+      source: "bulk",
+      ids: ["a", "b", "a"],
+      action: { type: "schedule", schedule: { kind: "someday" } },
+    }),
+    [
+      { type: "updateToDo", id: "a", changes: { schedule: { kind: "someday" } } },
+      { type: "updateToDo", id: "b", changes: { schedule: { kind: "someday" } } },
+    ],
+  );
+  assert.deepEqual(
+    changesForIntent({
+      source: "drag",
+      ids: ["a", "b"],
+      action: { type: "move", location: { kind: "project", projectId: "project-1" } },
+    }),
+    [
+      {
+        type: "updateToDo",
+        id: "a",
+        changes: { location: { kind: "project", projectId: "project-1" } },
+      },
+      {
+        type: "updateToDo",
+        id: "b",
+        changes: { location: { kind: "project", projectId: "project-1" } },
+      },
+    ],
+  );
+  assert.deepEqual(
+    changesForIntent({ source: "menu", ids: ["a"], action: { type: "tag", titles: ["Home"] } }),
+    [{ type: "setToDoTags", id: "a", titles: ["Home"] }],
+  );
 });
 
 test("selection supports one item, toggles, ranges, and all visible items", () => {
   const visible = ["a", "b", "c", "d"];
   const single = updateSelection({ ids: [], anchorId: null }, visible, "b", "single");
   assert.deepEqual(single, { ids: ["b"], anchorId: "b" });
-  assert.deepEqual(updateSelection(single, visible, "d", "range"), { ids: ["b", "c", "d"], anchorId: "b" });
-  assert.deepEqual(updateSelection(single, visible, "c", "toggle"), { ids: ["b", "c"], anchorId: "c" });
+  assert.deepEqual(updateSelection(single, visible, "d", "range"), {
+    ids: ["b", "c", "d"],
+    anchorId: "b",
+  });
+  assert.deepEqual(updateSelection(single, visible, "c", "toggle"), {
+    ids: ["b", "c"],
+    anchorId: "c",
+  });
   assert.deepEqual(updateSelection(single, visible, null, "all"), { ids: visible, anchorId: "b" });
 });
 
 test("keyboard-only commands reach the same typed actions as visible controls", () => {
   const today = "2026-07-19";
-  assert.deepEqual(toDoActionForShortcut({ key: "Enter", command: true, alt: false, shift: false, today }), { type: "complete" });
-  assert.deepEqual(toDoActionForShortcut({ key: "Backspace", command: false, alt: true, shift: false, today }), { type: "cancel" });
-  assert.deepEqual(toDoActionForShortcut({ key: "t", command: true, alt: false, shift: false, today }), { type: "schedule", schedule: { kind: "scheduled", date: today, evening: false } });
-  assert.deepEqual(toDoActionForShortcut({ key: "t", command: true, alt: true, shift: false, today }), { type: "schedule", schedule: { kind: "scheduled", date: today, evening: true } });
-  assert.deepEqual(toDoActionForShortcut({ key: "d", command: true, alt: false, shift: false, today }), { type: "duplicate" });
+  assert.deepEqual(
+    toDoActionForShortcut({ key: "Enter", command: true, alt: false, shift: false, today }),
+    { type: "complete" },
+  );
+  assert.deepEqual(
+    toDoActionForShortcut({ key: "Backspace", command: false, alt: true, shift: false, today }),
+    { type: "cancel" },
+  );
+  assert.deepEqual(
+    toDoActionForShortcut({ key: "t", command: true, alt: false, shift: false, today }),
+    { type: "schedule", schedule: { kind: "scheduled", date: today, evening: false } },
+  );
+  assert.deepEqual(
+    toDoActionForShortcut({ key: "t", command: true, alt: true, shift: false, today }),
+    { type: "schedule", schedule: { kind: "scheduled", date: today, evening: true } },
+  );
+  assert.deepEqual(
+    toDoActionForShortcut({ key: "d", command: true, alt: false, shift: false, today }),
+    { type: "duplicate" },
+  );
 });
 
 test("touch swipes select or open a safe menu without destructive actions", () => {
@@ -70,10 +118,34 @@ test("Repeating Templates are inspectable but never actionable to-dos", () => {
 });
 
 test("stopped Repeating Templates stay read-only through every editor entry path", () => {
-  assert.equal(repeatingEditorAccess({ repeat: { stopped: true }, repeatTemplateId: null, workspaceTemplateId: null }), "read-only");
-  assert.equal(repeatingEditorAccess({ repeat: { stopped: false }, repeatTemplateId: null, workspaceTemplateId: null }), "edit");
-  assert.equal(repeatingEditorAccess({ repeat: null, repeatTemplateId: null, workspaceTemplateId: null }), "create");
-  assert.equal(repeatingEditorAccess({ repeat: null, repeatTemplateId: "template-1", workspaceTemplateId: null }), "unavailable");
+  assert.equal(
+    repeatingEditorAccess({
+      repeat: { stopped: true },
+      repeatTemplateId: null,
+      workspaceTemplateId: null,
+    }),
+    "read-only",
+  );
+  assert.equal(
+    repeatingEditorAccess({
+      repeat: { stopped: false },
+      repeatTemplateId: null,
+      workspaceTemplateId: null,
+    }),
+    "edit",
+  );
+  assert.equal(
+    repeatingEditorAccess({ repeat: null, repeatTemplateId: null, workspaceTemplateId: null }),
+    "create",
+  );
+  assert.equal(
+    repeatingEditorAccess({
+      repeat: null,
+      repeatTemplateId: "template-1",
+      workspaceTemplateId: null,
+    }),
+    "unavailable",
+  );
 });
 
 test("saving repetition translates into named Workspace changes", () => {
@@ -87,15 +159,59 @@ test("saving repetition translates into named Workspace changes", () => {
     deadlineOffset: 2,
     paused: true,
   };
-  assert.deepEqual(changesForToDoRepetition({ toDoId: "todo-1", templateId: null, wasPaused: false, repeat, newTemplateId: "repeat-1" }), [
-    { type: "makeToDoRepeating", id: "todo-1", nextDate: "2026-08-03", pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] }, mode: "on-schedule" },
-    { type: "updateRepeatingTemplate", id: "repeat-1", changes: { nextDate: "2026-08-03", pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] }, mode: "on-schedule", reminderTime: "09:30", deadlineOffsetDays: 2 } },
-    { type: "pauseRepeatingTemplate", id: "repeat-1" },
-  ]);
-  assert.deepEqual(changesForToDoRepetition({ toDoId: "todo-1", templateId: "repeat-1", wasPaused: true, repeat: { ...repeat, paused: false }, newTemplateId: null }), [
-    { type: "updateRepeatingTemplate", id: "repeat-1", changes: { nextDate: "2026-08-03", pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] }, mode: "on-schedule", reminderTime: "09:30", deadlineOffsetDays: 2 } },
-    { type: "resumeRepeatingTemplate", id: "repeat-1" },
-  ]);
+  assert.deepEqual(
+    changesForToDoRepetition({
+      toDoId: "todo-1",
+      templateId: null,
+      wasPaused: false,
+      repeat,
+      newTemplateId: "repeat-1",
+    }),
+    [
+      {
+        type: "makeToDoRepeating",
+        id: "todo-1",
+        nextDate: "2026-08-03",
+        pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] },
+        mode: "on-schedule",
+      },
+      {
+        type: "updateRepeatingTemplate",
+        id: "repeat-1",
+        changes: {
+          nextDate: "2026-08-03",
+          pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] },
+          mode: "on-schedule",
+          reminderTime: "09:30",
+          deadlineOffsetDays: 2,
+        },
+      },
+      { type: "pauseRepeatingTemplate", id: "repeat-1" },
+    ],
+  );
+  assert.deepEqual(
+    changesForToDoRepetition({
+      toDoId: "todo-1",
+      templateId: "repeat-1",
+      wasPaused: true,
+      repeat: { ...repeat, paused: false },
+      newTemplateId: null,
+    }),
+    [
+      {
+        type: "updateRepeatingTemplate",
+        id: "repeat-1",
+        changes: {
+          nextDate: "2026-08-03",
+          pattern: { frequency: "weekly", interval: 2, weekdays: [1, 4] },
+          mode: "on-schedule",
+          reminderTime: "09:30",
+          deadlineOffsetDays: 2,
+        },
+      },
+      { type: "resumeRepeatingTemplate", id: "repeat-1" },
+    ],
+  );
 });
 
 test("saving Project repetition uses the same Repeating Template lifecycle", () => {
@@ -109,26 +225,103 @@ test("saving Project repetition uses the same Repeating Template lifecycle", () 
     deadlineOffset: 4,
     paused: false,
   };
-  assert.deepEqual(changesForProjectRepetition({ projectId: "project-1", templateId: null, newTemplateId: "repeat-project-1", wasPaused: false, repeat }), [
-    { type: "makeProjectRepeating", id: "project-1", firstDate: "2026-08-15", pattern: { frequency: "monthly", interval: 1, weekdays: [] }, mode: "after-completion" },
-    { type: "updateRepeatingTemplate", id: "repeat-project-1", changes: { nextDate: "2026-08-15", pattern: { frequency: "monthly", interval: 1, weekdays: [] }, mode: "after-completion", reminderTime: null, deadlineOffsetDays: 4 } },
-  ]);
+  assert.deepEqual(
+    changesForProjectRepetition({
+      projectId: "project-1",
+      templateId: null,
+      newTemplateId: "repeat-project-1",
+      wasPaused: false,
+      repeat,
+    }),
+    [
+      {
+        type: "makeProjectRepeating",
+        id: "project-1",
+        firstDate: "2026-08-15",
+        pattern: { frequency: "monthly", interval: 1, weekdays: [] },
+        mode: "after-completion",
+      },
+      {
+        type: "updateRepeatingTemplate",
+        id: "repeat-project-1",
+        changes: {
+          nextDate: "2026-08-15",
+          pattern: { frequency: "monthly", interval: 1, weekdays: [] },
+          mode: "after-completion",
+          reminderTime: null,
+          deadlineOffsetDays: 4,
+        },
+      },
+    ],
+  );
 });
 
 test("bulk changes are applied atomically through the Workspace seam", () => {
   const document = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
-  document.spaces.push({ id: "space-1", title: "Personal", color: "#5577dd", pinned: true, order: 0 });
+  document.spaces.push({
+    id: "space-1",
+    title: "Personal",
+    color: "#5577dd",
+    pinned: true,
+    order: 0,
+  });
   document.settings.defaultSpaceId = "space-1";
   document.toDos.push(
-    { id: "a", title: "A", notes: "", checklist: [], location: { kind: "unfiled", spaceId: "space-1" }, schedule: { kind: "inbox" }, reminder: null, deadline: null, outcome: "open", trashedAt: null, logbookAt: null, tags: [], occurrence: null, createdAt: "2026-07-19T08:00:00.000Z", completedAt: null, order: 0 },
-    { id: "b", title: "B", notes: "", checklist: [], location: { kind: "unfiled", spaceId: "space-1" }, schedule: { kind: "inbox" }, reminder: null, deadline: null, outcome: "open", trashedAt: null, logbookAt: null, tags: [], occurrence: null, createdAt: "2026-07-19T08:00:00.000Z", completedAt: null, order: 1 },
+    {
+      id: "a",
+      title: "A",
+      notes: "",
+      checklist: [],
+      location: { kind: "unfiled", spaceId: "space-1" },
+      schedule: { kind: "inbox" },
+      reminder: null,
+      deadline: null,
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      tags: [],
+      occurrence: null,
+      createdAt: "2026-07-19T08:00:00.000Z",
+      completedAt: null,
+      order: 0,
+    },
+    {
+      id: "b",
+      title: "B",
+      notes: "",
+      checklist: [],
+      location: { kind: "unfiled", spaceId: "space-1" },
+      schedule: { kind: "inbox" },
+      reminder: null,
+      deadline: null,
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      tags: [],
+      occurrence: null,
+      createdAt: "2026-07-19T08:00:00.000Z",
+      completedAt: null,
+      order: 1,
+    },
   );
-  const workspace = createWorkspace(document, { now: () => "2026-07-19T09:00:00.000Z", createId: (kind) => `${kind}-fixed` });
+  const workspace = createWorkspace(document, {
+    now: () => "2026-07-19T09:00:00.000Z",
+    createId: (kind) => `${kind}-fixed`,
+  });
 
-  const result = workspace.changeMany(changesForIntent({ source: "bulk", ids: ["a", "b"], action: { type: "schedule", schedule: { kind: "someday" } } }));
+  const result = workspace.changeMany(
+    changesForIntent({
+      source: "bulk",
+      ids: ["a", "b"],
+      action: { type: "schedule", schedule: { kind: "someday" } },
+    }),
+  );
 
   assert.equal(result.status, "changed");
-  assert.deepEqual(workspace.read().toDos.map((toDo) => toDo.schedule), [{ kind: "someday" }, { kind: "someday" }]);
+  assert.deepEqual(
+    workspace.read().toDos.map((toDo) => toDo.schedule),
+    [{ kind: "someday" }, { kind: "someday" }],
+  );
 
   const rejected = workspace.changeMany([
     { type: "trashToDo", id: "a" },
@@ -140,7 +333,10 @@ test("bulk changes are applied atomically through the Workspace seam", () => {
 
 test("appearance changes go through Workspace", () => {
   const document = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
-  const workspace = createWorkspace(document, { now: () => "2026-07-19T09:00:00.000Z", createId: (kind) => `${kind}-fixed` });
+  const workspace = createWorkspace(document, {
+    now: () => "2026-07-19T09:00:00.000Z",
+    createId: (kind) => `${kind}-fixed`,
+  });
 
   const result = workspace.change({ type: "setTheme", theme: "dark" });
 
@@ -150,10 +346,37 @@ test("appearance changes go through Workspace", () => {
 
 test("Workspace reorders visible to-dos and can move dragged items in the same change", () => {
   const document = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
-  document.spaces.push({ id: "space-1", title: "Personal", color: "#5577dd", pinned: true, order: 0 });
+  document.spaces.push({
+    id: "space-1",
+    title: "Personal",
+    color: "#5577dd",
+    pinned: true,
+    order: 0,
+  });
   document.settings.defaultSpaceId = "space-1";
-  for (const [order, id] of ["a", "b", "c"].entries()) document.toDos.push({ id, title: id.toUpperCase(), notes: "", checklist: [], location: { kind: "unfiled", spaceId: "space-1" }, schedule: { kind: "inbox" }, reminder: null, deadline: null, outcome: "open", trashedAt: null, logbookAt: null, tags: [], occurrence: null, createdAt: "2026-07-19T08:00:00.000Z", completedAt: null, order });
-  const workspace = createWorkspace(document, { now: () => "2026-07-19T09:00:00.000Z", createId: (kind) => `${kind}-fixed` });
+  for (const [order, id] of ["a", "b", "c"].entries())
+    document.toDos.push({
+      id,
+      title: id.toUpperCase(),
+      notes: "",
+      checklist: [],
+      location: { kind: "unfiled", spaceId: "space-1" },
+      schedule: { kind: "inbox" },
+      reminder: null,
+      deadline: null,
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      tags: [],
+      occurrence: null,
+      createdAt: "2026-07-19T08:00:00.000Z",
+      completedAt: null,
+      order,
+    });
+  const workspace = createWorkspace(document, {
+    now: () => "2026-07-19T09:00:00.000Z",
+    createId: (kind) => `${kind}-fixed`,
+  });
 
   const result = workspace.change({
     type: "reorderToDos",
@@ -163,18 +386,61 @@ test("Workspace reorders visible to-dos and can move dragged items in the same c
   });
 
   assert.equal(result.status, "changed");
-  assert.deepEqual(workspace.read().toDos.slice().sort((left, right) => left.order - right.order).map((toDo) => toDo.id), ["c", "a", "b"]);
-  assert.deepEqual(workspace.read().toDos.find((toDo) => toDo.id === "c")?.schedule, { kind: "someday" });
+  assert.deepEqual(
+    workspace
+      .read()
+      .toDos.slice()
+      .sort((left, right) => left.order - right.order)
+      .map((toDo) => toDo.id),
+    ["c", "a", "b"],
+  );
+  assert.deepEqual(workspace.read().toDos.find((toDo) => toDo.id === "c")?.schedule, {
+    kind: "someday",
+  });
 });
 
 test("reordering a filtered list preserves hidden to-do positions", () => {
   const document = createEmptyWorkspace("2026-07-19T08:00:00.000Z");
-  document.spaces.push({ id: "space-1", title: "Personal", color: "#5577dd", pinned: true, order: 0 });
+  document.spaces.push({
+    id: "space-1",
+    title: "Personal",
+    color: "#5577dd",
+    pinned: true,
+    order: 0,
+  });
   document.settings.defaultSpaceId = "space-1";
-  for (const [order, id] of ["a", "hidden", "c"].entries()) document.toDos.push({ id, title: id, notes: "", checklist: [], location: { kind: "unfiled", spaceId: "space-1" }, schedule: { kind: "inbox" }, reminder: null, deadline: null, outcome: "open", trashedAt: null, logbookAt: null, tags: [], occurrence: null, createdAt: "2026-07-19T08:00:00.000Z", completedAt: null, order });
-  const workspace = createWorkspace(document, { now: () => "2026-07-19T09:00:00.000Z", createId: (kind) => `${kind}-fixed` });
+  for (const [order, id] of ["a", "hidden", "c"].entries())
+    document.toDos.push({
+      id,
+      title: id,
+      notes: "",
+      checklist: [],
+      location: { kind: "unfiled", spaceId: "space-1" },
+      schedule: { kind: "inbox" },
+      reminder: null,
+      deadline: null,
+      outcome: "open",
+      trashedAt: null,
+      logbookAt: null,
+      tags: [],
+      occurrence: null,
+      createdAt: "2026-07-19T08:00:00.000Z",
+      completedAt: null,
+      order,
+    });
+  const workspace = createWorkspace(document, {
+    now: () => "2026-07-19T09:00:00.000Z",
+    createId: (kind) => `${kind}-fixed`,
+  });
 
   workspace.change({ type: "reorderToDos", movedIds: ["c"], orderedIds: ["c", "a"] });
 
-  assert.deepEqual(workspace.read().toDos.slice().sort((left, right) => left.order - right.order).map((toDo) => toDo.id), ["c", "hidden", "a"]);
+  assert.deepEqual(
+    workspace
+      .read()
+      .toDos.slice()
+      .sort((left, right) => left.order - right.order)
+      .map((toDo) => toDo.id),
+    ["c", "hidden", "a"],
+  );
 });

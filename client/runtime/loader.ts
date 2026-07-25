@@ -18,7 +18,7 @@ async function loadRuntime(): Promise<ObjectsRuntime> {
   const source = await new Response(stream).text();
   const moduleUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
   try {
-    return await import(moduleUrl) as ObjectsRuntime;
+    return (await import(moduleUrl)) as ObjectsRuntime;
   } finally {
     URL.revokeObjectURL(moduleUrl);
   }

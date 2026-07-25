@@ -31,36 +31,40 @@ export function mountTaskSortables(
     for (const list of lists) {
       if (!list.isConnected) continue;
       const sectionKey = list.closest<HTMLElement>("[data-section]")?.dataset.section || "list";
-      taskInstances.push(Sortable.create(list, {
-        animation: 150,
-        delay: 180,
-        delayOnTouchOnly: true,
-        touchStartThreshold: 8,
-        draggable: ".task-row",
-        handle: ".task-main",
-        group: options.crossSection ? "objects-tasks" : `objects-${sectionKey}`,
-        multiDrag: true,
-        selectedClass: "bulk-selected",
-        ghostClass: "sortable-ghost",
-        chosenClass: "sortable-chosen",
-        dragClass: "sortable-drag",
-        fallbackTolerance: 5,
-        onStart: (event: { item: HTMLElement; items?: HTMLElement[] }) => {
-          const elements = event.items?.length ? event.items : [event.item];
-          options.onStart(elements.map((item) => item.dataset.taskId).filter(Boolean) as string[]);
-        },
-        onEnd: (event: { item: HTMLElement; items?: HTMLElement[]; to: HTMLElement }) => {
-          const elements = event.items?.length ? event.items : [event.item];
-          const targetSection = event.to.closest<HTMLElement>("[data-section]");
-          options.onEnd({
-            movedIds: elements.map((item) => item.dataset.taskId).filter(Boolean) as string[],
-            orderedIds: [...event.to.querySelectorAll<HTMLElement>("[data-task-id]")]
-              .map((item) => item.dataset.taskId)
-              .filter(Boolean) as string[],
-            sectionKey: targetSection?.dataset.section || sectionKey,
-          });
-        },
-      }));
+      taskInstances.push(
+        Sortable.create(list, {
+          animation: 150,
+          delay: 180,
+          delayOnTouchOnly: true,
+          touchStartThreshold: 8,
+          draggable: ".task-row",
+          handle: ".task-main",
+          group: options.crossSection ? "objects-tasks" : `objects-${sectionKey}`,
+          multiDrag: true,
+          selectedClass: "bulk-selected",
+          ghostClass: "sortable-ghost",
+          chosenClass: "sortable-chosen",
+          dragClass: "sortable-drag",
+          fallbackTolerance: 5,
+          onStart: (event: { item: HTMLElement; items?: HTMLElement[] }) => {
+            const elements = event.items?.length ? event.items : [event.item];
+            options.onStart(
+              elements.map((item) => item.dataset.taskId).filter(Boolean) as string[],
+            );
+          },
+          onEnd: (event: { item: HTMLElement; items?: HTMLElement[]; to: HTMLElement }) => {
+            const elements = event.items?.length ? event.items : [event.item];
+            const targetSection = event.to.closest<HTMLElement>("[data-section]");
+            options.onEnd({
+              movedIds: elements.map((item) => item.dataset.taskId).filter(Boolean) as string[],
+              orderedIds: [...event.to.querySelectorAll<HTMLElement>("[data-task-id]")]
+                .map((item) => item.dataset.taskId)
+                .filter(Boolean) as string[],
+              sectionKey: targetSection?.dataset.section || sectionKey,
+            });
+          },
+        }),
+      );
     }
   });
 }
@@ -95,11 +99,16 @@ export function mountHeadingSortable(
       dragClass: "sortable-drag",
       fallbackTolerance: 5,
       onStart: options.onStart,
-      onEnd: () => options.onOrder(
-        [...sections.querySelectorAll<HTMLElement>(":scope > .section[data-section]:has(.heading-header)")]
-          .map((section) => section.dataset.section)
-          .filter((id): id is string => Boolean(id)),
-      ),
+      onEnd: () =>
+        options.onOrder(
+          [
+            ...sections.querySelectorAll<HTMLElement>(
+              ":scope > .section[data-section]:has(.heading-header)",
+            ),
+          ]
+            .map((section) => section.dataset.section)
+            .filter((id): id is string => Boolean(id)),
+        ),
     });
   });
 }

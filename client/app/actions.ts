@@ -26,7 +26,9 @@ export function toDoRowCapabilities(task: ToDoPresentationState): {
   };
 }
 
-export function repeatingEditorAccess(task: ToDoPresentationState): "create" | "edit" | "read-only" | "unavailable" {
+export function repeatingEditorAccess(
+  task: ToDoPresentationState,
+): "create" | "edit" | "read-only" | "unavailable" {
   if (task.repeatTemplateId || task.workspaceTemplateId) return "unavailable";
   if (!task.repeat) return "create";
   return task.repeat.stopped ? "read-only" : "edit";
@@ -42,11 +44,17 @@ function moveReminder(task: InterfaceTask, day: string | null): void {
   task.reminderSentAt = null;
 }
 
-export function reorderChecklist(state: InterfaceStateSnapshot, taskId: string, orderedIds: string[]): void {
+export function reorderChecklist(
+  state: InterfaceStateSnapshot,
+  taskId: string,
+  orderedIds: string[],
+): void {
   const task = state.tasks.find((candidate) => candidate.id === taskId);
   if (!task) return;
   const byId = new Map(task.checklist.map((item) => [item.id, item]));
-  task.checklist = orderedIds.map((id) => byId.get(id)).filter((item): item is InterfaceChecklistItem => Boolean(item));
+  task.checklist = orderedIds
+    .map((id) => byId.get(id))
+    .filter((item): item is InterfaceChecklistItem => Boolean(item));
   touch(state);
 }
 
@@ -57,7 +65,12 @@ export type TaskOrderDestination = {
   evening?: boolean;
 };
 
-export function reorderTasks(state: InterfaceStateSnapshot, movedIds: string[], orderedIds: string[], destination: TaskOrderDestination = {}): void {
+export function reorderTasks(
+  state: InterfaceStateSnapshot,
+  movedIds: string[],
+  orderedIds: string[],
+  destination: TaskOrderDestination = {},
+): void {
   const moved = new Set(movedIds);
   for (const task of state.tasks) {
     if (!moved.has(task.id) || task.repeat) continue;
@@ -74,7 +87,10 @@ export function reorderTasks(state: InterfaceStateSnapshot, movedIds: string[], 
   touch(state);
 }
 
-export function reorderEntities<T extends { id: string; order: number }>(items: T[], orderedIds: string[]): void {
+export function reorderEntities<T extends { id: string; order: number }>(
+  items: T[],
+  orderedIds: string[],
+): void {
   const positions = new Map(orderedIds.map((id, index) => [id, index]));
   for (const item of items) if (positions.has(item.id)) item.order = positions.get(item.id)!;
 }
