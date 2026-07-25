@@ -33,9 +33,9 @@ Branch `cloudflare-migration`. `vite.config.ts`, `wrangler.jsonc`, `vitest.confi
 
 `worker/workspace-do.ts` ports `replacementWorkspace`/`saveReplacementWorkspace`/capture semantics onto SQLite-backed storage with `transactionSync` atomicity (legacy migration intentionally dropped). Full test suite runs in workerd via `@cloudflare/vitest-pool-workers`: **123/123 green in ~1.9 s.** `runtime-packaging.test.ts` deleted with its subject; two source-grep tests moved to `?raw` imports; one TZ-dependent assertion pinned to UTC (workerd); 50 pre-existing type errors in the domain core fixed properly (repo had no tsconfig before); one-time oxfmt pass applied repo-wide. Manifest + service worker move to static assets in Phase 4 with the client.
 
-### Phase 3 — Auth
+### Phase 3 — Auth — **DONE (server side)**
 
-WorkOS account + staging environment (default OAuth credentials — zero setup). Routes: `/auth/login` (redirect to AuthKit), `/auth/callback` (code exchange → sealed cookie), `/auth/logout`. Session middleware derives the owner ID. Swap `client/index.tsx` off `useAuth`/`SignInWithGoogle`. Production Google sign-in, if wanted: one Google OAuth client registration.
+WorkOS AuthKit integrated: `/auth/login` → hosted AuthKit, `/auth/callback` exchanges the code (one WorkOS network call) and seals an Objects session cookie with iron-session, `/auth/logout` clears it, `/api/me` reports identity. All API routes are session-gated; the WorkOS user ID is the owner key. Design choice: after sign-in, sessions verify **fully locally** — no JWKS or per-request WorkOS calls, so tests mint valid sessions offline (9 auth tests; 132/132 green). Deployed and verified: login redirect, 401 gating, callback validation all live. Client sign-in UI swap lands in Phase 4. Production Google sign-in remains a WorkOS dashboard toggle + one Google OAuth client form, if wanted.
 
 ### Phase 4 — Client port
 
