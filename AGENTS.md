@@ -37,6 +37,7 @@ Local CI and remote CI run the identical commands: `vp exec wrangler types && vp
 
 ## Rules
 
+- After fully completing a feature, change, or bug fix, commit and push it.
 - Domain logic lives in `shared/` and stays platform-free. UI state changes flow through the sync client → HTTP adapter → Durable Object.
 - Never commit secrets. `.dev.vars` is gitignored. `worker-configuration.d.ts` is generated and gitignored — do not hand-edit it; rerun `wrangler types`.
 - Vendored bundles in `client/vendor/` are pinned upstream artifacts; verify SHA-256 against the README if ever regenerated.

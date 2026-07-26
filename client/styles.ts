@@ -339,10 +339,7 @@ h1 { margin: 0; font-size: clamp(30px, 4vw, 38px); line-height: 1.08; letter-spa
 .inspector-title {
   width: 100%;
   min-height: 44px;
-  max-height: 132px;
   padding: 0;
-  resize: none;
-  overflow: hidden;
   border: 0;
   outline: 0;
   background: transparent;

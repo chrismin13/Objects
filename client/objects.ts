@@ -3955,7 +3955,7 @@ function renderInspector(force = false) {
     : "its scheduled date";
   inspector.innerHTML = `<div class="inspector-scroll" data-task-id="${esc(task.id)}">
     <div class="inspector-top"><span class="inspector-status">${task.status === "completed" ? "Completed" : task.status === "canceled" ? "Canceled" : isTrashed(task) ? "In trash" : task.repeat ? "Repeating Template" : task.workspaceTemplateId ? "Repeating Project Template item" : task.repeatTemplateId ? "Occurrence" : "To-do"}</span><wa-button class="inspector-close-button" size="s" appearance="plain" data-inspector-action="close" data-drawer="close" aria-label="Close details">${icon("x")}</wa-button></div>
-    <textarea id="inspector-title" class="inspector-title" data-field="title" rows="1" placeholder="To-do title" ${stoppedTemplate ? "disabled" : ""}>${esc(task.title)}</textarea>
+    <input id="inspector-title" class="inspector-title" data-field="title" type="text" maxlength="500" value="${esc(task.title)}" placeholder="To-do title" ${stoppedTemplate ? "disabled" : ""}>
     ${task.workspaceTemplateId ? `<div class="occurrence-notice">${icon("repeat")}<div><strong>Part of a Repeating Project Template</strong><p>Changes here affect future Project Occurrences only.${stoppedTemplate ? " This stopped Template is read-only." : ""}</p></div></div>` : ""}
     ${task.repeatTemplateId ? `<div class="occurrence-notice">${icon("repeat")}<div><strong>Part of a repeating schedule</strong><p>${occurrenceTemplate ? `Created by “${esc(occurrenceTemplate.title)}”` : "Created by a Repeating Template"} for ${esc(occurrenceDate)}. Editing this to-do changes only this Occurrence.</p>${occurrenceTemplate ? '<button class="checklist-add" type="button" data-inspector-action="open-repeat-template">Open Repeating Template</button>' : ""}</div></div>` : ""}
     ${ui.markdownPreview ? `<div class="markdown-preview">${renderMarkdown(task.notes)}</div>` : `<textarea class="inspector-notes" data-field="notes" placeholder="Notes (Markdown supported)" ${stoppedTemplate ? "disabled" : ""}>${esc(task.notes)}</textarea>`}
@@ -3990,7 +3990,6 @@ function renderInspector(force = false) {
     <div class="inspector-actions">${task.repeat ? `<button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button>${stoppedTemplate ? `<button class="danger-button" data-inspector-action="delete-repeat-template">${icon("trash")} Delete Repeating Template</button>` : ""}` : task.workspaceTemplateId ? `${stoppedTemplate ? "" : `<button class="danger-button" data-inspector-action="remove-template-item">${icon("trash")} Remove from Template</button>`}` : `${!isTrashed(task) ? `<button class="button" data-inspector-action="move">Move…</button><button class="button" data-inspector-action="share">Share</button><button class="button" data-inspector-action="copy-link">Copy link</button><button class="button" data-inspector-action="duplicate">Duplicate</button>${task.status === "open" && task.repeatTemplateId ? '<button class="button" data-inspector-action="skip-occurrence">Skip Occurrence</button>' : task.status === "open" ? '<button class="button" data-inspector-action="cancel">Cancel to-do</button>' : ""}` : ""}${isTrashed(task) ? `<button class="button" data-inspector-action="restore">Restore</button><button class="danger-button" data-inspector-action="delete-forever">${icon("trash")} Delete forever</button>` : `<button class="danger-button" data-inspector-action="trash">${icon("trash")} Move to Trash</button>`}`}</div>
   </div>`;
   const nextPane = $(".inspector-scroll", inspector);
-  resizeInspectorTitle($("#inspector-title", inspector));
   nextPane?.addEventListener("input", handleInspectorInput);
   nextPane?.addEventListener("change", handleInspectorChange);
   nextPane?.addEventListener("click", handleInspectorClick);
@@ -4120,14 +4119,6 @@ function updateNoteFind(direction = 0, focusNote = false) {
   }
 }
 
-function resizeInspectorTitle(title) {
-  if (!title) return;
-  title.style.height = "0px";
-  const height = Math.min(title.scrollHeight, 132);
-  title.style.height = `${height}px`;
-  title.style.overflowY = title.scrollHeight > 132 ? "auto" : "hidden";
-}
-
 function handleInspectorInput(event) {
   const task = currentTask();
   if (!task) return;
@@ -4138,7 +4129,6 @@ function handleInspectorInput(event) {
   }
   const field = event.target.dataset.field;
   if (field === "title" || field === "notes") task[field] = event.target.value;
-  if (field === "title") resizeInspectorTitle(event.target);
   const checkRow = event.target.closest("[data-check-id]");
   if (checkRow && event.target.dataset.checkField === "title") {
     const item = task.checklist.find((check) => check.id === checkRow.dataset.checkId);
