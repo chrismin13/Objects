@@ -41,19 +41,19 @@ WorkOS AuthKit integrated: `/auth/login` → hosted AuthKit, `/auth/callback` ex
 
 `client/index.tsx` runs on WorkOS sessions (`/api/me`), direct imports replace all four gzip/blob-URL runtime loaders, and `client/workspace/http-adapter.tsx` implements `WorkspaceSyncAdapter` over the Worker routes (refresh-on-focus/online/visibility for invalidation, per the behavior note). Deleted: `server/`, `scripts/`, all `packed.ts` files and loaders, `lakebed.json`, `docs/runtime-packaging.md`. Vendored SortableJS/WebAwesome decoded to plain files (SHA-256 verified against the vendor README). `shared/state.ts` created for the legacy interface types the dialogs assumed (they typechecked as `any` under Lakebed). Manifest is `public/manifest.webmanifest`; `sw.js` is generated per build by the `objectsPwa` Vite plugin with hashed precache + cache revision. Verified end-to-end locally in a browser: sign-in → boot → natural-language capture → DO sync → reload persistence. Deployed; `sw.js`, manifest, bundle, and 401 gating verified in production. `lakebed-adapter-core.ts` renamed to `adapter-core.ts` with export renames; test-suite codemod absorbed it.
 
-**Follow-up noted:** 80 lint warnings in legacy client code catalogued for a cleanup pass (unbound-method, unused vars, sort-compare); `migrationCommandForQuery` in adapter-core is dead code retained for its test coverage until Phase 5 cleanup.
+**Follow-up noted:** 80 non-failing lint warnings remain in legacy client code (mostly unbound-method, unused vars, and sort-compare) for a separate cleanup pass.
 
-### Phase 5 — Pipeline — **MOSTLY DONE**
+### Phase 5 — Pipeline — **DONE**
 
-Local pipeline is the gate: `vp check && vp test --run && vp build` (+ `wrangler deploy --dry-run` for size). AGENTS.md and README.md rewritten for the new toolchain. Remaining: remote CI wrapper (GitHub Actions or Workers Builds) and the Phase 5 cleanup items (dead migration helpers, warning pass).
+Local gate: `vp check && vp test --run && vp build` (+ `wrangler deploy --dry-run` for size). `.github/workflows/ci.yml` is a credential-free wrapper around the identical commands. Dead migration helpers/tests removed. AGENTS.md and README.md describe the new toolchain; `DEPLOYMENT.md` records all account setup, secrets, manual configuration, deploy, verification, rollback, and recovery steps.
 
-### Phase 6 — Cutover and retire
+### Phase 6 — Cutover and retire — **WAITING ON ONE DNS DELETE**
 
-1. Add `routes: [{ pattern: "objects.chrismin13.com", custom_domain: true }]`; deploy. Same-zone change — Cloudflare re-points DNS and issues the cert itself, no record choreography. (The `docs/` GitHub Pages landing currently on that hostname is superseded by the app.)
-2. Verify production: fresh sign-up, sync, offline, capture, backup import of a real legacy JSON file.
-3. Keep the Lakebed deployment live (untouched at objects.lakebed.app) as rollback for ~2 weeks. Rollback is a DNS/route flip, instant, since the zone is already on Cloudflare.
-4. Announce/window for existing users to download their JSON backup and import it on the new site.
-5. Retire: terminate the Lakebed deploy, remove `lakebed.json`, delete remaining Lakebed docs, final `AGENTS.md` rewrite.
+- `wrangler.jsonc` declares `objects.chrismin13.com` as a Workers custom domain.
+- The `docs/` GitHub Pages marketing site is deleted; production should open directly into the app.
+- User imported and verified real production data on Cloudflare.
+- Final old-platform deploy `dep_rarwdUj4I9LZJWoX` terminated; CLI logged out and local state/cache removed. No tracked source/current docs reference the retired platform.
+- Cloudflare attachment is ready but returns API error 100117/HTTP 409 because the old externally managed `objects → chrismin13.github.io` CNAME still exists. Delete that DNS record in the Cloudflare dashboard, run `vp build && vp exec wrangler deploy`, add the WorkOS callback URI, then verify the checklist in `DEPLOYMENT.md`.
 
 ## Open decisions (resolve in flight)
 

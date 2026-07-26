@@ -6,7 +6,7 @@ Objects is a polished, full-featured task manager inspired by Things 3, built wi
 
 The client is a Preact PWA; sync runs through an offline-first engine in `shared/` to a per-user SQLite-backed Durable Object; sign-in is hosted WorkOS AuthKit with sealed-cookie sessions.
 
-Live app: [objects.accounts-7ac.workers.dev](https://objects.accounts-7ac.workers.dev) (moving to [objects.chrismin13.com](https://objects.chrismin13.com) at cutover; the legacy Lakebed deployment at [objects.lakebed.app](https://objects.lakebed.app) remains up as rollback for now).
+Live app: [objects.chrismin13.com](https://objects.chrismin13.com). The Cloudflare-provided fallback is [objects.accounts-7ac.workers.dev](https://objects.accounts-7ac.workers.dev).
 
 ## Features
 
@@ -62,7 +62,7 @@ vp exec wrangler login   # once
 vp exec wrangler deploy
 ```
 
-All infrastructure is declared in `wrangler.jsonc` (Worker, static assets, Durable Object binding + migration, WorkOS client ID var, custom domain at cutover). Secrets are managed with `wrangler secret put` and never committed.
+Infrastructure is declared in `wrangler.jsonc`; secrets are managed with `wrangler secret put` and never committed. See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the complete account setup, manual configuration, recovery, deployment, and verification runbook.
 
 ## Install as an app
 
@@ -97,16 +97,16 @@ Authenticated tools can send the same capture fields as JSON to `POST /api/tasks
 
 ## Data model
 
-Objects stores each account's portable Workspace in private, owner-scoped Lakebed rows. Client edits are sent as compact field-level changes. Lakebed applies each change as one transaction, records its mutation identity, and returns the merged Workspace. Retrying an old or uncertain mutation identity returns the current saved Workspace instead of running that mutation again.
+Objects stores each account's portable Workspace in a private SQLite-backed Durable Object selected by the immutable WorkOS user ID. Client edits are sent as compact field-level changes. The Durable Object applies each change in one serialized transaction, records its mutation identity, and returns the merged Workspace. Retrying an old or uncertain mutation identity returns the current saved Workspace instead of applying that mutation twice.
 
-The app keeps an account-scoped copy and pending-change queue in device storage. A local action appears immediately and remains available after a reload or temporary loss of the session. When the connection returns, Objects sends the pending changes in order. It does not cache private Lakebed API or authentication responses in the service worker.
+The app keeps an account-scoped copy and pending-change queue in device storage. A local action appears immediately and remains available after a reload or temporary loss of the session. When the connection returns, Objects sends the pending changes in order. It does not cache private API or authentication responses in the service worker.
 
 Multi-device conflicts follow one fixed rule. Changes to different fields are combined. If two devices changed the same field from the same older value, the later submitted local change is kept and Objects shows conflict feedback. If one device permanently deleted an item, the durable deletion marker always wins over a stale edit. Repeating Occurrences and capture receipts are also checked by their schedule or submission identity so concurrent retries create one result.
 
-Until an account has a matching migration marker, Objects rebuilds its retained legacy `workspaceChunks` or normalized rows and passes that data through the same tested importer as a manual backup. It safely merges Workspace-only work, then saves the complete result through normal sync. The retained rows remain a read-only migration backup; the restored interface never reads or mutates them directly. Data can still be exported as one portable JSON backup from Settings at any time.
+Data can be exported as one portable JSON backup from Settings at any time and imported into a fresh account without server-side migration tooling.
 
 ## Notes
 
-Native Apple-only surfaces such as Siri, Apple Watch, widgets, Share Extensions, and Mail to Things cannot run inside a web capsule. Objects covers their portable workflows with a responsive web UI, natural-language capture, URL capture, reminders, and an authenticated endpoint.
+Native Apple-only surfaces such as Siri, Apple Watch, widgets, Share Extensions, and Mail to Things cannot run inside a web app. Objects covers their portable workflows with a responsive web UI, natural-language capture, URL capture, reminders, and an authenticated endpoint.
 
 Objects is an independent project and is not affiliated with or endorsed by Cultured Code. “Things” is a trademark of its respective owner.

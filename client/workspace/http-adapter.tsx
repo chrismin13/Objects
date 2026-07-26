@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import type { WorkspaceSyncAdapter } from "../../shared/workspace/sync";
-import { createGatewayWorkspaceAdapter } from "./adapter-core";
+import { createGatewayWorkspaceAdapter, parseWorkspaceQuery } from "./adapter-core";
 
 export type HttpAdapterState = {
   adapter: WorkspaceSyncAdapter;
@@ -9,16 +9,10 @@ export type HttpAdapterState = {
   ownerIdentity: string;
 };
 
-type WorkspaceQueryBody = {
-  ownerIdentity: string;
-  snapshot: unknown;
-};
-
 /**
- * WorkspaceSyncAdapter over the Objects Worker HTTP API. The Lakebed
- * adapter's live-query invalidation becomes explicit refresh signals:
- * window focus, coming back online, and tab visibility — the sync client
- * already rebuilds pending deltas over whatever the server returns.
+ * WorkspaceSyncAdapter over the Objects Worker HTTP API. Remote invalidation
+ * uses explicit refresh signals: window focus, coming back online, and tab
+ * visibility. The sync client rebuilds pending deltas over the returned state.
  */
 export function useHttpWorkspaceAdapter(session: { userId: string }): HttpAdapterState {
   const ownerIdentity = session.userId;
@@ -33,10 +27,12 @@ export function useHttpWorkspaceAdapter(session: { userId: string }): HttpAdapte
     void fetch("/api/workspace", { credentials: "same-origin" })
       .then((response) => {
         if (!response.ok) throw new Error(`Workspace load failed (${response.status})`);
-        return response.json() as Promise<WorkspaceQueryBody>;
+        return response.json() as Promise<unknown>;
       })
-      .then((body) => {
+      .then((value) => {
         if (!active) return;
+        const body = parseWorkspaceQuery(value);
+        if (!body) throw new Error("Invalid Workspace load result");
         snapshotRef.current = body.snapshot ? JSON.stringify(body.snapshot) : null;
         setLoading(false);
         for (const listener of listeners.current) listener();
@@ -55,10 +51,7 @@ export function useHttpWorkspaceAdapter(session: { userId: string }): HttpAdapte
   useEffect(() => {
     const refresh = () => {
       void fetch("/api/workspace", { credentials: "same-origin" })
-        .then(
-          (response) =>
-            (response.ok ? response.json() : null) as Promise<WorkspaceQueryBody | null>,
-        )
+        .then(async (response) => (response.ok ? parseWorkspaceQuery(await response.json()) : null))
         .then((body) => {
           if (!body) return;
           const next = body.snapshot ? JSON.stringify(body.snapshot) : null;

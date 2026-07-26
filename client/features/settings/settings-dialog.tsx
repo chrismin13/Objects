@@ -126,7 +126,7 @@ export function SettingsDialog({
           <WaTabPanel name="general" active>
             <div class="settings-panel">
               <section class="settings-card">
-                <h3>Lakebed account</h3>
+                <h3>Account</h3>
                 <div class="settings-control-row">
                   <span>
                     Signed in as <strong>{userName}</strong>

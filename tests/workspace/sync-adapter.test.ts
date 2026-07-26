@@ -3,7 +3,6 @@ import { test } from "vite-plus/test";
 
 import {
   createGatewayWorkspaceAdapter,
-  migrationCommandForQuery,
   parseWorkspaceQuery,
   scopeWorkspaceAdapter,
 } from "../../client/workspace/adapter-core.ts";
@@ -89,7 +88,7 @@ test("the in-memory adapter follows the shared sync contract", async () => {
   await runAdapterContract(store.forOwner("alice"));
 });
 
-test("the serialized Lakebed adapter follows the shared sync contract", async () => {
+test("the serialized gateway adapter follows the shared sync contract", async () => {
   const store = createInMemorySyncStore(() => "2026-07-19T09:00:00.000Z");
   const durable = store.forOwner("alice");
   let serializedSnapshot: string | null = null;
@@ -112,7 +111,7 @@ test("the serialized Lakebed adapter follows the shared sync contract", async ()
   await runAdapterContract(adapter);
 });
 
-test("the Lakebed query stays loading while its serialized result is empty", () => {
+test("the serialized query stays loading while its serialized result is empty", () => {
   const loaded = { ownerIdentity: "guest:alice", snapshot: null };
   assert.equal(parseWorkspaceQuery(undefined), undefined);
   assert.equal(parseWorkspaceQuery(null), undefined);
@@ -125,31 +124,7 @@ test("the Lakebed query stays loading while its serialized result is empty", () 
   });
 });
 
-test("a prepared legacy merge becomes one normal sync command", () => {
-  const document = createEmptyWorkspace("2026-07-20T09:00:00.000Z");
-  document.sync.legacyMigration = {
-    updatedAt: "2026-07-19T11:55:16.000Z",
-    mutationId: "legacy-final-save",
-  };
-  const command = migrationCommandForQuery({
-    ownerIdentity: "google:owner",
-    snapshot: { revision: 8, document },
-    migrationRequired: true,
-  });
-
-  assert.equal(command?.expectedRevision, 8);
-  assert.equal(command?.mutationId, "legacy-migration-2026-07-19T11:55:16.000Z-legacy-final-save");
-  assert.equal(command?.document, document);
-  assert.equal(
-    migrationCommandForQuery({
-      ownerIdentity: "google:owner",
-      snapshot: { revision: 8, document },
-    }),
-    null,
-  );
-});
-
-test("the Lakebed adapter cannot cross an unconfirmed account boundary", async () => {
+test("the scoped adapter cannot cross an unconfirmed account boundary", async () => {
   let loads = 0;
   let saves = 0;
   let subscriptions = 0;

@@ -14,30 +14,7 @@ export type WorkspaceGateway = {
 export type WorkspaceQuery = {
   ownerIdentity: string;
   snapshot: WorkspaceSyncSnapshot | null;
-  migrationRequired?: boolean;
 };
-
-function migrationMutationId(updatedAt: string, sourceMutationId: string): string {
-  const fullIdentity = `legacy-migration-${updatedAt}-${sourceMutationId}`;
-  if (fullIdentity.length <= 200) return fullIdentity;
-  let hash = 2166136261;
-  for (const character of sourceMutationId) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return `legacy-migration-${updatedAt}-${sourceMutationId.length}-${(hash >>> 0).toString(16)}`;
-}
-
-export function migrationCommandForQuery(query: WorkspaceQuery): WorkspaceSyncCommand | null {
-  const snapshot = query.snapshot;
-  const migration = snapshot?.document.sync.legacyMigration;
-  if (!query.migrationRequired || !snapshot || !migration) return null;
-  return {
-    expectedRevision: snapshot.revision,
-    mutationId: migrationMutationId(migration.updatedAt, migration.mutationId),
-    document: snapshot.document,
-  };
-}
 
 export function parseWorkspaceQuery(value: unknown): WorkspaceQuery | undefined {
   if (
@@ -55,16 +32,11 @@ export function parseWorkspaceQuery(value: unknown): WorkspaceQuery | undefined 
     typeof (parsed as { ownerIdentity?: unknown }).ownerIdentity !== "string" ||
     !("snapshot" in parsed)
   )
-    throw new Error("Invalid Lakebed Workspace query result");
+    throw new Error("Invalid Workspace query result");
   const snapshot = (parsed as { snapshot: unknown }).snapshot;
   if (snapshot !== null && (typeof snapshot !== "object" || Array.isArray(snapshot))) {
-    throw new Error("Invalid Lakebed Workspace snapshot");
+    throw new Error("Invalid Workspace snapshot");
   }
-  if (
-    "migrationRequired" in parsed &&
-    typeof (parsed as { migrationRequired?: unknown }).migrationRequired !== "boolean"
-  )
-    throw new Error("Invalid Lakebed Workspace migration state");
   return parsed as WorkspaceQuery;
 }
 

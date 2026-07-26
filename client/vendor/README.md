@@ -25,4 +25,4 @@ The production bundle contains Button, Button Group, Checkbox, Details, Dialog, 
 
 The local bundle is generated from `modular/sortable.complete.esm.js` and includes the MultiDrag plugin, vendored verbatim as `sortable.js` with a minimal typed surface in `sortable.d.ts`.
 
-These bundles were previously stored gzip-packed to fit Lakebed's 2 MiB deploy limit; on Cloudflare they are plain files again. The recorded SHA-256 hashes above verify the vendored bytes are unchanged by that transition.
+These pinned bundles are stored as plain files. The recorded SHA-256 hashes above verify their bytes against the upstream artifacts.

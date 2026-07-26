@@ -7,6 +7,7 @@
     "WORKOS_CLIENT_ID": "client_01KYCD74DQYZY1A1B6V4NBGQBV",
   },
   "main": "./worker/index.ts",
+  "routes": [{ "pattern": "objects.chrismin13.com", "custom_domain": true }],
   "assets": {
     "not_found_handling": "single-page-application",
     "binding": "ASSETS",

@@ -61,8 +61,6 @@ export default {
       return Response.json({
         ownerIdentity: session.userId,
         snapshot,
-        migrationReport: null,
-        migrationRequired: false,
       });
     }
 

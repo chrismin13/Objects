@@ -33,7 +33,7 @@ Local CI and remote CI run the identical commands: `vp check && vp test --run &&
 - Secrets: `WORKOS_API_KEY`, `WORKOS_COOKIE_PASSWORD` (production: `wrangler secret put`; local: `.dev.vars`, gitignored). `WORKOS_CLIENT_ID` is public, in `wrangler.jsonc` `vars`.
 - Static assets serve free; `run_worker_first` routes only `/api/*` and `/auth/*` through the Worker. Non-API routes delegate to `env.ASSETS.fetch(request)` for the SPA fallback.
 - `sw.js` is generated at build time (precache list + cache revision) by the `objectsPwa` plugin in `vite.config.ts`; the manifest is `public/manifest.webmanifest`.
-- Production: https://objects.accounts-7ac.workers.dev (custom domain `objects.chrismin13.com` at cutover — see rollout plan Phase 6). Legacy Lakebed production at https://objects.lakebed.app remains live as rollback until then.
+- Production: https://objects.chrismin13.com. Cloudflare fallback: https://objects.accounts-7ac.workers.dev. See `DEPLOYMENT.md` for account setup, secrets, deploy, rollback, and recovery.
 
 ## Rules
 

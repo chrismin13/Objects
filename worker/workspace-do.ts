@@ -40,10 +40,8 @@ function newServerWorkspace(now: string): WorkspaceDocument {
 /**
  * One Durable Object per owner. The object is single-threaded, so each
  * read-resolve-write sequence is serialized by the runtime, and
- * transactionSync makes every mutation atomic. This is the Cloudflare port
- * of the Lakebed `replacementWorkspace` query and `saveReplacementWorkspace`
- * mutation (retained-legacy migration is intentionally dropped: the new
- * platform starts fresh and users import backups client-side).
+ * transactionSync makes every mutation atomic. Saves follow the revisioned,
+ * idempotent sync contract in shared/workspace/sync.ts.
  */
 export class WorkspaceDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
