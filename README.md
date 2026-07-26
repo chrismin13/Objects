@@ -47,9 +47,10 @@ vp dev       # Vite dev server + workerd; local Durable Object state persists ac
 Validate and test:
 
 ```sh
-vp check         # format + lint + typecheck
-vp test --run    # full suite inside workerd
-vp build         # client + worker bundles
+vp exec wrangler types   # generate Cloudflare binding types after config changes
+vp check                 # format + lint + typecheck
+vp test --run            # full suite inside workerd
+vp build                 # client + worker bundles
 vp exec wrangler deploy --dry-run   # validate upload + size
 ```
 

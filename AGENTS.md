@@ -24,7 +24,7 @@ vp exec wrangler deploy --dry-run    # validate + show upload size
 vp exec wrangler types               # regenerate worker-configuration.d.ts after wrangler.jsonc changes
 ```
 
-Local CI and remote CI run the identical commands: `vp check && vp test --run && vp build`.
+Local CI and remote CI run the identical commands: `vp exec wrangler types && vp check && vp test --run && vp build`.
 
 ## Platform facts
 

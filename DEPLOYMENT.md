@@ -114,6 +114,7 @@ These steps assume the repository is complete but the Worker does not yet exist.
 2. Run the exact local gate and build:
 
    ```sh
+   vp exec wrangler types
    vp check
    vp test --run
    vp build
@@ -151,6 +152,7 @@ Redeploying the same Worker does not erase Durable Object data. Keep the same Cl
 git pull --ff-only
 export PATH="$HOME/.vite-plus/bin:$PATH"
 vp install
+vp exec wrangler types
 vp check
 vp test --run
 vp build

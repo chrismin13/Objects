@@ -21,4 +21,4 @@ jobs:
       - name: Install dependencies
         run: vp install
       - name: Run the local CI gate
-        run: vp check && vp test --run && vp build
+        run: vp exec wrangler types && vp check && vp test --run && vp build
