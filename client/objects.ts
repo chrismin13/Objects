@@ -533,7 +533,8 @@ export function syncObjectsState(serializedState) {
       [...ui.selectedTaskIds].filter((id) => ui.state.tasks.some((task) => task.id === id)),
     );
     if (remote.syncMutationId) ui.ownMutationIds.delete(remote.syncMutationId);
-    render();
+    const enteringToDo = document.activeElement?.matches?.(".quick-add-input");
+    if (!enteringToDo) render();
     if (logged || buildChangeSet()) scheduleSave();
   } catch (_) {}
 }
