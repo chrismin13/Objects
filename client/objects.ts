@@ -1682,7 +1682,10 @@ function createMobileDrawer(id, label, placement, panel) {
   drawer.className = `objects-mobile-drawer ${placement === "start" ? "sidebar-drawer" : "inspector-drawer"}`;
   drawer.setAttribute("label", label);
   drawer.setAttribute("placement", placement);
-  if (placement === "start") drawer.setAttribute("without-header", "");
+  if (placement === "start") {
+    drawer.setAttribute("without-header", "");
+    drawer.setAttribute("light-dismiss", "");
+  }
   $("#drawer-root").appendChild(drawer);
   drawer.appendChild(panel);
   return drawer;
