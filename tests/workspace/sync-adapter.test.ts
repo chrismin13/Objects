@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
 
 import {
-  createLakebedWorkspaceAdapter,
+  createGatewayWorkspaceAdapter,
   migrationCommandForQuery,
-  parseLakebedWorkspaceQuery,
+  parseWorkspaceQuery,
   scopeWorkspaceAdapter,
-} from "../../client/workspace/lakebed-adapter-core.ts";
+} from "../../client/workspace/adapter-core.ts";
 import { createEmptyWorkspace } from "../../shared/workspace/workspace.ts";
 import {
   createInMemorySyncStore,
@@ -94,7 +94,7 @@ test("the serialized Lakebed adapter follows the shared sync contract", async ()
   const durable = store.forOwner("alice");
   let serializedSnapshot: string | null = null;
   const listeners = new Set<() => void>();
-  const adapter = createLakebedWorkspaceAdapter({
+  const adapter = createGatewayWorkspaceAdapter({
     readSnapshot: () => serializedSnapshot,
     async saveCommand(serialized) {
       const result = await durable.save(JSON.parse(serialized));
@@ -114,12 +114,12 @@ test("the serialized Lakebed adapter follows the shared sync contract", async ()
 
 test("the Lakebed query stays loading while its serialized result is empty", () => {
   const loaded = { ownerIdentity: "guest:alice", snapshot: null };
-  assert.equal(parseLakebedWorkspaceQuery(undefined), undefined);
-  assert.equal(parseLakebedWorkspaceQuery(null), undefined);
-  assert.equal(parseLakebedWorkspaceQuery(""), undefined);
-  assert.equal(parseLakebedWorkspaceQuery([]), undefined);
-  assert.deepEqual(parseLakebedWorkspaceQuery(loaded), loaded);
-  assert.deepEqual(parseLakebedWorkspaceQuery('{"ownerIdentity":"guest:alice","snapshot":null}'), {
+  assert.equal(parseWorkspaceQuery(undefined), undefined);
+  assert.equal(parseWorkspaceQuery(null), undefined);
+  assert.equal(parseWorkspaceQuery(""), undefined);
+  assert.equal(parseWorkspaceQuery([]), undefined);
+  assert.deepEqual(parseWorkspaceQuery(loaded), loaded);
+  assert.deepEqual(parseWorkspaceQuery('{"ownerIdentity":"guest:alice","snapshot":null}'), {
     ownerIdentity: "guest:alice",
     snapshot: null,
   });

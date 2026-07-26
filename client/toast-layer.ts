@@ -6,7 +6,9 @@ export type ToastLayer = {
 };
 
 export type ToastLayerParent = {
-  append(child: ToastLayer): void;
+  // DOM `append` accepts (Node|string)[]; structurally loose so query
+  // results, web components, and test fakes all satisfy it.
+  append(child: unknown): void;
 };
 
 function isOpen(region: ToastLayer): boolean {

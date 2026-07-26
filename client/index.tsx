@@ -1,23 +1,83 @@
-import { SignInWithGoogle, signOut, useAuth } from "lakebed/client";
-import { Component } from "preact";
+import { Component, render } from "preact";
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { InterfaceChangeSet } from "../shared/workspace/interface-bridge";
-import type { WorkspaceSyncClient } from "../shared/workspace/sync-client";
-import { initializePwa } from "./pwa";
-import { useLakebedWorkspaceAdapter } from "./workspace/lakebed-adapter";
-import { scopeWorkspaceAdapter } from "./workspace/lakebed-adapter-core";
-import { workspaceRuntimeReady } from "./workspace/runtime-loader";
-import { initThemeBoot } from "./theme/boot";
-import { objectsThemeReady } from "./theme/loader";
-import { webAwesomeReady } from "./vendor/webawesome/loader";
-import { objectsRuntimeReady } from "./runtime/loader";
 
-type AuthIdentity = ReturnType<typeof useAuth>;
+import type { InterfaceChangeSet } from "../shared/workspace/interface-bridge";
+import {
+  applyInterfaceChangeSetToWorkspace,
+  interfaceLocationForWorkspaceUrl,
+  workspaceDocumentToInterfaceState,
+} from "../shared/workspace/interface-bridge";
+import type { WorkspaceSyncClient } from "../shared/workspace/sync-client";
+import { createWorkspaceSyncClient } from "../shared/workspace/sync-client";
+import { createEmptyWorkspace } from "../shared/workspace/workspace";
+import { initializePwa } from "./pwa";
+import { WaDropdown } from "./ui/webawesome";
+import { mountObjects, syncObjectsState } from "./objects";
+import { useHttpWorkspaceAdapter } from "./workspace/http-adapter";
+import { scopeWorkspaceAdapter } from "./workspace/adapter-core";
+import { initThemeBoot } from "./theme/boot";
+import { objectsTheme } from "./theme";
+import "./vendor/webawesome/webawesome.js";
 
 initThemeBoot();
 
-void webAwesomeReady;
+type AuthState = {
+  isLoading: boolean;
+  isGuest: boolean;
+  userId: string | null;
+  displayName: string | null;
+  email: string | null;
+};
+
+const signedOut: AuthState = {
+  isLoading: false,
+  isGuest: true,
+  userId: null,
+  displayName: null,
+  email: null,
+};
+
+function useSession(): AuthState {
+  const [state, setState] = useState<AuthState>({ ...signedOut, isLoading: true });
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/me", { credentials: "same-origin" })
+      .then(async (response) => {
+        if (!active) return;
+        if (!response.ok) {
+          setState(signedOut);
+          return;
+        }
+        const body = (await response.json()) as {
+          user: {
+            userId: string;
+            email: string;
+            firstName: string | null;
+            lastName: string | null;
+          };
+        };
+        const displayName =
+          [body.user.firstName, body.user.lastName].filter(Boolean).join(" ") || body.user.email;
+        setState({
+          isLoading: false,
+          isGuest: false,
+          userId: body.user.userId,
+          displayName,
+          email: body.user.email,
+        });
+      })
+      .catch(() => {
+        // Network failure: stay in the loading state so the offline and
+        // recovery cards take over instead of flashing a sign-in prompt.
+        if (active) setState((current) => ({ ...current, isLoading: true }));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return state;
+}
 
 function localToday(): string {
   const now = new Date();
@@ -64,9 +124,6 @@ function SkeletonTaskRow({ title, meta }: { title: string; meta?: string }) {
 
 // Mirrors the real shell geometry (sidebar + main pane) with shimmering
 // placeholders, so the app appears to "fill in" once the workspace is ready.
-// Placeholders reuse the real layout classes; shapes inside match the
-// things-styles metrics (34px button boxes, 30px space pill, 42px mobile
-// header buttons) so the swap doesn't shift.
 function ShellSkeleton() {
   return (
     <div className="app-shell boot-shell" aria-hidden="true">
@@ -176,15 +233,16 @@ function SignInCard() {
   return (
     <section className="auth-card" aria-labelledby="auth-title">
       <BrandMark />
-      <p className="auth-brand">Objects on Lakebed</p>
+      <p className="auth-brand">Objects</p>
       <h1 id="auth-title">Your tasks, privately yours</h1>
       <p className="auth-copy">
-        Sign in with Google to create a private workspace that follows you across devices.
+        Sign in to create a private workspace that follows you across devices.
       </p>
-      <SignInWithGoogle className="button primary auth-submit" />
+      <a className="button primary auth-submit" href="/auth/login">
+        Sign in
+      </a>
       <p className="auth-footnote">
-        Authentication and identity are provided by Lakebed. Objects never uses your email as an
-        authorization key.
+        Authentication is provided by WorkOS. Objects never uses your email as an authorization key.
       </p>
     </section>
   );
@@ -194,7 +252,7 @@ function OfflineCard() {
   return (
     <section className="auth-card" aria-labelledby="offline-title">
       <BrandMark />
-      <p className="auth-brand">Objects on Lakebed</p>
+      <p className="auth-brand">Objects</p>
       <h1 id="offline-title">Objects is offline</h1>
       <p className="auth-copy">
         The installed app shell is ready. Reconnect to unlock your private workspace and resume
@@ -204,8 +262,8 @@ function OfflineCard() {
         <span /> Waiting for a connection…
       </div>
       <p className="auth-footnote">
-        Objects deliberately does not store private Lakebed API or authentication responses in the
-        shared app cache.
+        Objects deliberately does not store private API or authentication responses in the shared
+        app cache.
       </p>
     </section>
   );
@@ -215,11 +273,9 @@ function RecoveryCard() {
   return (
     <section className="auth-card" aria-labelledby="session-title">
       <BrandMark />
-      <p className="auth-brand">Objects on Lakebed</p>
+      <p className="auth-brand">Objects</p>
       <h1 id="session-title">The session check is taking longer than expected</h1>
-      <p className="auth-copy">
-        Your data is safe. Reconnect the current tab to Lakebed without closing it.
-      </p>
+      <p className="auth-copy">Your data is safe. Reconnect the current tab without closing it.</p>
       <button
         className="button primary auth-submit"
         type="button"
@@ -230,8 +286,6 @@ function RecoveryCard() {
     </section>
   );
 }
-
-const WaDropdown = "wa-dropdown" as never;
 
 class StableObjectsDom extends Component {
   shouldComponentUpdate() {
@@ -338,8 +392,10 @@ class StableObjectsDom extends Component {
   }
 }
 
-function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean }) {
-  const { adapter, loading, ownerIdentity } = useLakebedWorkspaceAdapter();
+function ObjectsShell({ auth, online }: { auth: AuthState; online: boolean }) {
+  const { adapter, loading, ownerIdentity } = useHttpWorkspaceAdapter({
+    userId: auth.userId ?? "guest",
+  });
   const clientRef = useRef<WorkspaceSyncClient | null>(null);
   const [serializedState, setSerializedState] = useState<string | null>(null);
   const [stateTimedOut, setStateTimedOut] = useState(false);
@@ -354,60 +410,55 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
     const now = () => new Date().toISOString();
     const storageKey = `objects-workspace-interface-sync:${ownerIdentity}`;
     const scopedAdapter = scopeWorkspaceAdapter(adapter, ownerIdentity, () => ownerIdentity);
-    void workspaceRuntimeReady.then(
-      ({ createEmptyWorkspace, createWorkspaceSyncClient, workspaceDocumentToInterfaceState }) => {
-        if (!active) return;
-        const client = createWorkspaceSyncClient(
-          scopedAdapter,
-          {
-            load() {
-              try {
-                return localStorage.getItem(storageKey);
-              } catch {
-                return null;
-              }
-            },
-            save(serialized) {
-              try {
-                localStorage.setItem(storageKey, serialized);
-              } catch {
-                /* Local storage can be unavailable. */
-              }
-            },
-          },
-          now,
-        );
-        activeClient = client;
-        clientRef.current = client;
-        const showDocument = () => {
-          const document = client.read().snapshot?.document;
-          if (active && document)
-            setSerializedState(
-              JSON.stringify(workspaceDocumentToInterfaceState(document, localToday())),
-            );
-        };
-        unsubscribeClient = client.subscribe(showDocument);
-        unsubscribeAdapter = scopedAdapter.subscribe?.(() => void client.refresh());
-        void client
-          .initialize(() => {
-            const document = createEmptyWorkspace(now());
-            const spaceId = `space-${crypto.randomUUID()}`;
-            document.spaces.push({
-              id: spaceId,
-              title: "Personal",
-              color: "#e49b3c",
-              pinned: true,
-              order: 0,
-            });
-            document.settings.defaultSpaceId = spaceId;
-            return document;
-          })
-          .then(() => {
-            showDocument();
-            if (client.read().pendingCount) void client.flush();
-          });
+    const client = createWorkspaceSyncClient(
+      scopedAdapter,
+      {
+        load() {
+          try {
+            return localStorage.getItem(storageKey);
+          } catch {
+            return null;
+          }
+        },
+        save(serialized) {
+          try {
+            localStorage.setItem(storageKey, serialized);
+          } catch {
+            /* Local storage can be unavailable. */
+          }
+        },
       },
+      now,
     );
+    activeClient = client;
+    clientRef.current = client;
+    const showDocument = () => {
+      const document = client.read().snapshot?.document;
+      if (active && document)
+        setSerializedState(
+          JSON.stringify(workspaceDocumentToInterfaceState(document, localToday())),
+        );
+    };
+    unsubscribeClient = client.subscribe(showDocument);
+    unsubscribeAdapter = scopedAdapter.subscribe?.(() => void client.refresh());
+    void client
+      .initialize(() => {
+        const document = createEmptyWorkspace(now());
+        const spaceId = `space-${crypto.randomUUID()}`;
+        document.spaces.push({
+          id: spaceId,
+          title: "Personal",
+          color: "#e49b3c",
+          pinned: true,
+          order: 0,
+        });
+        document.settings.defaultSpaceId = spaceId;
+        return document;
+      })
+      .then(() => {
+        showDocument();
+        if (client.read().pendingCount) void client.flush();
+      });
     return () => {
       active = false;
       unsubscribeClient?.();
@@ -418,88 +469,72 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
 
   useEffect(() => {
     if (!ready || !serializedState) return;
-    let active = true;
-    let dispose: (() => void) | undefined;
-    void Promise.all([objectsRuntimeReady, workspaceRuntimeReady]).then(
-      ([{ mountObjects }, workspaceRuntime]) => {
-        if (!active) return;
-        const document = clientRef.current?.read().snapshot?.document;
-        const directLocation = document
-          ? workspaceRuntime.interfaceLocationForWorkspaceUrl(document, window.location.search)
-          : null;
-        if (directLocation) {
-          const identity = auth.userId || auth.displayName || "guest";
-          if (directLocation.activeSpaceId) {
-            try {
-              localStorage.setItem(
-                `objects-active-space:${identity}`,
-                directLocation.activeSpaceId,
-              );
-            } catch {
-              /* Local storage can be unavailable. */
-            }
-          }
-          if (directLocation.search !== window.location.search) {
-            history.replaceState({}, "", `${window.location.pathname}${directLocation.search}`);
-          }
+    const document = clientRef.current?.read().snapshot?.document;
+    const directLocation = document
+      ? interfaceLocationForWorkspaceUrl(document, window.location.search)
+      : null;
+    if (directLocation) {
+      const identity = auth.userId || auth.displayName || "guest";
+      if (directLocation.activeSpaceId) {
+        try {
+          localStorage.setItem(`objects-active-space:${identity}`, directLocation.activeSpaceId);
+        } catch {
+          /* Local storage can be unavailable. */
         }
-        dispose = mountObjects(serializedState, {
-          initializeState: async () => {
-            const document = clientRef.current?.read().snapshot?.document;
-            return document
-              ? JSON.stringify(
-                  workspaceRuntime.workspaceDocumentToInterfaceState(document, localToday()),
-                )
-              : serializedState;
-          },
-          saveChanges: async (serialized: string) => {
-            const client = clientRef.current;
-            const document = client?.read().snapshot?.document;
-            if (!client || !document) throw new Error("The Workspace is not ready to save.");
-            const changes = JSON.parse(serialized) as InterfaceChangeSet;
-            const next = workspaceRuntime.applyInterfaceChangeSetToWorkspace(document, changes, {
-              now: () => new Date().toISOString(),
-              createId: (kind) => `${kind}-${crypto.randomUUID()}`,
-            });
-            if (!next.ok) throw new Error(next.errors.join(" "));
-            client.stage(next.document, changes.mutationId);
-            const saved = await client.flush();
-            if (
-              saved.status === "offline" ||
-              saved.status === "retrying" ||
-              saved.status === "session-expired"
-            ) {
-              throw new Error("The Workspace is offline. Objects will retry this change.");
-            }
-            if (saved.rejected.some((item) => item.mutationId === changes.mutationId)) {
-              throw new Error(
-                saved.rejected
-                  .find((item) => item.mutationId === changes.mutationId)!
-                  .errors.join(" "),
-              );
-            }
-            return JSON.stringify({
-              updatedAt: new Date().toISOString(),
-              mutationId: changes.mutationId,
-            });
-          },
-          user: auth,
-          signOut: async () => {
-            await signOut();
-            window.location.reload();
-          },
+      }
+      if (directLocation.search !== window.location.search) {
+        history.replaceState({}, "", `${window.location.pathname}${directLocation.search}`);
+      }
+    }
+    const dispose = mountObjects(serializedState, {
+      initializeState: async () => {
+        const document = clientRef.current?.read().snapshot?.document;
+        return document
+          ? JSON.stringify(workspaceDocumentToInterfaceState(document, localToday()))
+          : serializedState;
+      },
+      saveChanges: async (serialized: string) => {
+        const client = clientRef.current;
+        const document = client?.read().snapshot?.document;
+        if (!client || !document) throw new Error("The Workspace is not ready to save.");
+        const changes = JSON.parse(serialized) as InterfaceChangeSet;
+        const next = applyInterfaceChangeSetToWorkspace(document, changes, {
+          now: () => new Date().toISOString(),
+          createId: (kind) => `${kind}-${crypto.randomUUID()}`,
+        });
+        if (!next.ok) throw new Error(next.errors.join(" "));
+        client.stage(next.document, changes.mutationId);
+        const saved = await client.flush();
+        if (
+          saved.status === "offline" ||
+          saved.status === "retrying" ||
+          saved.status === "session-expired"
+        ) {
+          throw new Error("The Workspace is offline. Objects will retry this change.");
+        }
+        if (saved.rejected.some((item) => item.mutationId === changes.mutationId)) {
+          throw new Error(
+            saved.rejected.find((item) => item.mutationId === changes.mutationId)!.errors.join(" "),
+          );
+        }
+        return JSON.stringify({
+          updatedAt: new Date().toISOString(),
+          mutationId: changes.mutationId,
         });
       },
-    );
+      user: auth,
+      signOut: async () => {
+        window.location.assign("/auth/logout");
+      },
+    });
     return () => {
-      active = false;
       dispose?.();
     };
   }, [ready]);
 
   useEffect(() => {
     if (typeof serializedState === "string" && serializedState.length > 0) {
-      void objectsRuntimeReady.then(({ syncObjectsState }) => syncObjectsState(serializedState));
+      syncObjectsState(serializedState);
     }
   }, [serializedState]);
 
@@ -532,70 +567,11 @@ function ObjectsShell({ auth, online }: { auth: AuthIdentity; online: boolean })
 }
 
 export function App() {
-  const auth = useAuth();
-  const [themeCss, setThemeCss] = useState("");
+  const auth = useSession();
   const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [authTimedOut, setAuthTimedOut] = useState(false);
-  const wasAuthenticated = useRef(false);
-  const localGuest =
-    typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   useEffect(() => {
-    let active = true;
-    void objectsThemeReady.then((css) => {
-      if (active) setThemeCss(css);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    document.title = "Objects";
-    const metadata = [
-      [
-        "meta",
-        "meta[name='viewport']",
-        { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
-      ],
-      ["link", "link[rel='manifest']", { rel: "manifest", href: "/manifest.webmanifest" }],
-      [
-        "meta",
-        "meta[name='theme-color']",
-        {
-          name: "theme-color",
-          content: document.documentElement.dataset.theme === "dark" ? "#222321" : "#f6f5f2",
-        },
-      ],
-      [
-        "meta",
-        "meta[name='mobile-web-app-capable']",
-        { name: "mobile-web-app-capable", content: "yes" },
-      ],
-      [
-        "meta",
-        "meta[name='apple-mobile-web-app-capable']",
-        { name: "apple-mobile-web-app-capable", content: "yes" },
-      ],
-      [
-        "meta",
-        "meta[name='apple-mobile-web-app-title']",
-        { name: "apple-mobile-web-app-title", content: "Objects" },
-      ],
-      [
-        "meta",
-        "meta[name='apple-mobile-web-app-status-bar-style']",
-        { name: "apple-mobile-web-app-status-bar-style", content: "default" },
-      ],
-    ] as const;
-    for (const [tag, selector, attributes] of metadata) {
-      let element = document.head.querySelector(selector);
-      if (!element) {
-        element = document.createElement(tag);
-        document.head.appendChild(element);
-      }
-      for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
-    }
     return initializePwa();
   }, []);
 
@@ -608,25 +584,6 @@ export function App() {
     const timer = window.setTimeout(() => setAuthTimedOut(true), 4000);
     return () => window.clearTimeout(timer);
   }, [auth.isLoading]);
-
-  useEffect(() => {
-    const recoveryKey = "objects-auth-recovery";
-    if (!auth.isLoading && !auth.isGuest) {
-      wasAuthenticated.current = true;
-      sessionStorage.removeItem(recoveryKey);
-      return;
-    }
-    if (
-      !online ||
-      auth.isLoading ||
-      !auth.isGuest ||
-      !wasAuthenticated.current ||
-      sessionStorage.getItem(recoveryKey)
-    )
-      return;
-    sessionStorage.setItem(recoveryKey, String(Date.now()));
-    window.location.reload();
-  }, [auth.isLoading, auth.isGuest, online]);
 
   useEffect(() => {
     const retryStalledSession = () => {
@@ -655,14 +612,9 @@ export function App() {
     };
   }, []);
 
-  // Hold all UI until the theme stylesheet is injected: boot.ts has already
-  // painted <html> in the resolved theme, so the gap reads as a blank themed
-  // page instead of a flash of unstyled skeleton markup.
-  if (!themeCss) return null;
-
   return (
     <>
-      <style>{themeCss}</style>
+      <style>{objectsTheme}</style>
       {auth.isLoading ? (
         !online ? (
           <BootScreen status="Objects is offline.">
@@ -675,7 +627,7 @@ export function App() {
         ) : (
           <BootScreen status="Checking your session…" />
         )
-      ) : auth.isGuest && !localGuest ? (
+      ) : auth.isGuest ? (
         <BootScreen status="Sign in to Objects.">
           <SignInCard />
         </BootScreen>
@@ -685,3 +637,5 @@ export function App() {
     </>
   );
 }
+
+render(<App />, document.getElementById("app")!);

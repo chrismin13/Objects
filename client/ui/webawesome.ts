@@ -1,28 +1,29 @@
-import type { RefObject } from "preact";
+import type { ComponentType, RefObject } from "preact";
+type WaComponent = ComponentType<Record<string, unknown>>;
 import { useEffect } from "preact/hooks";
 import { placeToastLayer, raiseToastLayer } from "../toast-layer";
 
 export type OverlayElement = HTMLElement & { open: boolean; show(): void; hide(): void };
 export type ValueElement = HTMLElement & { value: string | string[] | null; checked: boolean };
 
-export const WaButton = "wa-button" as never;
-export const WaButtonGroup = "wa-button-group" as never;
-export const WaCheckbox = "wa-checkbox" as never;
-export const WaDetails = "wa-details" as never;
-export const WaDialog = "wa-dialog" as never;
-export const WaDivider = "wa-divider" as never;
-export const WaDrawer = "wa-drawer" as never;
-export const WaDropdown = "wa-dropdown" as never;
-export const WaDropdownItem = "wa-dropdown-item" as never;
-export const WaOption = "wa-option" as never;
-export const WaProgressRing = "wa-progress-ring" as never;
-export const WaSelect = "wa-select" as never;
-export const WaSwitch = "wa-switch" as never;
-export const WaTab = "wa-tab" as never;
-export const WaTabGroup = "wa-tab-group" as never;
-export const WaTabPanel = "wa-tab-panel" as never;
-export const WaTag = "wa-tag" as never;
-export const WaTooltip = "wa-tooltip" as never;
+export const WaButton = "wa-button" as unknown as WaComponent;
+export const WaButtonGroup = "wa-button-group" as unknown as WaComponent;
+export const WaCheckbox = "wa-checkbox" as unknown as WaComponent;
+export const WaDetails = "wa-details" as unknown as WaComponent;
+export const WaDialog = "wa-dialog" as unknown as WaComponent;
+export const WaDivider = "wa-divider" as unknown as WaComponent;
+export const WaDrawer = "wa-drawer" as unknown as WaComponent;
+export const WaDropdown = "wa-dropdown" as unknown as WaComponent;
+export const WaDropdownItem = "wa-dropdown-item" as unknown as WaComponent;
+export const WaOption = "wa-option" as unknown as WaComponent;
+export const WaProgressRing = "wa-progress-ring" as unknown as WaComponent;
+export const WaSelect = "wa-select" as unknown as WaComponent;
+export const WaSwitch = "wa-switch" as unknown as WaComponent;
+export const WaTab = "wa-tab" as unknown as WaComponent;
+export const WaTabGroup = "wa-tab-group" as unknown as WaComponent;
+export const WaTabPanel = "wa-tab-panel" as unknown as WaComponent;
+export const WaTag = "wa-tag" as unknown as WaComponent;
+export const WaTooltip = "wa-tooltip" as unknown as WaComponent;
 
 export function eventValue(event: Event): string {
   return (event.currentTarget as ValueElement).value as string;

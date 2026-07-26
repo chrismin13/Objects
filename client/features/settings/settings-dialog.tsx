@@ -1,13 +1,12 @@
 import { useRef, useState } from "preact/hooks";
 import type { ObjectsSettings } from "../../../shared/state";
+import type { OverlayElement, ValueElement } from "../../ui/webawesome";
 import {
   eventChecked,
   eventValue,
   hideWebAwesomeOverlay,
-  OverlayElement,
   useWebAwesomeChecked,
   useWebAwesomeOverlay,
-  ValueElement,
   WaButton,
   WaDialog,
   WaOption,

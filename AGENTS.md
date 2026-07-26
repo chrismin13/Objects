@@ -1,110 +1,43 @@
-# Lakebed App Instructions
+# Objects — agent guide
 
-This directory is for a Lakebed "capsule". Lakebed is an all-inclusive suite of tools to build web applications purely from code and a CLI.
+Objects is a to-do PWA (Preact + TypeScript) deployed as a single Cloudflare Worker with static assets. See `.scratch/cloudflare-viteplus/rollout-plan.md` for the migration state and `.scratch/cloudflare-viteplus/research/` for platform research.
 
-Your role is to build software within this capsule. Lakebed is the runtime, the compiler, the database, and the hosting platform. You will be able to control all of this just by writing code and running commands through the CLI.
+## Layout
 
-## Hard rules
-
-- No installing node modules. You can use the built-in APIs. Write TypeScript for anything that is not included.
-- Lakebed CLI should always be run with `npx lakebed [command]`. It is not a global. Launch with `npx` always.
-- All client code goes in the `client` directory, and all server code goes in the `server` directory. Shared code can go in `shared`.
-- Use `lakebed/server` only from `server/*.ts`.
-- Use `lakebed/client` only from `client/*.tsx`.
-- Data needed on client should be fetched through queries. User-driven changes should be done via mutations. Endpoints should be treated as an "escape hatch" for exposing functionality over endpoints for HTTP-based flows.
-- Styling must be done via raw CSS or Tailwind classes in the JSX.
-- Do not add a CSS, PostCSS, or Tailwind build pipeline. They are built in.
-- Theme CSS is layered by `client/theme/index.ts`: `client/styles.ts` is the legacy base, while the later `client/things-styles.ts` layer owns much of the effective app-chrome geometry. Check later layers before trusting base values.
-- Favicons can live at `favicon.svg` or `favicon.ico`; for another capsule path, set `favicon: "assets/icon.svg"` in `server/index.ts`.
-- There is no file based routing. Use the built-in client router from `lakebed/client` when you need pages.
-- All imports must be from Lakebed or from relative paths. Client Preact code may import `preact` and `preact/hooks`, which are provided by the Lakebed runtime.
-- Do not use Node built-ins in app code.
-- Use auth through `ctx.auth` on the server and `useAuth()` on the client.
-- Read server-only environment variables through `ctx.env`; define them in `.env.lakebed.server`.
-- Auth can be added with a Google sign-in using `<SignInWithGoogle />` or `signInWithGoogle()` from `lakebed/client`.
-- Database calls are async. Await or directly return every `get`, `insert`, `update`, `delete`, `collect`, `take`, `first`, and `paginate` call.
-- Declare indexes with `.index(name, fields)` and query them with `withIndex`. Do not use legacy `where`, `orderBy`, `limit`, or `all`.
-- Use the built-in `by_creation` index for unfiltered creation-order queries. Use `id("tableName")` for references to another Lakebed table.
-- Keep queries read-only. Put writes in mutations or endpoints, and re-check ownership before updating or deleting user-owned rows.
-- Keep `shared/` free of DOM, Node, env, and Lakebed runtime imports.
-- Environment variables are only available on the server, and must be defined in `.env.lakebed.server`. They are not available during build time. If you need build-time environment variables, define them in code and do conditional logic based on them. They are synced to your hosted deploy when you run `npx lakebed deploy` (the deploy must be claimed first).
-
-## Default project structure
-
-- `server/index.ts`: schema, queries, mutations, and external endpoints.
-- `client/index.tsx`: Preact UI entrypoint.
-- `shared/`: pure TypeScript shared by client and server.
+- `client/` — Preact UI. `client/index.tsx` is the entry (session check, boot screens, sync wiring). `client/objects.ts` is the interface runtime. `client/vendor/` holds pinned third-party bundles (see its README; do not edit).
+- `worker/` — the Cloudflare Worker. `worker/index.ts` routes (`/api/workspace`, `/api/tasks`, `/api/me`, `/auth/*`); `worker/workspace-do.ts` is the per-user Durable Object owning workspace persistence; `worker/auth.ts` is WorkOS AuthKit sign-in with sealed-cookie sessions.
+- `shared/` — pure TypeScript domain: workspace model, validation, delta sync, offline sync client, importers, interface bridge. No DOM, Node, env, or runtime imports.
+- `tests/workspace/` — Vitest suite running inside workerd via `@cloudflare/vitest-pool-workers`.
 
 ## Commands
 
-### Completion workflow
-
-- For implementation tasks, do not stop after editing locally. Run the relevant checks and `npx lakebed build . --target anonymous --json`.
-- Deploy the validated result to the capsule's existing Lakebed deployment with `npx lakebed deploy`, then verify the hosted app or affected endpoints.
-- Commit the complete task-scoped change and push the current branch to its configured Git remote. A requested implementation is not complete until the deploy and push succeed, unless the user explicitly asks not to publish or an external credential/permission blocks publication.
-- Preserve unrelated user work. If a worktree contains changes outside the requested scope and the user has not explicitly included them, confirm scope before staging.
-
-Run locally:
+Everything runs through Vite+ (`vp`, install: `curl -fsSL https://vite.plus | bash`):
 
 ```sh
-npx lakebed dev
+vp install        # dependencies (pnpm under the hood)
+vp dev            # local dev: Vite dev server + workerd with local DO state (persists across restarts)
+vp check          # format + lint + typecheck in one pass (the CI gate)
+vp test --run     # full test suite inside workerd
+vp build          # client (dist/client) + worker (dist/objects)
+vp exec wrangler deploy              # deploy to production
+vp exec wrangler deploy --dry-run    # validate + show upload size
+vp exec wrangler types               # regenerate worker-configuration.d.ts after wrangler.jsonc changes
 ```
 
-Deploy:
+Local CI and remote CI run the identical commands: `vp check && vp test --run && vp build`.
 
-```sh
-npx lakebed deploy
-```
+## Platform facts
 
-### Deployment target
+- One SQLite-backed Durable Object per user (`WORKSPACE_DO`); saves are `transactionSync`-atomic revisioned commands with idempotency receipts.
+- Auth: hosted WorkOS AuthKit. `/auth/login` redirects, `/auth/callback` seals an Objects session cookie (iron-session). Sessions verify locally — no per-request WorkOS calls. API routes 401 without a session.
+- Secrets: `WORKOS_API_KEY`, `WORKOS_COOKIE_PASSWORD` (production: `wrangler secret put`; local: `.dev.vars`, gitignored). `WORKOS_CLIENT_ID` is public, in `wrangler.jsonc` `vars`.
+- Static assets serve free; `run_worker_first` routes only `/api/*` and `/auth/*` through the Worker. Non-API routes delegate to `env.ASSETS.fetch(request)` for the SPA fallback.
+- `sw.js` is generated at build time (precache list + cache revision) by the `objectsPwa` plugin in `vite.config.ts`; the manifest is `public/manifest.webmanifest`.
+- Production: https://objects.accounts-7ac.workers.dev (custom domain `objects.chrismin13.com` at cutover — see rollout plan Phase 6). Legacy Lakebed production at https://objects.lakebed.app remains live as rollback until then.
 
-- `main` is production: it must stay bound to the claimed deploy that owns `https://objects.lakebed.app` (`dep_rarwdUj4I9LZJWoX`). Deploys from `main` publish to production.
-- There is no standing staging deploy. Feature branches verify through short-lived random-slug preview deploys; terminate them after verification. Never bind a feature branch's `lakebed.json` to the production deploy.
-- Verify `https://objects.lakebed.app` serves the new build after every production deploy before reporting completion.
-- Lakebed also prints a generated slug URL for the backing deploy. Do not report that generated URL as a named deployment target, and do not create a replacement deploy merely because the generated backing URL is visible.
+## Rules
 
-Inspect local state while `npx lakebed dev` is running:
-
-```sh
-npx lakebed db list --port 3000
-npx lakebed db dump --port 3000
-npx lakebed db export --port 3000 --out backup.json
-npx lakebed logs --port 3000
-```
-
-## External endpoints
-
-Use `endpoint({ method, path }, handler)` from `lakebed/server` when the app needs to expose an HTTP route for webhooks or other non-Lakebed clients. Endpoint handlers receive request data including `headers.get(name)`, URL params, query params, and body helpers.
-
-## Additional resources
-
-- [Lakebed docs](https://docs.lakebed.dev/)
-- [Capsule API docs](https://docs.lakebed.dev/capsule-api/)
-- [Database guide](https://docs.lakebed.dev/database/)
-- [Database API v1 migration guide](https://docs.lakebed.dev/database-migration/)
-
-## Current Limits
-
-- One server entry.
-- One client entry.
-- Guest auth locally, with built-in Google sign-in through Lakebed Auth.
-- User-uploaded files use built-in object storage (`client.storage`); `npx lakebed dev` keeps them in memory and resets on restart.
-- Static capsule assets are limited to the favicon.
-- No outbound fetch in anonymous deploys. Claim the deploy before using server-side fetch.
-- Non-empty `.env.lakebed.server` files sync only after a deploy is claimed.
-- Local state resets when `npx lakebed dev` restarts.
-- Hosted deploys are served on `lakebed.app` subdomains.
-
-## Agent skills
-
-### Issue tracker
-
-Issues are tracked as local Markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Triage uses the five default canonical label names. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Domain documentation uses the single-context layout. See `docs/agents/domain.md`.
+- Domain logic lives in `shared/` and stays platform-free. UI state changes flow through the sync client → HTTP adapter → Durable Object.
+- Never commit secrets. `.dev.vars` is gitignored. `worker-configuration.d.ts` is generated and gitignored — do not hand-edit it; rerun `wrangler types`.
+- Vendored bundles in `client/vendor/` are pinned upstream artifacts; verify SHA-256 against the README if ever regenerated.
+- Use the vocabulary in `CONTEXT.md` ("to-do", not "task").

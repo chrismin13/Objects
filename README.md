@@ -2,11 +2,11 @@
 
 [objects.chrismin13.com](https://objects.chrismin13.com)
 
-Objects is a polished, full-featured task manager inspired by Things 3 and built as a native [Lakebed](https://lakebed.dev) capsule.
+Objects is a polished, full-featured task manager inspired by Things 3, built with [Vite+](https://viteplus.dev) and deployed as a single [Cloudflare Worker](https://workers.cloudflare.com) with static assets.
 
-It uses Lakebed’s Preact client, database API v1, live queries, mutations, hosted runtime, and first-party Google authentication. There are no OAuth keys, database credentials, runtime dependencies, or external services to configure.
+The client is a Preact PWA; sync runs through an offline-first engine in `shared/` to a per-user SQLite-backed Durable Object; sign-in is hosted WorkOS AuthKit with sealed-cookie sessions.
 
-Live app: [objects.lakebed.app](https://objects.lakebed.app)
+Live app: [objects.accounts-7ac.workers.dev](https://objects.accounts-7ac.workers.dev) (moving to [objects.chrismin13.com](https://objects.chrismin13.com) at cutover; the legacy Lakebed deployment at [objects.lakebed.app](https://objects.lakebed.app) remains up as rollback for now).
 
 ## Features
 
@@ -27,71 +27,48 @@ Live app: [objects.lakebed.app](https://objects.lakebed.app)
 - Installable PWA with standalone display and an offline application shell
 - JSON backup and guarded import
 - Stable URL capture and deep links for personal automation
-- An authenticated, retry-safe `POST /api/tasks` Lakebed endpoint
+- An authenticated, retry-safe `POST /api/tasks` capture endpoint
 
 ## Authentication and privacy
 
-Hosted users sign in through Lakebed Auth’s built-in Google flow. The client uses `useAuth()` and `<SignInWithGoogle />`; the server trusts only `ctx.auth`.
+Sign-in is hosted [WorkOS](https://workos.com) AuthKit (email, magic link, and social providers as enabled in the WorkOS dashboard). After sign-in the Worker seals the WorkOS user identity into its own httpOnly session cookie; every API request authenticates locally against that cookie, with no per-request calls to WorkOS.
 
-Every workspace is indexed by the immutable `ctx.auth.userId`. Queries filter by that value, and mutations re-check ownership before updates. Email, name, and picture are treated only as profile data—not as authorization keys. Lakebed keeps auth tokens bound to the exact app origin and clears private query caches on sign-out.
+Every workspace is owned by the immutable WorkOS user ID, which scopes the user's Durable Object and all local persistence keys. Email, name, and picture are treated only as profile data—not as authorization keys.
 
-Local development supports Lakebed guest identities:
-
-```sh
-npx lakebed auth as alice
-npx lakebed dev
-```
-
-To test isolated users in separate tabs, open:
-
-```text
-http://localhost:3000/?lakebed_guest=alice
-http://localhost:3000/?lakebed_guest=bob
-```
-
-Guest identities are accepted only by the local UI. Hosted visitors are shown the Google sign-in screen.
+For local development, `vp dev` plus a WorkOS staging environment works end-to-end. To sign in as a throwaway user without touching WorkOS, mint a session cookie with the `.dev.vars` password (see `worker/auth.ts` for the seal format).
 
 ## Develop and inspect
 
-Run the capsule:
-
 ```sh
-npx lakebed dev
+vp install   # first run
+vp dev       # Vite dev server + workerd; local Durable Object state persists across restarts
 ```
 
-Validate the build and inspect its local runtime:
+Validate and test:
 
 ```sh
-npx lakebed build . --target anonymous --json
-npx lakebed db list --port 3000
-npx lakebed db dump --port 3000
-npx lakebed logs --port 3000
+vp check         # format + lint + typecheck
+vp test --run    # full suite inside workerd
+vp build         # client + worker bundles
+vp exec wrangler deploy --dry-run   # validate upload + size
 ```
 
-Local Lakebed state is in memory and resets when the dev runtime restarts. Hosted data is durable.
+Local Durable Object state lives under `.wrangler/state` and survives restarts; production data is durable.
 
 ## Deploy
 
-For an owned deploy that can be updated from fresh clones:
-
 ```sh
-npx lakebed auth login
-npx lakebed deploy
+vp exec wrangler login   # once
+vp exec wrangler deploy
 ```
 
-The CLI writes `lakebed.json` with the deploy ID. Commit that file so future deployments update the same app. Hosted inspection remains private unless `--public-inspect` is explicitly supplied.
-
-After the deploy is claimed, reserve a Lakebed hostname if desired:
-
-```sh
-npx lakebed domains add objects.lakebed.app
-```
+All infrastructure is declared in `wrangler.jsonc` (Worker, static assets, Durable Object binding + migration, WorkOS client ID var, custom domain at cutover). Secrets are managed with `wrangler secret put` and never committed.
 
 ## Install as an app
 
-Open the hosted app and use **Settings → App**, the browser’s **Install app** command, or **Share → Add to Home Screen** on iPhone and iPad. The PWA opens in a standalone window, exposes Today/Inbox/New to-do shortcuts where supported, accepts shared text and links on supporting mobile platforms, and caches its application shell for offline startup. Authentication, live sync, and uncached account data still require a network connection; private Lakebed API, auth, and storage responses are deliberately excluded from the service-worker cache.
+Open the hosted app and use **Settings → App**, the browser’s **Install app** command, or **Share → Add to Home Screen** on iPhone and iPad. The PWA opens in a standalone window, exposes Today/Inbox/New to-do shortcuts where supported, accepts shared text and links on supporting mobile platforms, and caches its application shell for offline startup. Authentication, live sync, and uncached account data still require a network connection; private API and auth responses are deliberately excluded from the service-worker cache.
 
-Notification permission is requested only from the Settings button. Reminders use persistent service-worker notifications so they work on mobile browsers as well as desktop browsers, and tapping a notification opens its task. The reminder timer itself runs while Objects is open. Reliable delivery after the app is fully closed would require a hosted Web Push scheduler, which Lakebed capsules do not currently provide; browsers do not offer a portable, reliable local background timer.
+Notification permission is requested only from the Settings button. Reminders use persistent service-worker notifications so they work on mobile browsers as well as desktop browsers, and tapping a notification opens its task. The reminder timer itself runs while Objects is open. Reliable delivery after the app is fully closed would require a hosted Web Push scheduler, which is not built yet (Durable Object alarms are the natural fit on Cloudflare); browsers do not offer a portable, reliable local background timer.
 
 ## Automation links and HTTP capture
 

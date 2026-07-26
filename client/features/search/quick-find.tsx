@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "preact/hooks";
-import { OverlayElement, useWebAwesomeOverlay, WaDialog } from "../../ui/webawesome";
+import { useWebAwesomeOverlay, WaDialog } from "../../ui/webawesome";
+import type { OverlayElement } from "../../ui/webawesome";
 
 export type QuickFindItem = {
   kind: string;

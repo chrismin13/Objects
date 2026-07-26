@@ -5,13 +5,13 @@ import type {
   WorkspaceSyncSnapshot,
 } from "../../shared/workspace/sync";
 
-export type LakebedWorkspaceGateway = {
+export type WorkspaceGateway = {
   readSnapshot(): string | null | undefined;
   saveCommand(serialized: string): Promise<string>;
   subscribe(listener: () => void): () => void;
 };
 
-export type LakebedWorkspaceQuery = {
+export type WorkspaceQuery = {
   ownerIdentity: string;
   snapshot: WorkspaceSyncSnapshot | null;
   migrationRequired?: boolean;
@@ -28,9 +28,7 @@ function migrationMutationId(updatedAt: string, sourceMutationId: string): strin
   return `legacy-migration-${updatedAt}-${sourceMutationId.length}-${(hash >>> 0).toString(16)}`;
 }
 
-export function migrationCommandForQuery(
-  query: LakebedWorkspaceQuery,
-): WorkspaceSyncCommand | null {
+export function migrationCommandForQuery(query: WorkspaceQuery): WorkspaceSyncCommand | null {
   const snapshot = query.snapshot;
   const migration = snapshot?.document.sync.legacyMigration;
   if (!query.migrationRequired || !snapshot || !migration) return null;
@@ -41,7 +39,7 @@ export function migrationCommandForQuery(
   };
 }
 
-export function parseLakebedWorkspaceQuery(value: unknown): LakebedWorkspaceQuery | undefined {
+export function parseWorkspaceQuery(value: unknown): WorkspaceQuery | undefined {
   if (
     value === undefined ||
     value === null ||
@@ -67,12 +65,10 @@ export function parseLakebedWorkspaceQuery(value: unknown): LakebedWorkspaceQuer
     typeof (parsed as { migrationRequired?: unknown }).migrationRequired !== "boolean"
   )
     throw new Error("Invalid Lakebed Workspace migration state");
-  return parsed as LakebedWorkspaceQuery;
+  return parsed as WorkspaceQuery;
 }
 
-export function createLakebedWorkspaceAdapter(
-  gateway: LakebedWorkspaceGateway,
-): WorkspaceSyncAdapter {
+export function createGatewayWorkspaceAdapter(gateway: WorkspaceGateway): WorkspaceSyncAdapter {
   return {
     async load(): Promise<WorkspaceSyncSnapshot | null> {
       const serialized = gateway.readSnapshot();

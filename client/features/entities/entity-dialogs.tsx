@@ -1,13 +1,12 @@
 import { useMemo, useRef, useState } from "preact/hooks";
 import type { Area, Heading, LaunchRule, Project, RepeatRule, Space } from "../../../shared/state";
+import type { OverlayElement, ValueElement } from "../../ui/webawesome";
 import {
   eventChecked,
   eventValue,
   hideWebAwesomeOverlay,
-  OverlayElement,
   useWebAwesomeChecked,
   useWebAwesomeOverlay,
-  ValueElement,
   WaButton,
   WaCheckbox,
   WaDetails,
@@ -121,7 +120,7 @@ function SpacePinCheckbox({
   onChange(checked: boolean): void;
 }) {
   const checkbox = useRef<ValueElement | null>(null);
-  useWebAwesomeChecked(checkbox, space.pinned);
+  useWebAwesomeChecked(checkbox, space.pinned ?? false);
   return (
     <WaCheckbox
       ref={checkbox}
@@ -139,7 +138,7 @@ function RepeatEditor({
   onChange,
   showStop = true,
 }: {
-  value: RepeatRule | null;
+  value: RepeatRule | null | undefined;
   fallbackDate: string;
   onChange(value: RepeatRule | null): void;
   showStop?: boolean;

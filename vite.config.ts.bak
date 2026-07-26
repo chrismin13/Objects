@@ -4,6 +4,8 @@ import type { Plugin } from "vite-plus";
 import preact from "@preact/preset-vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { buildServiceWorker } from "./client/pwa-sw.ts";
+// @ts-expect-error debug
+import { debugEnv } from "/tmp/debug-plugin.mjs";
 
 /**
  * Emits sw.js into the client build with the precache list (shell + hashed
@@ -15,8 +17,7 @@ function objectsPwa(): Plugin {
     name: "objects-pwa",
     apply: "build",
     generateBundle(_options, bundle) {
-      // Only emit into the client build (the worker build has its own output).
-      if (this.environment?.name !== "client") return;
+      if (!("index.html" in bundle)) return;
       const precachedAssets = Object.keys(bundle)
         .filter((name) => name.startsWith("assets/"))
         .map((name) => `/${name}`)
@@ -36,7 +37,7 @@ function objectsPwa(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [preact(), cloudflare(), objectsPwa()],
+  plugins: [preact(), cloudflare(), objectsPwa(), debugEnv()],
   fmt: {
     ignorePatterns: ["client/vendor/**"],
   },

@@ -197,7 +197,7 @@ function buildChangeSet() {
 function acknowledgeChanges(changes, serializedAck) {
   const ack = JSON.parse(serializedAck);
   const baseline = cloneData(ui.syncedState);
-  baseline.settings = { ...baseline.settings, ...(changes.settings || {}) };
+  baseline.settings = { ...baseline.settings, ...changes.settings };
   for (const kind of ENTITY_KINDS) {
     const deleted = new Set(changes.deletes?.[kind] || []);
     const items = new Map(
@@ -1244,14 +1244,7 @@ function handleCaptureUrl() {
   if (params.get("search")) setTimeout(() => openSearch(params.get("search")), 0);
   if (!taskId && !requestedView && !params.get("query") && !title && params.get("capture") !== "1")
     return;
-  const localGuest = params.get("lakebed_guest");
-  history.replaceState(
-    {},
-    "",
-    localGuest
-      ? `${location.pathname}?lakebed_guest=${encodeURIComponent(localGuest)}`
-      : location.pathname,
-  );
+  history.replaceState({}, "", location.pathname);
   if (params.get("capture") === "1") setTimeout(() => beginQuickAdd(true), 0);
 }
 
@@ -4020,7 +4013,7 @@ function renderMarkdown(markdown = "") {
   let inCode = false;
   const output = [];
   for (const line of lines) {
-    if (/^```/.test(line)) {
+    if (line.startsWith("```")) {
       if (listType) {
         output.push(`</${listType}>`);
         listType = null;

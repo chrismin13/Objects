@@ -186,7 +186,10 @@ export async function showTaskReminder(task: {
   notes?: string;
 }): Promise<boolean> {
   if (!("Notification" in window) || Notification.permission !== "granted") return false;
-  const notificationOptions: NotificationOptions = {
+  // Notification actions (snooze buttons) are not yet in the DOM lib types.
+  const notificationOptions: NotificationOptions & {
+    actions?: { action: string; title: string }[];
+  } = {
     body: task.notes || "Scheduled in Objects",
     icon: "/favicon.svg",
     tag: `objects-task-${task.id}`,

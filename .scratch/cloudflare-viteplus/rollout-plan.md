@@ -37,15 +37,15 @@ Branch `cloudflare-migration`. `vite.config.ts`, `wrangler.jsonc`, `vitest.confi
 
 WorkOS AuthKit integrated: `/auth/login` → hosted AuthKit, `/auth/callback` exchanges the code (one WorkOS network call) and seals an Objects session cookie with iron-session, `/auth/logout` clears it, `/api/me` reports identity. All API routes are session-gated; the WorkOS user ID is the owner key. Design choice: after sign-in, sessions verify **fully locally** — no JWKS or per-request WorkOS calls, so tests mint valid sessions offline (9 auth tests; 132/132 green). Deployed and verified: login redirect, 401 gating, callback validation all live. Client sign-in UI swap lands in Phase 4. Production Google sign-in remains a WorkOS dashboard toggle + one Google OAuth client form, if wanted.
 
-### Phase 4 — Client port
+### Phase 4 — Client port — **DONE**
 
-Replace `lakebed-adapter.tsx`/`lakebed-adapter-core.ts` with an HTTP `WorkspaceSyncAdapter` (the adapter contract already isolates this). Delete the packing machinery and blob-URL loaders. Verify PWA behavior (offline shell, install, share target, reminders) and the sync contract end-to-end offline: 75-change queue, interrupted acknowledgement, session expiry, multi-device reconciliation.
+`client/index.tsx` runs on WorkOS sessions (`/api/me`), direct imports replace all four gzip/blob-URL runtime loaders, and `client/workspace/http-adapter.tsx` implements `WorkspaceSyncAdapter` over the Worker routes (refresh-on-focus/online/visibility for invalidation, per the behavior note). Deleted: `server/`, `scripts/`, all `packed.ts` files and loaders, `lakebed.json`, `docs/runtime-packaging.md`. Vendored SortableJS/WebAwesome decoded to plain files (SHA-256 verified against the vendor README). `shared/state.ts` created for the legacy interface types the dialogs assumed (they typechecked as `any` under Lakebed). Manifest is `public/manifest.webmanifest`; `sw.js` is generated per build by the `objectsPwa` Vite plugin with hashed precache + cache revision. Verified end-to-end locally in a browser: sign-in → boot → natural-language capture → DO sync → reload persistence. Deployed; `sw.js`, manifest, bundle, and 401 gating verified in production. `lakebed-adapter-core.ts` renamed to `adapter-core.ts` with export renames; test-suite codemod absorbed it.
 
-**Behavior note:** Lakebed live queries pushed invalidations; the HTTP adapter starts with refresh-on-focus/explicit refresh (the sync client already supports it). A `WorkspaceDO` WebSocket for live invalidation is an optional later upgrade, not a cutover blocker.
+**Follow-up noted:** 80 lint warnings in legacy client code catalogued for a cleanup pass (unbound-method, unused vars, sort-compare); `migrationCommandForQuery` in adapter-core is dead code retained for its test coverage until Phase 5 cleanup.
 
-### Phase 5 — Pipeline
+### Phase 5 — Pipeline — **MOSTLY DONE**
 
-Local: `vp check && vp test && vp build && wrangler deploy --dry-run --outdir` (prints compressed size) + `vite preview` smoke run — all one command via `vp run`. Remote: thin GitHub Actions wrapper running the identical commands (one `CLOUDFLARE_API_TOKEN` secret) or Cloudflare Workers Builds; per-version preview URLs for branches. Update `AGENTS.md` and `README.md`.
+Local pipeline is the gate: `vp check && vp test --run && vp build` (+ `wrangler deploy --dry-run` for size). AGENTS.md and README.md rewritten for the new toolchain. Remaining: remote CI wrapper (GitHub Actions or Workers Builds) and the Phase 5 cleanup items (dead migration helpers, warning pass).
 
 ### Phase 6 — Cutover and retire
 

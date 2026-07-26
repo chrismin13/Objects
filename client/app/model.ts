@@ -57,9 +57,9 @@ function offsetNaturalDate(day: string, amountValue: string, unitValue: string):
   const unit = unitValue.toLowerCase();
   const date = new Date(`${day}T12:00:00`);
   if (!Number.isFinite(amount) || Number.isNaN(date.getTime())) return null;
-  if (/^d/.test(unit)) date.setDate(date.getDate() + amount);
-  else if (/^w/.test(unit)) date.setDate(date.getDate() + amount * 7);
-  else if (/^mo/.test(unit)) {
+  if (unit.startsWith("d")) date.setDate(date.getDate() + amount);
+  else if (unit.startsWith("w")) date.setDate(date.getDate() + amount * 7);
+  else if (unit.startsWith("mo")) {
     const targetDay = date.getDate();
     date.setDate(1);
     date.setMonth(date.getMonth() + amount);

@@ -3,46 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Objects" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="theme-color" content="#f6f5f2" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>Objects</title>
-    <style>
-      body {
-        font-family: system-ui;
-        max-width: 36rem;
-        margin: 3rem auto;
-        padding: 0 1rem;
-      }
-      code {
-        background: #eee;
-        padding: 0 0.25rem;
-        border-radius: 3px;
-      }
-    </style>
   </head>
   <body>
-    <h1>Objects — auth preview</h1>
-    <p id="status">Checking session…</p>
-    <p>
-      <a href="/auth/login" id="login" hidden>Sign in with WorkOS</a>
-      <a href="/auth/logout" id="logout" hidden>Sign out</a>
-    </p>
-    <p id="workspace"></p>
-    <script type="module">
-      const me = await fetch("/api/me");
-      if (me.ok) {
-        const { user } = await me.json();
-        document.getElementById("status").innerHTML =
-          `Signed in as <code>${user.email}</code> (<code>${user.userId}</code>)`;
-        document.getElementById("logout").hidden = false;
-        const workspace = await fetch("/api/workspace");
-        const body = await workspace.json();
-        document.getElementById("workspace").textContent = body.snapshot
-          ? `Workspace at revision ${body.snapshot.revision}.`
-          : "No workspace yet.";
-      } else {
-        document.getElementById("status").textContent = "Not signed in.";
-        document.getElementById("login").hidden = false;
-      }
-    </script>
+    <div id="app"></div>
+    <script type="module" src="/client/index.tsx"></script>
   </body>
 </html>
