@@ -1,6 +1,6 @@
 # Objects — agent guide
 
-Objects is a to-do PWA (Preact + TypeScript) deployed as a single Cloudflare Worker with static assets. See `.scratch/cloudflare-viteplus/rollout-plan.md` for the migration state and `.scratch/cloudflare-viteplus/research/` for platform research.
+Objects is a to-do PWA (Preact + TypeScript) deployed as a single Cloudflare Worker with static assets. See `DEPLOYMENT.md` for platform setup and operations.
 
 ## Layout
 
