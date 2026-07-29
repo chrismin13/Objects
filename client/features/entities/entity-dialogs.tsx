@@ -388,27 +388,6 @@ export function NewListDialog({
         </p>
         <div class="entity-form-grid">
           <div class="entity-pill-field full">
-            <span>Type</span>
-            <div class="entity-pill" role="group" aria-label="List type">
-              <button
-                type="button"
-                class="entity-pill-segment"
-                aria-pressed={type === "project"}
-                onClick={() => setType("project")}
-              >
-                Project
-              </button>
-              <button
-                type="button"
-                class="entity-pill-segment"
-                aria-pressed={type === "area"}
-                onClick={() => setType("area")}
-              >
-                Area
-              </button>
-            </div>
-          </div>
-          <div class="entity-pill-field full">
             <span>Space</span>
             <div class="entity-pill" role="group" aria-label="Space">
               {spaces.map((space) => (
@@ -427,6 +406,27 @@ export function NewListDialog({
                   {space.title}
                 </button>
               ))}
+            </div>
+          </div>
+          <div class="entity-pill-field full">
+            <span>Type</span>
+            <div class="entity-pill" role="group" aria-label="List type">
+              <button
+                type="button"
+                class="entity-pill-segment"
+                aria-pressed={type === "project"}
+                onClick={() => setType("project")}
+              >
+                Project
+              </button>
+              <button
+                type="button"
+                class="entity-pill-segment"
+                aria-pressed={type === "area"}
+                onClick={() => setType("area")}
+              >
+                Area
+              </button>
             </div>
           </div>
           {type === "project" && (
