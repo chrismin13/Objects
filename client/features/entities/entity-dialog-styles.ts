@@ -5,6 +5,15 @@ export const entityDialogStyles = `
 .entity-native-field { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 630; }
 .entity-native-field.full,
 .entity-form-grid > .full { grid-column: 1 / -1; }
+/* Pill-style selectors (match the Space selector pill used in the sidebar) */
+.entity-pill-field { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 630; }
+.entity-pill-field.full { grid-column: 1 / -1; }
+.entity-pill { min-width: 0; display: flex; align-items: stretch; padding: 2px; border: 1px solid var(--border-strong); border-radius: 9px; background: color-mix(in srgb, var(--surface-subtle) 52%, transparent); }
+.entity-pill-segment { min-width: 0; flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 5px 9px; overflow: hidden; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
+.entity-pill-segment:hover { color: var(--text); }
+.entity-pill-segment[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+[data-theme="dark"] .entity-pill-segment[aria-pressed="true"] { background: #393a3e; }
+.entity-pill-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--space-color); }
 .entity-native-field input,
 .entity-native-field textarea,
 .entity-native-field select {

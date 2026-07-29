@@ -387,41 +387,48 @@ export function NewListDialog({
           life they belong to.
         </p>
         <div class="entity-form-grid">
-          <WaSelect
-            label="Type"
-            value={type}
-            onChange={(event: Event) =>
-              setType((event.currentTarget as HTMLElement & { value: "project" | "area" }).value)
-            }
-          >
-            <WaOption value="project">Project</WaOption>
-            <WaOption value="area">Area</WaOption>
-          </WaSelect>
-          <WaSelect
-            label="Space"
-            value={spaceId}
-            onChange={(event: Event) => {
-              setSpaceId((event.currentTarget as HTMLElement & { value: string }).value);
-              setAreaId("");
-            }}
-          >
-            {spaces.map((space) => (
-              <WaOption key={space.id} value={space.id}>
-                {space.title}
-              </WaOption>
-            ))}
-          </WaSelect>
-          <label class="entity-native-field full">
-            Name
-            <input
-              autoFocus
-              required
-              autoComplete="off"
-              value={title}
-              placeholder="e.g. Plan summer trip"
-              onInput={(event) => setTitle(event.currentTarget.value)}
-            />
-          </label>
+          <div class="entity-pill-field full">
+            <span>Type</span>
+            <div class="entity-pill" role="group" aria-label="List type">
+              <button
+                type="button"
+                class="entity-pill-segment"
+                aria-pressed={type === "project"}
+                onClick={() => setType("project")}
+              >
+                Project
+              </button>
+              <button
+                type="button"
+                class="entity-pill-segment"
+                aria-pressed={type === "area"}
+                onClick={() => setType("area")}
+              >
+                Area
+              </button>
+            </div>
+          </div>
+          <div class="entity-pill-field full">
+            <span>Space</span>
+            <div class="entity-pill" role="group" aria-label="Space">
+              {spaces.map((space) => (
+                <button
+                  key={space.id}
+                  type="button"
+                  class="entity-pill-segment"
+                  aria-pressed={spaceId === space.id}
+                  style={{ "--space-color": space.color }}
+                  onClick={() => {
+                    setSpaceId(space.id);
+                    setAreaId("");
+                  }}
+                >
+                  <span class="entity-pill-dot" />
+                  {space.title}
+                </button>
+              ))}
+            </div>
+          </div>
           {type === "project" && (
             <WaSelect
               class="full"
@@ -439,6 +446,17 @@ export function NewListDialog({
               ))}
             </WaSelect>
           )}
+          <label class="entity-native-field full">
+            Name
+            <input
+              autoFocus
+              required
+              autoComplete="off"
+              value={title}
+              placeholder="e.g. Plan summer trip"
+              onInput={(event) => setTitle(event.currentTarget.value)}
+            />
+          </label>
         </div>
       </form>
       <div slot="footer" class="entity-dialog-actions">
