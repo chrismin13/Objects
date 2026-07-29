@@ -82,7 +82,7 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
   box-shadow: var(--shadow);
 }
 .objects-dialog::part(body) { scrollbar-width: thin; }
-.objects-dialog::part(footer) { border-top: 1px solid var(--border); background: var(--surface); box-shadow: 0 -8px 18px color-mix(in srgb, var(--surface) 92%, transparent); }
+.objects-dialog::part(footer) { padding-block-start: var(--space-3); border-top: 1px solid var(--border); background: var(--surface); box-shadow: 0 -8px 18px color-mix(in srgb, var(--surface) 92%, transparent); }
 .objects-dialog.dialog-quick-find::part(dialog) { margin-top: min(14vh, 104px); margin-bottom: auto; }
 .objects-dialog.dialog-quick-find::part(body) { padding: 0; }
 .objects-dialog .quick-find { margin: 0; }
