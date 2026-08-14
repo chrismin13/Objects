@@ -9,5 +9,8 @@ worker-configuration.d.ts
 .dev.vars
 *.local
 
+# Local scratch / research notes not part of the project
+.scratch
+
 # Private data backups
 backup-pre-cutover-*.json

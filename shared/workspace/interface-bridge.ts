@@ -42,6 +42,10 @@ export type InterfaceChecklistItem = {
   done: boolean;
 };
 
+// Interface projection of a domain Schedule. `today`/`upcoming` are derived from a
+// `scheduled` Schedule relative to the current day; the others are Schedule kinds.
+export type InterfaceBucket = "inbox" | "today" | "upcoming" | "anytime" | "someday";
+
 export type InterfaceRepeatRule = JsonRecord & {
   mode: "fixed" | "afterCompletion";
   frequency: "daily" | "weekly" | "monthly" | "yearly";

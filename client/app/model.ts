@@ -1,4 +1,4 @@
-import type { InterfaceBucket } from "./interface-types";
+import type { InterfaceBucket } from "../../shared/workspace/interface-bridge";
 
 export type ParsedTask = {
   title: string;

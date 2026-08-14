@@ -1943,6 +1943,57 @@ function itemSpaceId(item) {
 function matchesActiveSpace(item) {
   return ui.activeSpaceId === "all" || itemSpaceId(item) === ui.activeSpaceId;
 }
+
+// Decode a grouped-section key (grouped Today, Anytime, Someday) into the
+// reparent leaves a drag should write. Grouped Today encodes an optional
+// `evening-` prefix plus the parent id; Anytime/Someday use the bare parent id.
+// The groupBy key is `projectId || areaId || (all-spaces ? spaceId : null) || "Standalone"`.
+// Returns `location: null` when the key carries no parent (e.g. ungrouped Today
+// keys `today`/`evening`), signalling a schedule-only destination.
+function decodeGroupedSectionKey(rawKey) {
+  const text = String(rawKey || "");
+  const evening = text.startsWith("evening-");
+  const key = evening ? text.slice("evening-".length) : text;
+  const project = key ? projectById(key) : null;
+  const area = !project && key ? areaById(key) : null;
+  const space = !project && !area && key ? spaceById(key) : null;
+  if (project) {
+    const spaceId =
+      project.spaceId || (project.areaId ? (areaById(project.areaId)?.spaceId ?? null) : null);
+    return {
+      evening,
+      location: {
+        projectId: project.id,
+        areaId: project.areaId || null,
+        spaceId,
+        headingId: null,
+      },
+    };
+  }
+  if (area)
+    return {
+      evening,
+      location: {
+        projectId: null,
+        areaId: area.id,
+        spaceId: area.spaceId || null,
+        headingId: null,
+      },
+    };
+  if (space)
+    return {
+      evening,
+      location: { projectId: null, areaId: null, spaceId: space.id, headingId: null },
+    };
+  // Unfiled to-dos grouped under "Standalone" in a single-space view: dropping
+  // onto this group unfiles the to-do in that space.
+  if (key === "Standalone" && ui.activeSpaceId && ui.activeSpaceId !== "all")
+    return {
+      evening,
+      location: { projectId: null, areaId: null, spaceId: ui.activeSpaceId, headingId: null },
+    };
+  return { evening, location: null };
+}
 function currentCreationSpaceId() {
   return ui.activeSpaceId === "all"
     ? ui.state.settings.defaultSpaceId || ui.state.spaces[0]?.id || null
@@ -2444,7 +2495,7 @@ function renderContent() {
       ...(view.tasks || []).flatMap((task) => effectiveTags(task)),
       ...(view.projects || []).flatMap((project) => effectiveProjectTags(project)),
     ]),
-  ].sort();
+  ].sort((a, b) => a.localeCompare(b));
   const calendar =
     ["today", "upcoming", "tomorrow"].includes(ui.view.type) && ui.state.settings.showCalendar
       ? renderCalendarEvents(ui.view.type)
@@ -2478,7 +2529,9 @@ function renderContent() {
     !(ui.view.type === "project" && view.project?.repeat?.stopped)
   )
     mountTaskSortables(content, {
-      crossSection: ["today", "upcoming", "project", "area"].includes(ui.view.type),
+      crossSection: ["today", "upcoming", "project", "area", "anytime", "someday"].includes(
+        ui.view.type,
+      ),
       onStart: (ids) => {
         cancelContextPress();
         ui.sortableTaskDrag = true;
@@ -2492,13 +2545,19 @@ function renderContent() {
             scheduledFor: sectionKey,
             evening: false,
           });
-        if (ui.view.type === "today")
-          Object.assign(destination, {
-            bucket: "today",
-            scheduledFor: localDay(),
-            evening: sectionKey.startsWith("evening"),
-          });
-        if (["project", "area"].includes(ui.view.type))
+        else if (ui.view.type === "today") {
+          Object.assign(destination, { bucket: "today", scheduledFor: localDay() });
+          if (ui.state.settings.groupToday) {
+            const decoded = decodeGroupedSectionKey(sectionKey);
+            if (decoded.location) Object.assign(destination, decoded.location);
+            destination.evening = decoded.evening;
+          } else {
+            destination.evening = String(sectionKey).startsWith("evening");
+          }
+        } else if (ui.view.type === "anytime" || ui.view.type === "someday") {
+          const decoded = decodeGroupedSectionKey(sectionKey);
+          if (decoded.location) Object.assign(destination, decoded.location);
+        } else if (["project", "area"].includes(ui.view.type))
           Object.assign(destination, {
             headingId: sectionKey === "no-heading" ? null : sectionKey,
           });
@@ -4490,7 +4549,7 @@ function handleInspectorClick(event) {
     task.repeat.weekdays ||= [];
     task.repeat.weekdays = task.repeat.weekdays.includes(day)
       ? task.repeat.weekdays.filter((item) => item !== day)
-      : [...task.repeat.weekdays, day].sort();
+      : [...task.repeat.weekdays, day].sort((a, b) => a - b);
     scheduleSave();
     renderInspector(true);
   }
@@ -5764,7 +5823,11 @@ function applySpaceSettingsDraft(draft) {
     : spaces[0]?.id || null;
   ui.state.settings.spaceSchedule.rules = draft.rules
     .filter((rule) => rule.weekdays.length && spaces.some((space) => space.id === rule.spaceId))
-    .map((rule, index) => ({ ...rule, weekdays: [...rule.weekdays].sort(), order: index }));
+    .map((rule, index) => ({
+      ...rule,
+      weekdays: [...rule.weekdays].sort((a, b) => a - b),
+      order: index,
+    }));
 }
 
 function openSpaceSettings() {
@@ -6073,7 +6136,8 @@ function importIcsFile(event) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
-    const text = String(reader.result).replace(/\r?\n[ \t]/g, "");
+    const raw = typeof reader.result === "string" ? reader.result : "";
+    const text = raw.replace(/\r?\n[ \t]/g, "");
     const blocks = text.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
     let added = 0;
     for (const block of blocks) {
