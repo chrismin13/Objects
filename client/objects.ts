@@ -47,7 +47,9 @@ import {
   SpacesSettingsDialog,
   SpaceSwitcherDialog,
 } from "./features/entities/entity-dialogs";
+import { keyboardNavigationActive } from "./input-modality";
 import { hideEmptyToastLayer, placeToastLayer, showToastLayer } from "./toast-layer";
+import { installOverlayInputPolicy } from "./ui/webawesome";
 import { applyThemeToDocument, writeThemeChoice } from "./theme/boot";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -288,6 +290,7 @@ const ui = {
   draggingMagicAdd: false,
   sortableTaskDrag: false,
   suppressClickUntil: 0,
+  suppressSidebarClickUntil: 0,
   pendingEntry: null,
   launchRulesEnabled: false,
   launchRulesPreferenceLoaded: false,
@@ -305,6 +308,7 @@ let staticEventsBound = false;
 let logbookTimer = null;
 let modalReturnFocus = null;
 let sidebarGesture = null;
+let sidebarTouch = null;
 let taskGesture = null;
 let modalUsesPreact = false;
 
@@ -1322,8 +1326,10 @@ function bindStaticEvents() {
   );
   $("#theme-button").addEventListener("click", cycleTheme);
   $("#sidebar-open").addEventListener("click", openSidebar);
-  $("#sidebar-close").addEventListener("click", closeSidebar);
-  $("#sidebar-scrim").addEventListener("click", closeSidebar);
+  $("#sidebar-close").addEventListener("click", (event) =>
+    closeSidebar({ restoreFocus: event.detail === 0 }),
+  );
+  $("#sidebar-scrim").addEventListener("click", () => closeSidebar({ restoreFocus: false }));
   window.addEventListener("pointerdown", handleSidebarGestureStart, { passive: true });
   window.addEventListener("pointermove", handleSidebarGestureMove, { passive: false });
   window.addEventListener("pointerup", handleSidebarGestureEnd, { passive: true });
@@ -1331,11 +1337,24 @@ function bindStaticEvents() {
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
   window.matchMedia("(max-width: 820px)").addEventListener("change", syncMobileDrawerLayout);
 
-  sidebar.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-view]");
-    if (!button) return;
-    setView(button.dataset.view, button.dataset.id || null);
-  });
+  sidebar.addEventListener("pointerdown", handleSidebarTouchStart, { passive: true });
+  sidebar.addEventListener("pointermove", handleSidebarTouchMove, { passive: true });
+  sidebar.addEventListener("pointerup", handleSidebarTouchEnd, { passive: true });
+  sidebar.addEventListener("pointercancel", handleSidebarTouchEnd, { passive: true });
+  sidebar.addEventListener(
+    "click",
+    (event) => {
+      if (ui.suppressSidebarClickUntil > Date.now()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      const button = event.target.closest("[data-view]");
+      if (!button) return;
+      setView(button.dataset.view, button.dataset.id || null);
+    },
+    true,
+  );
   $("#space-controls").addEventListener("click", (event) => {
     const button = event.target.closest("[data-space-id]");
     if (button) setActiveSpace(button.dataset.spaceId);
@@ -1655,9 +1674,18 @@ function showMobileDrawer(drawer, onDismiss) {
   void customElements.whenDefined("wa-drawer").then(() => {
     requestAnimationFrame(() => {
       if (!drawer.isConnected) return;
+      const removeInputPolicy = installOverlayInputPolicy(drawer);
       drawer.addEventListener(
         "wa-after-show",
-        () => drawer.addEventListener("wa-after-hide", onDismiss, { once: true }),
+        () =>
+          drawer.addEventListener(
+            "wa-after-hide",
+            () => {
+              removeInputPolicy();
+              onDismiss();
+            },
+            { once: true },
+          ),
         { once: true },
       );
       drawer.setAttribute("open", "");
@@ -1677,7 +1705,12 @@ function finalizeSidebarClose({ restoreFocus = true } = {}) {
   app.classList.remove("library-sidebar-open");
   restorePanel("sidebar-anchor", sidebarPanel, $("#mobile-sidebar-drawer"));
   syncSidebarAccessibility();
-  if (restoreFocus && wasOpen && matchMedia("(max-width: 820px)").matches)
+  if (
+    restoreFocus &&
+    keyboardNavigationActive() &&
+    wasOpen &&
+    matchMedia("(max-width: 820px)").matches
+  )
     setTimeout(() => $("#sidebar-open")?.focus(), 20);
 }
 
@@ -1692,13 +1725,14 @@ function openSidebar() {
     );
   }
   syncSidebarAccessibility();
-  setTimeout(() => $("#sidebar-close")?.focus(), 20);
+  if (keyboardNavigationActive()) setTimeout(() => $("#sidebar-close")?.focus(), 20);
 }
 
 function closeSidebar(options = {}) {
   const drawer = $("#mobile-sidebar-drawer");
   if (drawer?.hasAttribute("open")) {
     drawer.dataset.restoreFocus = options.restoreFocus === false ? "false" : "true";
+    if (options.restoreFocus === false) drawer.originalTrigger = null;
     drawer.removeAttribute("open");
     return;
   }
@@ -1727,6 +1761,28 @@ function syncMobileDrawerLayout() {
     if (app.classList.contains("inspector-open") && ui.selectedTaskId) mountInspectorDrawer();
   }
   syncSidebarAccessibility();
+}
+
+function handleSidebarTouchStart(event) {
+  if (event.pointerType === "mouse" || !event.isPrimary) return;
+  sidebarTouch = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+  };
+}
+
+function handleSidebarTouchMove(event) {
+  if (!sidebarTouch || event.pointerId !== sidebarTouch.pointerId) return;
+  if (Math.hypot(event.clientX - sidebarTouch.startX, event.clientY - sidebarTouch.startY) > 8) {
+    ui.suppressSidebarClickUntil = Date.now() + 450;
+    sidebarTouch = null;
+  }
+}
+
+function handleSidebarTouchEnd(event) {
+  if (!sidebarTouch || event.pointerId !== sidebarTouch.pointerId) return;
+  sidebarTouch = null;
 }
 
 function handleSidebarGestureStart(event) {
@@ -3913,7 +3969,7 @@ function closeInspector({ restoreFocus = true, fromDrawer = false } = {}) {
   renderContent();
   inspector.innerHTML = "";
   syncSidebarAccessibility();
-  if (restoreFocus)
+  if (restoreFocus && keyboardNavigationActive())
     setTimeout(() => $(`[data-task-id="${returnTaskId}"] .task-main`, content)?.focus(), 20);
 }
 

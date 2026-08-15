@@ -19,7 +19,7 @@ export const tagStyles = `
   list-style: none;
 }
 .tag-picker summary::-webkit-details-marker { display: none; }
-.tag-picker summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+html.objects-keyboard-navigation .tag-picker summary:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
 .tag-picker summary svg { width: 15px; height: 15px; transition: transform .16s ease; }
 .tag-picker[open] summary svg { transform: rotate(90deg); }
 .tag-picker-menu {

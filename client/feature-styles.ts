@@ -204,14 +204,14 @@ export const featureStyles = `
   .selection-toolbar {
     left: 12px;
     right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(12px + var(--safe-area-bottom));
     max-width: none;
     transform: none;
   }
   .toast-region {
     top: auto;
     right: 72px;
-    bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(22px + var(--safe-area-bottom));
     left: 12px;
     align-items: flex-end;
     transform: none;

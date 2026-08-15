@@ -1,9 +1,4 @@
 export const responsiveStyles = `
-:root {
-  --safe-area-top: env(safe-area-inset-top, 0px);
-  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
-}
-
 .check-button {
   border: 0;
   background: transparent;
@@ -50,11 +45,11 @@ export const responsiveStyles = `
 }
 .check-visual svg { width: 12px; height: 12px; stroke-width: 3; }
 
-:where(button, [role="button"], input, textarea, select):focus-visible {
+html.objects-keyboard-navigation :where(button, [role="button"], input, textarea, select):focus {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
-.task-main:focus-visible {
+.task-main:focus {
   border-radius: 5px;
 }
 .modal:focus { outline: none; }

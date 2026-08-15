@@ -121,17 +121,30 @@ html.objects-ios-standalone .app-shell {
     -webkit-touch-callout: default;
   }
 
-  :where(
-    .nav-item,
-    .icon-button,
-    .quiet-button,
-    .section-add,
-    .chip,
-    .task-main,
-    .task-select,
-    .project-card
-  ):active {
-    opacity: .78;
+  /* Programmatic focus after a tap must not look like keyboard selection.
+     Physical keyboard navigation opts back into the shared focus treatment. */
+  html:not(.objects-keyboard-navigation) {
+    --wa-focus-ring-width: 0px;
+  }
+  html:not(.objects-keyboard-navigation) :where(input, textarea, select):focus {
+    outline: none;
+    box-shadow: none;
+  }
+  html:not(.objects-keyboard-navigation) wa-select:focus-within::part(combobox) {
+    box-shadow: none;
+  }
+
+  /* iOS can synthesize hover while a finger is down. Rows in scrolling panes
+     stay visually neutral until a real tap changes application state. */
+  .nav-item:not(.active):hover {
+    background: transparent;
+  }
+  .task-row:not(.selected):not(.bulk-selected):hover {
+    background: transparent;
+  }
+  .project-card:hover {
+    border-color: var(--border);
+    background: var(--bg);
   }
 }
 `;

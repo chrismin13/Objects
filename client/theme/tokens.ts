@@ -3,6 +3,10 @@ export const designTokens = `
   color-scheme: light;
   --sidebar-width: 268px;
   --inspector-width: 340px;
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
 
   --bg: #f4f4f4;
   --surface: #ffffff;

@@ -11,6 +11,7 @@ import {
 import type { WorkspaceSyncClient } from "../shared/workspace/sync-client";
 import { createWorkspaceSyncClient } from "../shared/workspace/sync-client";
 import { createEmptyWorkspace } from "../shared/workspace/workspace";
+import { initializeInputModality } from "./input-modality";
 import { initializePwa, initializeStandalonePwaInteractions } from "./pwa";
 import { WaDropdown } from "./ui/webawesome";
 import { mountObjects, syncObjectsState } from "./objects";
@@ -20,6 +21,7 @@ import { initThemeBoot } from "./theme/boot";
 import { objectsTheme } from "./theme";
 import "./vendor/webawesome/webawesome.js";
 
+initializeInputModality();
 initThemeBoot();
 initializeStandalonePwaInteractions();
 

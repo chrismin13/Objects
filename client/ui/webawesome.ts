@@ -3,7 +3,12 @@ type WaComponent = ComponentType<Record<string, unknown>>;
 import { useEffect } from "preact/hooks";
 import { placeToastLayer, raiseToastLayer } from "../toast-layer";
 
-export type OverlayElement = HTMLElement & { open: boolean; show(): void; hide(): void };
+export type OverlayElement = HTMLElement & {
+  open: boolean;
+  originalTrigger?: HTMLElement | null;
+  show(): void;
+  hide(): void;
+};
 export type ValueElement = HTMLElement & { value: string | string[] | null; checked: boolean };
 
 export const WaButton = "wa-button" as unknown as WaComponent;
@@ -56,6 +61,27 @@ export function hideWebAwesomeOverlay(event: Event, onClose: () => void): void {
   else onClose();
 }
 
+export function installOverlayInputPolicy(element: OverlayElement): () => void {
+  let pointerType = "";
+  const onPointerDown = (event: PointerEvent) => {
+    pointerType = event.pointerType;
+  };
+  const onKeyDown = () => {
+    pointerType = "";
+  };
+  const onHide = () => {
+    if (pointerType && pointerType !== "mouse") element.originalTrigger = null;
+  };
+  element.addEventListener("pointerdown", onPointerDown, true);
+  element.addEventListener("keydown", onKeyDown, true);
+  element.addEventListener("wa-hide", onHide);
+  return () => {
+    element.removeEventListener("pointerdown", onPointerDown, true);
+    element.removeEventListener("keydown", onKeyDown, true);
+    element.removeEventListener("wa-hide", onHide);
+  };
+}
+
 export function useWebAwesomeOverlay(
   ref: RefObject<OverlayElement>,
   onClose: () => void,
@@ -65,6 +91,7 @@ export function useWebAwesomeOverlay(
     let active = true;
     const element = ref.current;
     if (!element) return;
+    const removeInputPolicy = installOverlayInputPolicy(element);
     const closed = (event: Event) => {
       if (event.target !== element) return;
       const toastRegion = document.querySelector("#toast-region");
@@ -95,6 +122,7 @@ export function useWebAwesomeOverlay(
     });
     return () => {
       active = false;
+      removeInputPolicy();
       element.removeEventListener("wa-after-hide", closed);
       element.removeEventListener("wa-after-show", opened);
     };

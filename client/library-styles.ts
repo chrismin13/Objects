@@ -74,7 +74,12 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
 .objects-dialog.dialog-project { --width: min(650px, calc(100vw - 24px)); }
 .objects-dialog.dialog-repeat { --width: min(560px, calc(100vw - 24px)); }
 .objects-dialog::part(dialog) {
-  max-height: calc(100dvh - 24px);
+  top: var(--safe-area-top);
+  right: var(--safe-area-right);
+  bottom: var(--safe-area-bottom);
+  left: var(--safe-area-left);
+  max-width: calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 24px);
+  max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 24px);
   border: 1px solid var(--border);
   border-radius: 15px;
   background: var(--surface);
@@ -94,12 +99,30 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
 }
 
 @media (max-width: 520px) {
-  .objects-dialog { --width: calc(100vw - 16px); --spacing: var(--space-4); }
+  .objects-dialog {
+    --width: calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 16px);
+    --spacing: var(--space-4);
+  }
   .objects-dialog.dialog-quick-find { --spacing: 0; }
-  .objects-dialog::part(dialog) { max-height: calc(100dvh - 16px); border-radius: 13px; }
-  .objects-dialog.dialog-quick-find::part(dialog) { max-height: calc(100dvh - 72px); margin-top: calc(56px + env(safe-area-inset-top, 0px)); }
+  .objects-dialog::part(dialog) {
+    max-width: calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 16px);
+    max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 16px);
+    border-radius: 13px;
+  }
+  .objects-dialog.dialog-quick-find::part(dialog) {
+    max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 72px);
+    margin-top: 56px;
+  }
   .objects-dialog.dialog-quick-find .search-results { max-height: min(calc(100dvh - 180px), 438px); }
   .objects-dialog [slot="footer"] wa-button::part(base) { min-height: var(--control-touch); height: var(--control-touch); }
+}
+
+@media (any-pointer: coarse) {
+  .objects-dialog::part(footer) {
+    padding-inline-start: calc(var(--spacing) + var(--safe-area-left));
+    padding-inline-end: calc(var(--spacing) + var(--safe-area-right));
+    padding-block-end: calc(var(--spacing) + var(--safe-area-bottom));
+  }
 }
 
 .objects-mobile-drawer { --wa-focus-ring-width: 0; }
