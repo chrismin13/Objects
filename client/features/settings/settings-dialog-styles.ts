@@ -22,7 +22,7 @@ export const settingsDialogStyles = `
 .settings-native-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .settings-native-field { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 630; }
 .settings-native-field.full { grid-column: 1 / -1; }
-.settings-native-field input {
+.settings-native-field input, .settings-native-field select {
   width: 100%;
   height: var(--control-default);
   padding: 0 10px;
@@ -31,7 +31,7 @@ export const settingsDialogStyles = `
   outline: 0;
   background: var(--surface);
 }
-.settings-native-field input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 15%, transparent); }
+.settings-native-field input:focus, .settings-native-field select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 15%, transparent); }
 .settings-tag-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); }
 .settings-tag-list { display: grid; gap: 6px; }
 .settings-tag-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); }

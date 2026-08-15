@@ -180,13 +180,28 @@ function principalHref(userId: string): string {
 
 function collectionProps(list: CalDavList, revision: number, syncToken: string): ResponseProp[] {
   return [
-    { local: "resourcetype", ns: "DAV:", xml: "<D:resourcetype><D:collection/></D:resourcetype>" },
+    {
+      local: "resourcetype",
+      ns: "DAV:",
+      xml: "<D:resourcetype><D:collection/><C:calendar/></D:resourcetype>",
+    },
     prop("DAV:", "displayname", escapeXmlText(list.displayName)),
     prop("APPLE", "calendar-color", escapeXmlText(list.color)),
     {
       local: "supported-calendar-component-set",
       ns: "CALDAV",
       xml: '<C:supported-calendar-component-set><C:comp name="VTODO"/></C:supported-calendar-component-set>',
+    },
+    {
+      local: "supported-report-set",
+      ns: "DAV:",
+      xml: [
+        "<D:supported-report-set>",
+        "<D:supported-report><D:report><C:calendar-query/></D:report></D:supported-report>",
+        "<D:supported-report><D:report><C:calendar-multiget/></D:report></D:supported-report>",
+        "<D:supported-report><D:report><D:sync-collection/></D:report></D:supported-report>",
+        "</D:supported-report-set>",
+      ].join(""),
     },
     prop("CS", "getctag", String(revision)),
     prop("DAV:", "sync-token", escapeXmlText(syncToken)),
@@ -383,7 +398,7 @@ export function handleCalDavRequest(
           responses.push(
             responseElement(
               resourceHref(parts.userId, list.name, served.resource),
-              memberProps(served.etag, null),
+              memberProps(served.etag, requested?.has("calendar-data") ? served.body : null),
               requested,
             ),
           );
@@ -731,6 +746,19 @@ function handleResource(
       headers: { "Content-Type": "text/calendar; charset=utf-8", ETag: served.etag },
       body: method === "GET" ? served.body : null,
     };
+  }
+
+  if (method === "PROPFIND") {
+    if (!live || !anchor) return { status: 404, headers: {}, body: null };
+    const requested = requestedProps(request.body);
+    const served = serveToDo(document, live, parts.list, anchors, deps, effects);
+    return multiStatus([
+      responseElement(
+        resourceHref(parts.userId, parts.list, served.resource),
+        memberProps(served.etag, requested?.has("calendar-data") ? served.body : null),
+        requested,
+      ),
+    ]);
   }
 
   // A PUT may target the resource even while the to-do currently lives in

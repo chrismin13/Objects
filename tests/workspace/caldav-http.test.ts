@@ -70,6 +70,13 @@ const PROPFIND_LISTS = [
   "</D:propfind>",
 ].join("");
 
+const PROPFIND_RESOURCES = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">',
+  "<D:prop><D:getetag/><D:getcontenttype/><D:resourcetype/><C:calendar-data/></D:prop>",
+  "</D:propfind>",
+].join("");
+
 const SYNC_COLLECTION = [
   '<?xml version="1.0" encoding="utf-8"?>',
   '<D:sync-collection xmlns:D="DAV:">',
@@ -188,6 +195,11 @@ describe("CalDAV endpoint", () => {
     assert.equal(home.status, 207);
     const homeXml = await home.text();
     assert.match(homeXml, /<D:displayname>Inbox<\/D:displayname>/);
+    assert.match(
+      homeXml,
+      /<D:resourcetype><D:collection\/><C:calendar\/><\/D:resourcetype>/,
+      "each list identifies itself as a CalDAV calendar",
+    );
     assert.match(homeXml, /supported-calendar-component-set/);
     assert.match(homeXml, /comp name="VTODO"/);
     assert.ok(!homeXml.includes('comp name="VEVENT"'));
@@ -213,6 +225,27 @@ describe("CalDAV endpoint", () => {
     assert.ok(body.includes("\r\n"), "GET serves CRLF bodies");
     assert.ok(!/(?<!\r)\n/.test(body));
     assert.match(body, /SUMMARY:From the phone\r\n/);
+
+    // remindd verifies a newly-created resource with Depth: 0 PROPFIND.
+    const verified = await SELF.fetch(`${ORIGIN}${href}`, {
+      method: "PROPFIND",
+      headers: { ...basic(token), Depth: "0" },
+      body: PROPFIND_RESOURCES,
+    });
+    assert.equal(verified.status, 207, "resource PROPFIND confirms the create to remindd");
+    const verifiedXml = await verified.text();
+    assert.match(verifiedXml, /<D:getetag>/);
+    assert.match(verifiedXml, /SUMMARY:From the phone/);
+
+    // remindd can also ingest bodies directly from a Depth: 1 list
+    // PROPFIND when it requests calendar-data.
+    const listed = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/inbox/`, {
+      method: "PROPFIND",
+      headers: { ...basic(token), Depth: "1" },
+      body: PROPFIND_RESOURCES,
+    });
+    assert.equal(listed.status, 207);
+    assert.match(await listed.text(), /SUMMARY:From the phone/);
 
     // The workspace snapshot holds exactly what the web client's change would hold.
     const document = await loadedWorkspace();

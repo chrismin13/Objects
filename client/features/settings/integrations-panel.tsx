@@ -17,6 +17,71 @@ function defaultTimeZone(): string {
   }
 }
 
+const FALLBACK_TIME_ZONES = [
+  "UTC",
+  "America/Anchorage",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/New_York",
+  "America/Phoenix",
+  "America/Sao_Paulo",
+  "Asia/Dubai",
+  "Asia/Hong_Kong",
+  "Asia/Kolkata",
+  "Asia/Seoul",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Brisbane",
+  "Australia/Melbourne",
+  "Australia/Perth",
+  "Australia/Sydney",
+  "Europe/Amsterdam",
+  "Europe/Berlin",
+  "Europe/Lisbon",
+  "Europe/London",
+  "Europe/Madrid",
+  "Europe/Paris",
+  "Europe/Rome",
+  "Pacific/Auckland",
+  "Pacific/Honolulu",
+];
+
+function supportedTimeZones(): string[] {
+  const detected = defaultTimeZone();
+  let supported = FALLBACK_TIME_ZONES;
+  try {
+    supported = Intl.supportedValuesOf("timeZone");
+  } catch {
+    // Older browsers use the fallback list while preserving the detected zone.
+  }
+  return [...new Set([detected, "UTC", ...supported])].sort((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+async function copyText(value: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    // Safari may deny the async Clipboard API in an installed PWA. Fall
+    // back to the synchronous selection path while the click gesture lives.
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      return document.execCommand("copy");
+    } finally {
+      textarea.remove();
+    }
+  }
+}
+
 function formatDate(value: string | null): string {
   if (!value) return "Never used";
   try {
@@ -40,8 +105,11 @@ function formatDate(value: string | null): string {
 export function IntegrationsPanel() {
   const [tokens, setTokens] = useState<IntegrationToken[] | null>(null);
   const [label, setLabel] = useState("");
-  const [timeZone, setTimeZone] = useState(defaultTimeZone);
+  const [detectedTimeZone] = useState(defaultTimeZone);
+  const [timeZone, setTimeZone] = useState(detectedTimeZone);
+  const [timeZones] = useState(supportedTimeZones);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -78,6 +146,7 @@ export function IntegrationsPanel() {
         return;
       }
       setCreatedToken(body.token.token);
+      setCopied(false);
       setLabel("");
       await load();
     } catch {
@@ -102,12 +171,12 @@ export function IntegrationsPanel() {
 
   const copy = async () => {
     if (!createdToken) return;
-    try {
-      await navigator.clipboard.writeText(createdToken);
-      setNotice("Token copied to clipboard.");
-    } catch {
-      setNotice("Select the token text and copy it manually.");
-    }
+    const succeeded = await copyText(createdToken);
+    setCopied(succeeded);
+    setNotice(
+      succeeded ? "Token copied to clipboard." : "Select the token text and copy it manually.",
+    );
+    if (succeeded) window.setTimeout(() => setCopied(false), 2_000);
   };
 
   return (
@@ -130,11 +199,13 @@ export function IntegrationsPanel() {
           </label>
           <label class="settings-native-field full">
             Time zone
-            <input
-              value={timeZone}
-              placeholder="America/New_York"
-              onInput={(event) => setTimeZone(event.currentTarget.value)}
-            />
+            <select value={timeZone} onChange={(event) => setTimeZone(event.currentTarget.value)}>
+              {timeZones.map((zone) => (
+                <option value={zone} key={zone}>
+                  {zone === detectedTimeZone ? `${zone} (current)` : zone}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
         <div class="settings-inline-actions">
@@ -159,8 +230,13 @@ export function IntegrationsPanel() {
                 value={createdToken}
                 onFocus={(event) => event.currentTarget.select()}
               />
-              <WaButton size="s" appearance="outlined" onClick={() => void copy()}>
-                Copy
+              <WaButton
+                size="s"
+                appearance="outlined"
+                disabled={copied}
+                onClick={() => void copy()}
+              >
+                {copied ? "Copied" : "Copy"}
               </WaButton>
             </div>
             <p class="settings-empty">
