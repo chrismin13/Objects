@@ -50,6 +50,22 @@ export const settingsDialogStyles = `
 .settings-automation code { padding: 2px 4px; border-radius: 4px; background: var(--surface-subtle); color: var(--text); overflow-wrap: anywhere; }
 .settings-footer { display: flex; justify-content: flex-end; }
 .settings-hidden-file { display: none; }
+.settings-token-list { display: grid; gap: 6px; }
+.settings-token-entry { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.settings-token-reveal { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px dashed var(--border-strong); border-radius: var(--radius-control); }
+.settings-token-reveal code { padding: 2px 4px; border-radius: 4px; background: var(--surface-subtle); color: var(--text); overflow-wrap: anywhere; }
+.settings-token-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: center; }
+.settings-token-row input {
+  min-width: 0;
+  height: var(--control-default);
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  outline: 0;
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
 
 @media (max-width: 560px) {
   .settings-tabs { min-height: 0; }
@@ -60,5 +76,6 @@ export const settingsDialogStyles = `
   .settings-control-row:has(wa-select) { align-items: flex-start; flex-direction: column; }
   .settings-control-row wa-select { width: 100%; }
   .settings-control-row wa-switch, .settings-control-row wa-checkbox { align-self: auto; flex: none; }
+  .settings-token-entry { flex-direction: column; align-items: stretch; }
 }
 `;

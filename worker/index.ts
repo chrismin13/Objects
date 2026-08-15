@@ -7,6 +7,7 @@ import {
   sessionCookieHeader,
   type Session,
 } from "./auth.ts";
+import { handleCalDavRequest, handleTokenApi, isCalDavPath } from "./caldav.ts";
 
 export { WorkspaceDO } from "./workspace-do.ts";
 
@@ -21,6 +22,16 @@ export { WorkspaceDO } from "./workspace-do.ts";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // CalDAV (iOS Reminders sync): Basic auth with app tokens, answered by
+    // the owner's Workspace Durable Object (ADR 0001/0002/0004).
+    if (isCalDavPath(url.pathname)) return handleCalDavRequest(request, env);
+
+    if (url.pathname.startsWith("/api/caldav/tokens")) {
+      const session = await requireSession(request, env);
+      if (session instanceof Response) return session;
+      return handleTokenApi(request, env, session, url);
+    }
 
     if (url.pathname === "/auth/login" && request.method === "GET") {
       return Response.redirect(authorizationUrl(env, callbackUrl(url)), 302);

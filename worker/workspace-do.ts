@@ -10,10 +10,19 @@ import { captureIntoSnapshot, selectCaptureBase } from "../shared/workspace/http
 import { createEmptyWorkspace } from "../shared/workspace/workspace.ts";
 import { dateInTimeZone } from "../shared/workspace/dates.ts";
 import type { WorkspaceDocument } from "../shared/workspace/model.ts";
+import { applyCalDavChanges } from "../shared/workspace/caldav/apply.ts";
+import {
+  handleCalDavRequest,
+  type CalDavEffects,
+  type CalDavHttpRequest,
+} from "../shared/workspace/caldav/protocol.ts";
+import type { CalDavAnchor, CalDavTombstone } from "../shared/workspace/caldav/adapter.ts";
+import type { CalDavTokenRecord } from "./caldav.ts";
 
 const MAX_WORKSPACE_SIZE = 2_000_000;
 const MAX_COMMAND_SIZE = 5_000_000;
 const CHUNK_SIZE = 50_000;
+const LAST_USED_THROTTLE_MS = 3_600_000;
 
 type CaptureOutcome =
   | {
@@ -57,6 +66,36 @@ export class WorkspaceDO extends DurableObject<Env> {
         `CREATE TABLE IF NOT EXISTS receipts (
           mutation_id TEXT PRIMARY KEY,
           conflicts TEXT NOT NULL
+        )`,
+      );
+      ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS caldav_tokens (
+          id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          hash TEXT NOT NULL,
+          time_zone TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          last_used_at TEXT
+        )`,
+      );
+      ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS caldav_anchors (
+          resource TEXT PRIMARY KEY,
+          to_do_id TEXT NOT NULL,
+          list TEXT NOT NULL,
+          served TEXT NOT NULL
+        )`,
+      );
+      ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS caldav_tombstones (
+          resource TEXT PRIMARY KEY,
+          revision INTEGER NOT NULL
+        )`,
+      );
+      ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS caldav_token_index (
+          hash TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL
         )`,
       );
     });
@@ -132,6 +171,275 @@ export class WorkspaceDO extends DurableObject<Env> {
         body: { ok: true, duplicate: captured.status === "duplicate", toDo: captured.toDo },
       };
     });
+  }
+
+  // ── CalDAV (iOS Reminders sync) ───────────────────────────────────────
+
+  private calDavDeps(now: string) {
+    let sequence = 0;
+    return {
+      now: () => now,
+      createId: (kind: string) =>
+        `${kind}-${Date.now().toString(36)}-${++sequence}-${Math.random().toString(36).slice(2, 8)}`,
+    };
+  }
+
+  private readAnchors(): CalDavAnchor[] {
+    return this.ctx.storage.sql
+      .exec(`SELECT resource, to_do_id, list, served FROM caldav_anchors`)
+      .toArray()
+      .map((row) => ({
+        resource: row.resource as string,
+        toDoId: row.to_do_id as string,
+        list: row.list as string,
+        served: JSON.parse(row.served as string),
+      }));
+  }
+
+  private readTombstones(): CalDavTombstone[] {
+    return this.ctx.storage.sql
+      .exec(`SELECT resource, revision FROM caldav_tombstones`)
+      .toArray()
+      .map((row) => ({ resource: row.resource as string, revision: Number(row.revision) }));
+  }
+
+  private receiptExists(mutationId: string): boolean {
+    return (
+      this.ctx.storage.sql
+        .exec(`SELECT 1 FROM receipts WHERE mutation_id = ?`, mutationId)
+        .toArray().length > 0
+    );
+  }
+
+  private applyCalDavEffectChanges(
+    snapshot: WorkspaceSyncSnapshot,
+    effects: CalDavEffects,
+    now: string,
+  ): WorkspaceSyncSnapshot {
+    let current = snapshot;
+    for (const change of effects.changes) {
+      if (this.receiptExists(change.mutationId)) continue;
+      const persisted = resolveSyncCommand(
+        current,
+        {
+          expectedRevision: current.revision,
+          mutationId: change.mutationId,
+          document: change.document,
+        },
+        now,
+      );
+      if (persisted.result.status === "rejected") continue; // rejected changes leave state untouched
+      if (persisted.next) {
+        this.writeSnapshot(persisted.next);
+        current = persisted.next;
+      }
+      if (persisted.result.status === "acknowledged")
+        this.writeReceipt(change.mutationId, persisted.result.conflicts);
+    }
+    for (const anchor of effects.anchorUpserts)
+      this.ctx.storage.sql.exec(
+        `INSERT OR REPLACE INTO caldav_anchors (resource, to_do_id, list, served) VALUES (?, ?, ?, ?)`,
+        anchor.resource,
+        anchor.toDoId,
+        anchor.list,
+        JSON.stringify(anchor.served),
+      );
+    for (const resource of effects.anchorDeletes)
+      this.ctx.storage.sql.exec(`DELETE FROM caldav_anchors WHERE resource = ?`, resource);
+    for (const tombstone of effects.tombstoneUpserts)
+      this.ctx.storage.sql.exec(
+        `INSERT OR REPLACE INTO caldav_tombstones (resource, revision) VALUES (?, ?)`,
+        tombstone.resource,
+        tombstone.revision,
+      );
+    for (const resource of effects.tombstoneDeletes)
+      this.ctx.storage.sql.exec(`DELETE FROM caldav_tombstones WHERE resource = ?`, resource);
+    return current;
+  }
+
+  /** One CalDAV request: token check, pure handler, effect persistence. */
+  caldav(request: {
+    method: string;
+    path: string;
+    depth: string | null;
+    ifMatch: string | null;
+    ifNoneMatch: string | null;
+    destination: string | null;
+    body: string | null;
+    bodyHash: string;
+    tokenHash: string;
+    baseUrl: string;
+  }): {
+    status: number;
+    headers: Record<string, string>;
+    body: string | null;
+    unauthorized?: boolean;
+  } {
+    const now = new Date().toISOString();
+    return this.ctx.storage.transactionSync(() => {
+      const token = this.ctx.storage.sql
+        .exec(
+          `SELECT id, time_zone, last_used_at FROM caldav_tokens WHERE hash = ?`,
+          request.tokenHash,
+        )
+        .toArray();
+      if (!token.length) return { status: 401, headers: {}, body: null, unauthorized: true };
+      const timeZone = token[0].time_zone as string;
+      const lastUsedAt = token[0].last_used_at as string | null;
+      if (!lastUsedAt || Date.now() - Date.parse(lastUsedAt) > LAST_USED_THROTTLE_MS)
+        this.ctx.storage.sql.exec(
+          `UPDATE caldav_tokens SET last_used_at = ? WHERE id = ?`,
+          now,
+          token[0].id as string,
+        );
+
+      let snapshot = this.readSnapshot();
+      if (!snapshot) return { status: 404, headers: {}, body: null };
+
+      // Occurrence generation bound exactly like the web client: at most
+      // once per token-timezone day (receipt-deduped), before any query is
+      // answered.
+      if (
+        request.method.toUpperCase() === "REPORT" &&
+        (request.body ?? "").includes("calendar-query")
+      ) {
+        let today: string;
+        try {
+          today = dateInTimeZone(new Date(now), timeZone);
+        } catch {
+          today = now.slice(0, 10);
+        }
+        const generateMutation = `caldav:generate:${today}`;
+        const due = snapshot.document.repeatingTemplates.some(
+          (template) => template.state === "active" && template.nextDate <= today,
+        );
+        if (due && !this.receiptExists(generateMutation)) {
+          const applied = applyCalDavChanges(
+            snapshot,
+            [
+              {
+                kind: "change",
+                change: { type: "generateRepeatingOccurrences", throughDate: today },
+              },
+            ],
+            generateMutation,
+            this.calDavDeps(now),
+          );
+          if (applied.ok && applied.next) {
+            this.writeSnapshot(applied.next);
+            if (applied.result.status === "acknowledged")
+              this.writeReceipt(generateMutation, applied.result.conflicts);
+            snapshot = applied.next;
+          }
+        }
+      }
+
+      const resource = request.path.split("/").filter(Boolean).at(-1) ?? "";
+      const putReplay =
+        request.method.toUpperCase() === "PUT" && request.bodyHash
+          ? this.receiptExists(`caldav:put:${resource}:${request.bodyHash}`)
+          : false;
+
+      const handlerRequest: CalDavHttpRequest = {
+        method: request.method,
+        path: request.path,
+        depth: request.depth,
+        ifMatch: request.ifMatch,
+        ifNoneMatch: request.ifNoneMatch,
+        destination: request.destination,
+        body: request.body,
+        bodyHash: request.bodyHash,
+        putReplay,
+      };
+      const result = handleCalDavRequest(
+        handlerRequest,
+        {
+          userId: this.ctx.id.name ?? "unknown",
+          snapshot,
+          anchors: this.readAnchors(),
+          tombstones: this.readTombstones(),
+        },
+        {
+          now,
+          baseUrl: request.baseUrl,
+          createResourceId: () => crypto.randomUUID(),
+          createId: this.calDavDeps(now).createId,
+        },
+      );
+      this.applyCalDavEffectChanges(snapshot, result.effects, now);
+      return { status: result.status, headers: result.headers, body: result.body };
+    });
+  }
+
+  caldavTokens(): CalDavTokenRecord[] {
+    return this.ctx.storage.sql
+      .exec(
+        `SELECT id, label, time_zone, created_at, last_used_at FROM caldav_tokens ORDER BY created_at`,
+      )
+      .toArray()
+      .map((row) => ({
+        id: row.id as string,
+        label: row.label as string,
+        timeZone: row.time_zone as string,
+        createdAt: row.created_at as string,
+        lastUsedAt: (row.last_used_at as string | null) ?? null,
+      }));
+  }
+
+  caldavCreateToken(input: {
+    id: string;
+    label: string;
+    timeZone: string;
+    hash: string;
+  }): CalDavTokenRecord {
+    const createdAt = new Date().toISOString();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO caldav_tokens (id, label, hash, time_zone, created_at, last_used_at)
+       VALUES (?, ?, ?, ?, ?, NULL)`,
+      input.id,
+      input.label,
+      input.hash,
+      input.timeZone,
+      createdAt,
+    );
+    return {
+      id: input.id,
+      label: input.label,
+      timeZone: input.timeZone,
+      createdAt,
+      lastUsedAt: null,
+    };
+  }
+
+  caldavRevokeToken(id: string): string | null {
+    const rows = this.ctx.storage.sql
+      .exec(`SELECT hash FROM caldav_tokens WHERE id = ?`, id)
+      .toArray();
+    if (!rows.length) return null;
+    this.ctx.storage.sql.exec(`DELETE FROM caldav_tokens WHERE id = ?`, id);
+    return rows[0].hash as string;
+  }
+
+  // Singleton token index (the `caldav-index` instance): maps token hashes
+  // to owner ids so the userId-less well-known probe can route home.
+
+  caldavIndexSet(hash: string, userId: string): void {
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO caldav_token_index (hash, user_id) VALUES (?, ?)`,
+      hash,
+      userId,
+    );
+  }
+
+  caldavIndexDrop(hash: string): void {
+    this.ctx.storage.sql.exec(`DELETE FROM caldav_token_index WHERE hash = ?`, hash);
+  }
+
+  caldavIndexLookup(hash: string): string | null {
+    const rows = this.ctx.storage.sql
+      .exec(`SELECT user_id FROM caldav_token_index WHERE hash = ?`, hash)
+      .toArray();
+    return rows.length ? (rows[0].user_id as string) : null;
   }
 
   private parseCommand(serialized: string): WorkspaceSyncCommand {

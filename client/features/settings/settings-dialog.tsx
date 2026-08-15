@@ -1,5 +1,6 @@
 import { useRef, useState } from "preact/hooks";
 import type { ObjectsSettings } from "../../../shared/state";
+import { IntegrationsPanel } from "./integrations-panel";
 import type { OverlayElement, ValueElement } from "../../ui/webawesome";
 import {
   eventChecked,
@@ -121,6 +122,9 @@ export function SettingsDialog({
           </WaTab>
           <WaTab slot="nav" panel="data">
             Data
+          </WaTab>
+          <WaTab slot="nav" panel="integrations">
+            Integrations
           </WaTab>
 
           <WaTabPanel name="general" active>
@@ -419,6 +423,9 @@ export function SettingsDialog({
                 </p>
               </section>
             </div>
+          </WaTabPanel>
+          <WaTabPanel name="integrations">
+            <IntegrationsPanel />
           </WaTabPanel>
         </WaTabGroup>
       </div>
