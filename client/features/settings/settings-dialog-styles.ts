@@ -66,6 +66,17 @@ export const settingsDialogStyles = `
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
+.settings-sync-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-control); }
+.settings-sync-table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.4; }
+.settings-sync-table th, .settings-sync-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.settings-sync-table thead th { background: var(--surface-subtle); color: var(--muted); font-size: 11px; font-weight: 650; }
+.settings-sync-table tbody th { width: 24%; font-weight: 650; }
+.settings-sync-table tbody td { color: var(--muted); }
+.settings-sync-table tr:last-child > * { border-bottom: 0; }
+.settings-sync-table .settings-sync-status { width: 92px; color: var(--text); white-space: nowrap; }
+.settings-sync-status span { display: inline-block; width: 14px; font-size: 14px; font-weight: 750; line-height: 1; }
+.settings-sync-status.syncs span { color: var(--green); }
+.settings-sync-status.does-not-sync span { color: var(--red); }
 
 @media (max-width: 560px) {
   .settings-tabs { min-height: 0; }

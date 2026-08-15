@@ -276,15 +276,63 @@ export function IntegrationsPanel() {
       </section>
       <section class="settings-card">
         <h3>What syncs</h3>
-        <p>
-          To-dos in the Inbox, Project, and Area lists — created, edited, completed, reopened, and
-          moved between lists in both directions. Titles, notes, dates, one alert per to-do, and
-          tags sync; deleting on the phone moves the to-do to Trash in Objects.
-        </p>
-        <p>
-          Lists themselves are managed in Objects only. Repeat rules, Deadlines, checklists, the
-          This Evening flag, priorities, and location-based alerts stay in the app they belong to.
-        </p>
+        <div class="settings-sync-table-wrap">
+          <table class="settings-sync-table">
+            <thead>
+              <tr>
+                <th scope="col">Item</th>
+                <th scope="col">Details</th>
+                <th scope="col">Sync</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">To-dos</th>
+                <td>Inbox, Project, and Area lists</td>
+                <td class="settings-sync-status syncs">
+                  <span aria-hidden="true">✓</span> Both ways
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Changes</th>
+                <td>Create, edit, complete, reopen, and move</td>
+                <td class="settings-sync-status syncs">
+                  <span aria-hidden="true">✓</span> Both ways
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Details</th>
+                <td>Titles, notes, dates, one alert, and tags</td>
+                <td class="settings-sync-status syncs">
+                  <span aria-hidden="true">✓</span> Both ways
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Phone deletion</th>
+                <td>Moves the to-do to Trash in Objects</td>
+                <td class="settings-sync-status syncs">
+                  <span aria-hidden="true">✓</span> To Objects
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Lists</th>
+                <td>Created, renamed, and deleted in Objects only</td>
+                <td class="settings-sync-status does-not-sync">
+                  <span aria-hidden="true">×</span> No
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Other details</th>
+                <td>
+                  Repeat rules, Deadlines, checklists, This Evening, priorities, and location alerts
+                </td>
+                <td class="settings-sync-status does-not-sync">
+                  <span aria-hidden="true">×</span> No
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );
