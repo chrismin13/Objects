@@ -17,6 +17,7 @@ import {
   calDavLists,
   changesForInboundPut,
   listNameForToDo,
+  locationForList,
   renderToDoResource,
   stampFor,
   toDosInList,
@@ -51,6 +52,8 @@ export type CalDavHttpRequest = {
 
 export type CalDavHandlerState = {
   userId: string;
+  /** null exposes all Spaces; otherwise this request is confined to one Space. */
+  spaceId: string | null;
   snapshot: WorkspaceSyncSnapshot;
   anchors: CalDavAnchor[];
   tombstones: CalDavTombstone[];
@@ -356,7 +359,7 @@ export function handleCalDavRequest(
     ];
     if ((request.depth ?? "1") !== "0") {
       const anchors = anchorMap(state, effects);
-      for (const list of calDavLists(state.snapshot.document)) {
+      for (const list of calDavLists(state.snapshot.document, state.spaceId)) {
         responses.push(
           responseElement(
             listHref(parts.userId, list.name),
@@ -364,7 +367,7 @@ export function handleCalDavRequest(
             requested,
           ),
         );
-        for (const toDo of toDosInList(state.snapshot.document, list))
+        for (const toDo of toDosInList(state.snapshot.document, list, state.spaceId))
           serveToDo(state.snapshot.document, toDo, list.name, anchors, deps, effects);
       }
     }
@@ -372,7 +375,7 @@ export function handleCalDavRequest(
   }
 
   if (parts.kind === "list") {
-    const list = calDavList(state.snapshot.document, parts.list);
+    const list = calDavList(state.snapshot.document, parts.list, state.spaceId);
     if (!list) return plain(404, flushEffects(effects));
     const anchors = anchorMap(state, effects);
 
@@ -386,7 +389,7 @@ export function handleCalDavRequest(
         ),
       ];
       if ((request.depth ?? "1") !== "0") {
-        for (const toDo of toDosInList(state.snapshot.document, list)) {
+        for (const toDo of toDosInList(state.snapshot.document, list, state.spaceId)) {
           const served = serveToDo(
             state.snapshot.document,
             toDo,
@@ -429,6 +432,8 @@ export function handleCalDavRequest(
     return methodNotAllowed(flushEffects(effects));
   }
 
+  if (!calDavList(state.snapshot.document, parts.list, state.spaceId))
+    return plain(404, flushEffects(effects));
   const result = handleResource(request, parts, state, deps, effects);
   return { ...result, effects: flushEffects(effects) };
 }
@@ -555,7 +560,7 @@ function handleReport(
   if (report === "calendar-query") {
     const filter = root ? findFilter(root) : null;
     const responses: string[] = [];
-    for (const toDo of toDosInList(document, list)) {
+    for (const toDo of toDosInList(document, list, state.spaceId)) {
       const served = serveToDo(document, toDo, list.name, anchors, deps, effects);
       if (filter && !matchesFilter(filter, parseVTodo(served.body))) continue;
       responses.push(
@@ -600,7 +605,7 @@ function handleReport(
     if (clientToken && clientToken === token)
       return { ...multiStatus([], token), effects: flushEffects(effects) };
     const responses: string[] = [];
-    for (const toDo of toDosInList(document, list)) {
+    for (const toDo of toDosInList(document, list, state.spaceId)) {
       const served = serveToDo(document, toDo, list.name, anchors, deps, effects);
       responses.push(
         responseElement(
@@ -790,7 +795,7 @@ function handleResource(
     const destination = parsePath(new URL(request.destination, `${deps.baseUrl}/`).pathname);
     if (destination.kind !== "list" || !anchored || !anchor)
       return { status: 404, headers: {}, body: null };
-    const target = calDavList(document, destination.list);
+    const target = calDavList(document, destination.list, state.spaceId);
     if (!target) return { status: 404, headers: {}, body: null };
     // A MOVE is a re-file: apply the container change directly.
     const applied = resolveInboundChanges(
@@ -801,7 +806,7 @@ function handleResource(
           change: {
             type: "updateToDo",
             id: anchored.id,
-            changes: { location: locationForMove(document, target) },
+            changes: { location: locationForList(document, target, state.spaceId) },
           },
         },
       ],
@@ -832,14 +837,6 @@ function handleResource(
   return methodNotAllowed(flushEffects(effects));
 }
 
-function locationForMove(document: WorkspaceDocument, list: CalDavList) {
-  if (list.container.kind === "project")
-    return { kind: "project" as const, projectId: list.container.id };
-  if (list.container.kind === "area") return { kind: "area" as const, areaId: list.container.id };
-  const spaceId = document.settings.defaultSpaceId;
-  return spaceId ? { kind: "unfiled" as const, spaceId } : null;
-}
-
 function handlePut(
   request: CalDavHttpRequest,
   parts: { userId: string; list: string; resource: string },
@@ -851,7 +848,7 @@ function handlePut(
   live: ToDo | null,
 ): CalDavResponse {
   const document = state.snapshot.document;
-  const list = calDavList(document, parts.list);
+  const list = calDavList(document, parts.list, state.spaceId);
   if (!list) return { status: 404, headers: {}, body: null };
 
   const parsed = request.body ? parseVTodo(request.body) : null;
@@ -873,7 +870,13 @@ function handlePut(
     return { status: 204, headers: { ETag: served.etag }, body: null };
   }
 
-  const { changes, served: nextServed } = changesForInboundPut(document, anchor, parsed, list);
+  const { changes, served: nextServed } = changesForInboundPut(
+    document,
+    anchor,
+    parsed,
+    list,
+    state.spaceId,
+  );
   let etag: string;
   let toDoId: string;
 

@@ -31,6 +31,7 @@ export type CalendarDraft = { title: string; start: string; end: string };
 export function SettingsDialog({
   settings,
   userName,
+  spaces,
   spacesCount,
   launchRulesEnabled,
   tags,
@@ -49,6 +50,7 @@ export function SettingsDialog({
 }: {
   settings: ObjectsSettings;
   userName: string;
+  spaces: Array<{ id: string; title: string }>;
   spacesCount: number;
   launchRulesEnabled: boolean;
   tags: string[];
@@ -425,7 +427,7 @@ export function SettingsDialog({
             </div>
           </WaTabPanel>
           <WaTabPanel name="integrations">
-            <IntegrationsPanel />
+            <IntegrationsPanel spaces={spaces} />
           </WaTabPanel>
         </WaTabGroup>
       </div>

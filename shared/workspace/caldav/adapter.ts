@@ -63,7 +63,12 @@ function containerForListName(name: string): CalDavListContainer | null {
 }
 
 /** The lists exposed in the home set: Inbox, live Projects, live Areas. */
-export function calDavLists(document: WorkspaceDocument): CalDavList[] {
+export function calDavLists(
+  document: WorkspaceDocument,
+  scopeSpaceId: string | null = null,
+): CalDavList[] {
+  if (scopeSpaceId !== null && !document.spaces.some((space) => space.id === scopeSpaceId))
+    return [];
   const lists: CalDavList[] = [
     { name: CALDAV_INBOX, displayName: "Inbox", color: "#8e8e93", container: { kind: "inbox" } },
   ];
@@ -76,6 +81,7 @@ export function calDavLists(document: WorkspaceDocument): CalDavList[] {
       projectLocation.kind === "space"
         ? projectLocation.spaceId
         : (document.areas.find((area) => area.id === projectLocation.areaId)?.spaceId ?? null);
+    if (scopeSpaceId !== null && spaceId !== scopeSpaceId) continue;
     lists.push({
       name: listNameForContainer({ kind: "project", id: project.id }),
       displayName: project.title,
@@ -85,7 +91,7 @@ export function calDavLists(document: WorkspaceDocument): CalDavList[] {
   }
   for (const area of [...document.areas].sort((left, right) => left.order - right.order)) {
     const space = document.spaces.find((candidate) => candidate.id === area.spaceId);
-    if (!space) continue;
+    if (!space || (scopeSpaceId !== null && space.id !== scopeSpaceId)) continue;
     lists.push({
       name: listNameForContainer({ kind: "area", id: area.id }),
       displayName: area.title,
@@ -96,9 +102,13 @@ export function calDavLists(document: WorkspaceDocument): CalDavList[] {
   return lists;
 }
 
-export function calDavList(document: WorkspaceDocument, name: string): CalDavList | null {
+export function calDavList(
+  document: WorkspaceDocument,
+  name: string,
+  scopeSpaceId: string | null = null,
+): CalDavList | null {
   if (!containerForListName(name)) return null;
-  return calDavLists(document).find((list) => list.name === name) ?? null;
+  return calDavLists(document, scopeSpaceId).find((list) => list.name === name) ?? null;
 }
 
 /**
@@ -134,9 +144,19 @@ export function listNameForToDo(document: WorkspaceDocument, toDo: ToDo): string
 }
 
 /** Members of a list: live to-dos whose Location resolves to the container. */
-export function toDosInList(document: WorkspaceDocument, list: CalDavList): ToDo[] {
+export function toDosInList(
+  document: WorkspaceDocument,
+  list: CalDavList,
+  scopeSpaceId: string | null = null,
+): ToDo[] {
   return document.toDos
-    .filter((toDo) => listNameForToDo(document, toDo) === list.name)
+    .filter(
+      (toDo) =>
+        listNameForToDo(document, toDo) === list.name &&
+        (scopeSpaceId === null ||
+          list.container.kind !== "inbox" ||
+          (toDo.location.kind === "unfiled" && toDo.location.spaceId === scopeSpaceId)),
+    )
     .sort((left, right) => left.order - right.order);
 }
 
@@ -246,10 +266,11 @@ function scheduleFromParsed(parsed: ParsedVTodo): InboundSchedule {
   };
 }
 
-/** The Workspace Location a list maps to (Inbox → unfiled in default Space). */
+/** The Workspace Location a list maps to (Inbox → unfiled in the scoped/default Space). */
 export function locationForList(
   document: WorkspaceDocument,
   list: CalDavList,
+  scopeSpaceId: string | null = null,
 ): ToDoLocation | null {
   const container = list.container;
   if (container.kind === "project") {
@@ -262,8 +283,8 @@ export function locationForList(
       ? { kind: "area", areaId: container.id }
       : null;
   }
-  const defaultSpaceId = document.settings.defaultSpaceId;
-  return defaultSpaceId ? { kind: "unfiled", spaceId: defaultSpaceId } : null;
+  const inboxSpaceId = scopeSpaceId ?? document.settings.defaultSpaceId;
+  return inboxSpaceId ? { kind: "unfiled", spaceId: inboxSpaceId } : null;
 }
 
 export type InboundChange = {
@@ -308,8 +329,9 @@ export function changesForInboundPut(
   anchor: CalDavAnchor | null,
   parsed: ParsedVTodo,
   list: CalDavList,
+  scopeSpaceId: string | null = null,
 ): { changes: InboundChange[]; served: CalDavAnchorFields } {
-  const location = locationForList(document, list);
+  const location = locationForList(document, list, scopeSpaceId);
 
   if (!anchor) {
     // Create: PUT with If-None-Match:* on an unknown resource.

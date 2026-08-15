@@ -74,10 +74,14 @@ export class WorkspaceDO extends DurableObject<Env> {
           label TEXT NOT NULL,
           hash TEXT NOT NULL,
           time_zone TEXT NOT NULL,
+          space_id TEXT,
           created_at TEXT NOT NULL,
           last_used_at TEXT
         )`,
       );
+      const tokenColumns = ctx.storage.sql.exec(`PRAGMA table_info(caldav_tokens)`).toArray();
+      if (!tokenColumns.some((column) => column.name === "space_id"))
+        ctx.storage.sql.exec(`ALTER TABLE caldav_tokens ADD COLUMN space_id TEXT`);
       ctx.storage.sql.exec(
         `CREATE TABLE IF NOT EXISTS caldav_anchors (
           resource TEXT PRIMARY KEY,
@@ -279,12 +283,13 @@ export class WorkspaceDO extends DurableObject<Env> {
     return this.ctx.storage.transactionSync(() => {
       const token = this.ctx.storage.sql
         .exec(
-          `SELECT id, time_zone, last_used_at FROM caldav_tokens WHERE hash = ?`,
+          `SELECT id, time_zone, space_id, last_used_at FROM caldav_tokens WHERE hash = ?`,
           request.tokenHash,
         )
         .toArray();
       if (!token.length) return { status: 401, headers: {}, body: null, unauthorized: true };
       const timeZone = token[0].time_zone as string;
+      const spaceId = (token[0].space_id as string | null) ?? null;
       const lastUsedAt = token[0].last_used_at as string | null;
       if (!lastUsedAt || Date.now() - Date.parse(lastUsedAt) > LAST_USED_THROTTLE_MS)
         this.ctx.storage.sql.exec(
@@ -355,6 +360,7 @@ export class WorkspaceDO extends DurableObject<Env> {
         handlerRequest,
         {
           userId: this.ctx.id.name ?? "unknown",
+          spaceId,
           snapshot,
           anchors: this.readAnchors(),
           tombstones: this.readTombstones(),
@@ -374,13 +380,14 @@ export class WorkspaceDO extends DurableObject<Env> {
   caldavTokens(): CalDavTokenRecord[] {
     return this.ctx.storage.sql
       .exec(
-        `SELECT id, label, time_zone, created_at, last_used_at FROM caldav_tokens ORDER BY created_at`,
+        `SELECT id, label, time_zone, space_id, created_at, last_used_at FROM caldav_tokens ORDER BY created_at`,
       )
       .toArray()
       .map((row) => ({
         id: row.id as string,
         label: row.label as string,
         timeZone: row.time_zone as string,
+        spaceId: (row.space_id as string | null) ?? null,
         createdAt: row.created_at as string,
         lastUsedAt: (row.last_used_at as string | null) ?? null,
       }));
@@ -390,22 +397,31 @@ export class WorkspaceDO extends DurableObject<Env> {
     id: string;
     label: string;
     timeZone: string;
+    spaceId: string | null;
     hash: string;
-  }): CalDavTokenRecord {
+  }): CalDavTokenRecord | null {
+    const snapshot = this.readSnapshot();
+    if (
+      input.spaceId !== null &&
+      !snapshot?.document.spaces.some((space) => space.id === input.spaceId)
+    )
+      return null;
     const createdAt = new Date().toISOString();
     this.ctx.storage.sql.exec(
-      `INSERT INTO caldav_tokens (id, label, hash, time_zone, created_at, last_used_at)
-       VALUES (?, ?, ?, ?, ?, NULL)`,
+      `INSERT INTO caldav_tokens (id, label, hash, time_zone, space_id, created_at, last_used_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL)`,
       input.id,
       input.label,
       input.hash,
       input.timeZone,
+      input.spaceId,
       createdAt,
     );
     return {
       id: input.id,
       label: input.label,
       timeZone: input.timeZone,
+      spaceId: input.spaceId,
       createdAt,
       lastUsedAt: null,
     };

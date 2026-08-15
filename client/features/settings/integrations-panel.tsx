@@ -5,9 +5,12 @@ type IntegrationToken = {
   id: string;
   label: string;
   timeZone: string;
+  spaceId: string | null;
   createdAt: string;
   lastUsedAt: string | null;
 };
+
+type SpaceOption = { id: string; title: string };
 
 function defaultTimeZone(): string {
   try {
@@ -102,11 +105,12 @@ function formatDate(value: string | null): string {
  * Talks to /api/caldav/tokens directly; the token value is shown exactly
  * once at creation (only its hash is stored).
  */
-export function IntegrationsPanel() {
+export function IntegrationsPanel({ spaces }: { spaces: SpaceOption[] }) {
   const [tokens, setTokens] = useState<IntegrationToken[] | null>(null);
   const [label, setLabel] = useState("");
   const [detectedTimeZone] = useState(defaultTimeZone);
   const [timeZone, setTimeZone] = useState(detectedTimeZone);
+  const [spaceId, setSpaceId] = useState("");
   const [timeZones] = useState(supportedTimeZones);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -135,7 +139,7 @@ export function IntegrationsPanel() {
       const response = await fetch("/api/caldav/tokens", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: label.trim(), timeZone }),
+        body: JSON.stringify({ label: label.trim(), timeZone, spaceId: spaceId || null }),
       });
       const body = (await response.json()) as {
         token?: IntegrationToken & { token: string };
@@ -207,6 +211,17 @@ export function IntegrationsPanel() {
               ))}
             </select>
           </label>
+          <label class="settings-native-field full">
+            Spaces
+            <select value={spaceId} onChange={(event) => setSpaceId(event.currentTarget.value)}>
+              <option value="">All Spaces</option>
+              {spaces.map((space) => (
+                <option value={space.id} key={space.id}>
+                  {space.title}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div class="settings-inline-actions">
           <WaButton
@@ -257,7 +272,11 @@ export function IntegrationsPanel() {
                   <strong>{token.label}</strong>
                   <small>
                     Created {formatDate(token.createdAt)} · {formatDate(token.lastUsedAt)} ·{" "}
-                    {token.timeZone}
+                    {token.timeZone} ·{" "}
+                    {token.spaceId === null
+                      ? "All Spaces"
+                      : (spaces.find((space) => space.id === token.spaceId)?.title ??
+                        "Unavailable Space")}
                   </small>
                 </div>
                 <WaButton

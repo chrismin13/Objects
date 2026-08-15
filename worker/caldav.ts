@@ -21,6 +21,8 @@ export type CalDavTokenRecord = {
   id: string;
   label: string;
   timeZone: string;
+  /** null exposes every Space; otherwise the token is confined to one Space. */
+  spaceId: string | null;
   createdAt: string;
   lastUsedAt: string | null;
 };
@@ -167,9 +169,11 @@ export async function handleTokenApi(
     const input = (await request.json().catch(() => null)) as {
       label?: unknown;
       timeZone?: unknown;
+      spaceId?: unknown;
     } | null;
     const label = typeof input?.label === "string" ? input.label.trim() : "";
     const timeZone = typeof input?.timeZone === "string" ? input.timeZone : "";
+    const spaceId = input?.spaceId === undefined || input.spaceId === null ? null : input.spaceId;
     if (!label || label.length > 100)
       return Response.json(
         { ok: false, error: "Enter a label between 1 and 100 characters." },
@@ -177,13 +181,24 @@ export async function handleTokenApi(
       );
     if (!validTimeZone(timeZone))
       return Response.json({ ok: false, error: "Choose a valid IANA time zone." }, { status: 400 });
+    if (spaceId !== null && typeof spaceId !== "string")
+      return Response.json(
+        { ok: false, error: "Choose All Spaces or one existing Space." },
+        { status: 400 },
+      );
     const token = generateToken();
     const created = (await stub.caldavCreateToken({
       id: crypto.randomUUID(),
       label,
       timeZone,
+      spaceId,
       hash: await sha256Hex(token),
-    })) as CalDavTokenRecord;
+    })) as CalDavTokenRecord | null;
+    if (!created)
+      return Response.json(
+        { ok: false, error: "Choose All Spaces or one existing Space." },
+        { status: 400 },
+      );
     const indexId = env.WORKSPACE_DO.idFromName(TOKEN_INDEX_NAME);
     await env.WORKSPACE_DO.get(indexId).caldavIndexSet(await sha256Hex(token), session.userId);
     return Response.json({ token: { ...created, token } }, { status: 201 });

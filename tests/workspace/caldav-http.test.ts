@@ -44,10 +44,14 @@ function basic(password: string, username = "anything"): Record<string, string> 
   return { Authorization: `Basic ${btoa(`${username}:${password}`)}` };
 }
 
-async function createToken(label = "iPhone"): Promise<string> {
+async function createToken(label = "iPhone", spaceId?: string): Promise<string> {
   const response = await api("/api/caldav/tokens", {
     method: "POST",
-    body: JSON.stringify({ label, timeZone: "America/New_York" }),
+    body: JSON.stringify({
+      label,
+      timeZone: "America/New_York",
+      ...(spaceId === undefined ? {} : { spaceId }),
+    }),
   });
   assert.equal(response.status, 201);
   const body = (await response.json()) as { token: { token: string } };
@@ -204,6 +208,145 @@ describe("CalDAV endpoint", () => {
     assert.match(homeXml, /comp name="VTODO"/);
     assert.ok(!homeXml.includes('comp name="VEVENT"'));
     assert.match(homeXml, /getctag/);
+  });
+
+  it("discovers only lists belonging to a single-Space token", async () => {
+    const document = await loadedWorkspace();
+    const spaces = document.spaces as Array<{ id: string; title: string }>;
+    const workSpace = spaces.find((space) => space.title === "caldav Work");
+    assert.ok(workSpace);
+    const workToken = await createToken("Work only", workSpace.id);
+
+    const scoped = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/`, {
+      method: "PROPFIND",
+      headers: { ...basic(workToken), Depth: "1" },
+      body: PROPFIND_LISTS,
+    });
+    assert.equal(scoped.status, 207);
+    const scopedXml = await scoped.text();
+    assert.match(scopedXml, /<D:displayname>Inbox<\/D:displayname>/);
+    assert.match(scopedXml, /<D:displayname>caldav Studio<\/D:displayname>/);
+    assert.match(scopedXml, /<D:displayname>caldav Launch<\/D:displayname>/);
+    assert.ok(!scopedXml.includes("caldav Monthly project"));
+
+    const unscoped = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/`, {
+      method: "PROPFIND",
+      headers: { ...basic(token), Depth: "1" },
+      body: PROPFIND_LISTS,
+    });
+    assert.equal(unscoped.status, 207);
+    assert.match(await unscoped.text(), /<D:displayname>caldav Monthly project<\/D:displayname>/);
+  });
+
+  it("cannot read or write resources outside the token's Space", async () => {
+    const document = await loadedWorkspace();
+    const spaces = document.spaces as Array<{ id: string; title: string }>;
+    const projects = document.projects as Array<{ id: string; title: string }>;
+    const workSpace = spaces.find((space) => space.title === "caldav Work");
+    const workProject = projects.find((project) => project.title === "caldav Launch");
+    const personalProject = projects.find((project) => project.title === "caldav Monthly project");
+    assert.ok(workSpace && workProject && personalProject);
+    const workToken = await createToken("Work boundary", workSpace.id);
+
+    const personalQuery = await SELF.fetch(
+      `${ORIGIN}/dav/${USER_ID}/project-${personalProject.id}/`,
+      { method: "REPORT", headers: basic(token), body: CALENDAR_QUERY },
+    );
+    assert.equal(personalQuery.status, 207);
+    const personalResource = extractHrefResource(await personalQuery.text());
+    const hidden = await SELF.fetch(
+      `${ORIGIN}/dav/${USER_ID}/project-${personalProject.id}/${personalResource}`,
+      { headers: basic(workToken) },
+    );
+    assert.equal(hidden.status, 404);
+
+    const workQuery = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/project-${workProject.id}/`, {
+      method: "REPORT",
+      headers: basic(workToken),
+      body: CALENDAR_QUERY,
+    });
+    assert.equal(workQuery.status, 207);
+    const workResource = extractHrefResource(await workQuery.text());
+    const escaped = await SELF.fetch(
+      `${ORIGIN}/dav/${USER_ID}/project-${personalProject.id}/${workResource}`,
+      {
+        method: "PUT",
+        headers: basic(workToken),
+        body: newVtodoBody("Attempted cross-Space move", null),
+      },
+    );
+    assert.equal(escaped.status, 404);
+    const after = await loadedWorkspace();
+    assert.ok(
+      !(after.toDos as Array<Record<string, unknown>>).some(
+        (toDo) => toDo.title === "Attempted cross-Space move",
+      ),
+    );
+  });
+
+  it("moves resources into the scoped Inbox rather than the default Space", async () => {
+    const document = await loadedWorkspace();
+    const spaces = document.spaces as Array<{ id: string; title: string }>;
+    const projects = document.projects as Array<{ id: string; title: string }>;
+    const workSpace = spaces.find((space) => space.title === "caldav Work");
+    const workProject = projects.find((project) => project.title === "caldav Launch");
+    assert.ok(workSpace && workProject);
+    const workToken = await createToken("Work MOVE", workSpace.id);
+    const resource = `${crypto.randomUUID()}.ics`;
+    const projectHref = `/dav/${USER_ID}/project-${workProject.id}/${resource}`;
+
+    const put = await SELF.fetch(`${ORIGIN}${projectHref}`, {
+      method: "PUT",
+      headers: { ...basic(workToken), "If-None-Match": "*" },
+      body: newVtodoBody("Scoped MOVE", null),
+    });
+    assert.equal(put.status, 201);
+    const moved = await SELF.fetch(`${ORIGIN}${projectHref}`, {
+      method: "MOVE",
+      headers: {
+        ...basic(workToken),
+        Destination: `${ORIGIN}/dav/${USER_ID}/inbox/`,
+      },
+    });
+    assert.equal(moved.status, 201);
+
+    const after = await loadedWorkspace();
+    const toDo = (after.toDos as Array<Record<string, unknown>>).find(
+      (item) => item.title === "Scoped MOVE",
+    );
+    assert.ok(toDo);
+    assert.deepEqual(toDo.location, { kind: "unfiled", spaceId: workSpace.id });
+  });
+
+  it("confines Inbox membership and creation to the token's Space", async () => {
+    const document = await loadedWorkspace();
+    const spaces = document.spaces as Array<{ id: string; title: string }>;
+    const workSpace = spaces.find((space) => space.title === "caldav Work");
+    assert.ok(workSpace);
+    const workToken = await createToken("Work Inbox", workSpace.id);
+
+    const query = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/inbox/`, {
+      method: "REPORT",
+      headers: basic(workToken),
+      body: CALENDAR_QUERY,
+    });
+    assert.equal(query.status, 207);
+    assert.ok(!(await query.text()).includes("caldav Weekly"));
+
+    const href = `/dav/${USER_ID}/inbox/${crypto.randomUUID()}.ics`;
+    const put = await SELF.fetch(`${ORIGIN}${href}`, {
+      method: "PUT",
+      headers: { ...basic(workToken), "If-None-Match": "*" },
+      body: newVtodoBody("Work Inbox capture", null),
+    });
+    assert.equal(put.status, 201);
+
+    const after = await loadedWorkspace();
+    const created = (after.toDos as Array<Record<string, unknown>>).find(
+      (toDo) => toDo.title === "Work Inbox capture",
+    );
+    assert.ok(created);
+    assert.deepEqual(created.location, { kind: "unfiled", spaceId: workSpace.id });
   });
 
   it("accepts a PUT create, serves it back with CRLF and a strong ETag, and lands it in the workspace", async () => {
@@ -492,6 +635,50 @@ describe("CalDAV endpoint", () => {
       (toDo) => toDo.title === "Retry me",
     );
     assert.equal(matches.length, 1, "an identical retry never creates a second to-do");
+  });
+
+  it("creates all-Spaces and single-Space tokens through the token API", async () => {
+    const document = await loadedWorkspace();
+    const spaces = document.spaces as Array<{ id: string; title: string }>;
+    const workSpace = spaces.find((space) => space.title === "caldav Work");
+    assert.ok(workSpace);
+
+    const created = await api("/api/caldav/tokens", {
+      method: "POST",
+      body: JSON.stringify({
+        label: "Work phone",
+        timeZone: "America/New_York",
+        spaceId: workSpace.id,
+      }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = (await created.json()) as { token: { spaceId: string | null } };
+    assert.equal(createdBody.token.spaceId, workSpace.id);
+
+    const listed = await api("/api/caldav/tokens");
+    assert.equal(listed.status, 200);
+    const listedBody = (await listed.json()) as {
+      tokens: Array<{ label: string; spaceId: string | null }>;
+    };
+    assert.equal(
+      listedBody.tokens.find((entry) => entry.label === "iPhone")?.spaceId,
+      null,
+      "an omitted Space scope preserves the All Spaces default",
+    );
+    assert.equal(
+      listedBody.tokens.find((entry) => entry.label === "Work phone")?.spaceId,
+      workSpace.id,
+    );
+
+    const unknown = await api("/api/caldav/tokens", {
+      method: "POST",
+      body: JSON.stringify({
+        label: "Unknown Space",
+        timeZone: "America/New_York",
+        spaceId: "space-does-not-exist",
+      }),
+    });
+    assert.equal(unknown.status, 400);
   });
 
   it("revoking the token kills the account", async () => {

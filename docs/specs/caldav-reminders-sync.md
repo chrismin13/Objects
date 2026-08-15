@@ -68,8 +68,14 @@ Lists (per #2): one collection per **Project**, one per **Area**, plus a
 special **Inbox** list for unfiled to-dos (the Siri default target).
 Headings are invisible (to-dos appear directly in their Project/Area list).
 Containers are created/renamed/moved web-only; the Inbox/Project/Area lists
-appear and disappear as containers do. List `displayname` = plain container
-title; `calendar-color` = owning Space's color (revisit prefixes after lived
+appear and disappear as containers do. Each app token has a Space scope:
+**All Spaces** (the default and the value for pre-existing tokens) or exactly
+one Space. A single-Space token exposes only that Space's Projects and Areas;
+its Inbox contains only unfiled to-dos in that Space, and inbound Inbox writes
+land there rather than in the workspace default Space. Guessed URLs outside
+the scope answer 404. If the selected Space is deleted, the token exposes no
+lists until it is replaced. List `displayname` = plain container title;
+`calendar-color` = owning Space's color (revisit prefixes after lived
 experience — rendering-only change). Every list advertises
 `supported-calendar-component-set: VTODO` **only** (omitting this yields
 "0 lists"). Trashed containers vanish from the home set.
@@ -236,9 +242,10 @@ revisions of tombstones, size-bounded).
 New tab in the existing Settings dialog:
 
 - Token list: label, created, last-used (throttled: ≤1 DO write per token
-  per hour), revoke button.
-- Create flow: label + timezone (defaulting to the browser's IANA zone,
-  editable) → token shown once (`objcal_` + 43 base64url chars, stored
+  per hour), timezone, Space scope, revoke button.
+- Create flow: label + timezone (defaulting to the browser's IANA zone) +
+  Space scope (**All Spaces** by default or exactly one live Space) → token
+  shown once (`objcal_` + 43 base64url chars, stored
   SHA-256-hashed) → copy → connect instructions (server
   `objects.chrismin13.com`, username anything, password = token).
 - Connect-time **feature matrix** (from #6, amended by this session):
@@ -264,7 +271,8 @@ SQLite tables beside the existing `meta`/`chunks`/`receipts`:
 ```sql
 CREATE TABLE caldav_tokens (
   id TEXT PRIMARY KEY, label TEXT NOT NULL, hash TEXT NOT NULL,
-  time_zone TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT
+  time_zone TEXT NOT NULL, space_id TEXT,
+  created_at TEXT NOT NULL, last_used_at TEXT
 );
 CREATE TABLE caldav_anchors (
   resource TEXT PRIMARY KEY, to_do_id TEXT NOT NULL,
@@ -301,6 +309,9 @@ before parsing), LF-terminated input (tolerate on parse — never emit).
   pattern (`scripts/proto-caldav-smoke.sh` is the template — extend with
   attribute-carrying hrefs and tombstone cases); DO round trip: CalDAV PUT
   → snapshot contains exactly the equivalent of the web client's change.
+  Cover All-Spaces backward compatibility, single-Space list and Inbox
+  membership, scoped Inbox create/MOVE, and 404 isolation for guessed
+  cross-Space resource URLs.
 - **On-device acceptance (manual, once):** connect; create/edit/complete/
   move/reopen; alert fires at-due; delete → Trash; web edit propagates ≤1
   poll; token revoke kills the account.

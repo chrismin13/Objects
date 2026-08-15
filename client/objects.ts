@@ -5923,6 +5923,7 @@ function openSettings() {
     h(SettingsDialog, {
       settings,
       userName: ui.user?.displayName || "Guest",
+      spaces: ui.state.spaces.map((space) => ({ id: space.id, title: space.title })),
       spacesCount: ui.state.spaces.length,
       launchRulesEnabled: ui.launchRulesEnabled,
       tags: getKnownTags(),
