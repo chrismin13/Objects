@@ -1,5 +1,6 @@
 import { featureStyles } from "../feature-styles";
 import { libraryStyles } from "../library-styles";
+import { mobileInteractionStyles } from "../mobile-interaction-styles";
 import { responsiveStyles } from "../responsive-styles";
 import { styles } from "../styles";
 import { tagStyles } from "../tag-styles";
@@ -10,7 +11,8 @@ import { settingsDialogStyles } from "../features/settings/settings-dialog-style
 import { entityDialogStyles } from "../features/entities/entity-dialog-styles";
 
 // Order is intentional: upstream tokens, legacy base, responsive behavior,
-// feature slices, Things visual language, then component-library parity fixes.
+// feature slices, Things visual language, component-library parity fixes, then
+// the final coarse-pointer interaction policy.
 export const objectsTheme = [
   webAwesomeTheme,
   designTokens,
@@ -22,4 +24,5 @@ export const objectsTheme = [
   libraryStyles,
   settingsDialogStyles,
   entityDialogStyles,
+  mobileInteractionStyles,
 ].join("\n");
