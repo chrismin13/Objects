@@ -324,11 +324,10 @@ before parsing), LF-terminated input (tolerate on parse — never emit).
 1. Implement on a branch; land behind no flag (the endpoint is inert
    without a minted token).
 2. Deploy; mint a token; on-device acceptance pass (§12).
-3. Tear down the prototype: delete worker `objects-caldav-proto`, remove
-   the `caldav-proto.chrismin13.com` custom domain, delete branch
-   `prototype/ios-caldav-stub`, remove `/caldav-proto/*` and the
-   `/.well-known/*` prototype entry from `run_worker_first` (re-add
-   `/.well-known/*` for the real well-known route).
+3. ✅ Prototype teardown completed: worker `objects-caldav-proto`, custom
+   domain `caldav-proto.chrismin13.com`, and branch
+   `prototype/ios-caldav-stub` were deleted. No prototype routes remain;
+   `/.well-known/*` is retained for the production CalDAV route.
 4. Follow-ups (issues): sync-status/error surfacing in Integrations;
    Space-prefix list names after lived experience; revisit MKCALENDAR when
    cloudflare/workerd#6877 ships.
@@ -345,5 +344,5 @@ before parsing), LF-terminated input (tolerate on parse — never emit).
 - Multiget href bug (§8.1), tombstone requirement (§7), GET fetch path
   (§8.4), DTSTAMP rule (§8.3), CRLF rule (§8.2) — all reproduced and
   verified fixed on-device against the live prototype.
-- Raw evidence: prototype debug page (`/caldav-proto/debug`) and branch
-  `prototype/ios-caldav-stub` until teardown.
+- Raw prototype evidence was retired with the debug Worker and
+  `prototype/ios-caldav-stub` branch after production acceptance.
