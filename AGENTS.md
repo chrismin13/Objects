@@ -2,6 +2,20 @@
 
 Objects is a to-do PWA (Preact + TypeScript) deployed as a single Cloudflare Worker with static assets. See `DEPLOYMENT.md` for platform setup and operations.
 
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as GitHub issues in `chrismin13/Objects` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at the repo root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Layout
 
 - `client/` — Preact UI. `client/index.tsx` is the entry (session check, boot screens, sync wiring). `client/objects.ts` is the interface runtime. `client/vendor/` holds pinned third-party bundles (see its README; do not edit).
