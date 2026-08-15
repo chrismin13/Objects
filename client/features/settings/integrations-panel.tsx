@@ -11,6 +11,7 @@ type IntegrationToken = {
 };
 
 type SpaceOption = { id: string; title: string };
+type CreatedTokenReveal = { id: string; secret: string };
 
 function defaultTimeZone(): string {
   try {
@@ -112,7 +113,7 @@ export function IntegrationsPanel({ spaces }: { spaces: SpaceOption[] }) {
   const [timeZone, setTimeZone] = useState(detectedTimeZone);
   const [spaceId, setSpaceId] = useState("");
   const [timeZones] = useState(supportedTimeZones);
-  const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [createdToken, setCreatedToken] = useState<CreatedTokenReveal | null>(null);
   const [copied, setCopied] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -149,7 +150,7 @@ export function IntegrationsPanel({ spaces }: { spaces: SpaceOption[] }) {
         setNotice(body.error ?? "The token could not be created.");
         return;
       }
-      setCreatedToken(body.token.token);
+      setCreatedToken({ id: body.token.id, secret: body.token.token });
       setCopied(false);
       setLabel("");
       await load();
@@ -164,7 +165,12 @@ export function IntegrationsPanel({ spaces }: { spaces: SpaceOption[] }) {
     setBusy(true);
     setNotice(null);
     try {
-      await fetch(`/api/caldav/tokens/${id}`, { method: "DELETE" });
+      const response = await fetch(`/api/caldav/tokens/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error();
+      if (createdToken?.id === id) {
+        setCreatedToken(null);
+        setCopied(false);
+      }
       await load();
     } catch {
       setNotice("The token could not be revoked. Check your connection and retry.");
@@ -175,7 +181,7 @@ export function IntegrationsPanel({ spaces }: { spaces: SpaceOption[] }) {
 
   const copy = async () => {
     if (!createdToken) return;
-    const succeeded = await copyText(createdToken);
+    const succeeded = await copyText(createdToken.secret);
     setCopied(succeeded);
     setNotice(
       succeeded ? "Token copied to clipboard." : "Select the token text and copy it manually.",
@@ -242,7 +248,7 @@ export function IntegrationsPanel({ spaces }: { spaces: SpaceOption[] }) {
             <div class="settings-token-row">
               <input
                 readOnly
-                value={createdToken}
+                value={createdToken.secret}
                 onFocus={(event) => event.currentTarget.select()}
               />
               <WaButton
