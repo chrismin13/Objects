@@ -80,9 +80,12 @@ experience — rendering-only change). Every list advertises
 `supported-calendar-component-set: VTODO` **only** (omitting this yields
 "0 lists"). Trashed containers vanish from the home set.
 
-`getctag` per list = snapshot revision (any write anywhere bumps it; iOS
-re-diffs by ETag — false positives are harmless). `sync-token` =
-`https://objects.chrismin13.com/dav/sync/<revision>`.
+`getctag` per list includes the token's Space scope plus the snapshot
+revision (any write anywhere bumps it; iOS re-diffs by ETag — false positives
+are harmless). `sync-token` is scope-specific for the same reason: changing
+from All Spaces to one Space must force a fresh collection sync even when iOS
+reuses an earlier account's token. All-Spaces tokens preserve the original
+`https://objects.chrismin13.com/dav/sync/<revision>` format.
 
 ## 3. Outbound mapping (Objects → VTODO)
 

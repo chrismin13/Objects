@@ -182,7 +182,7 @@ function principalHref(userId: string): string {
   return `/principals/${encodeURIComponent(userId)}/`;
 }
 
-function collectionProps(list: CalDavList, revision: number, syncToken: string): ResponseProp[] {
+function collectionProps(list: CalDavList, ctag: string, syncToken: string): ResponseProp[] {
   return [
     {
       local: "resourcetype",
@@ -207,7 +207,7 @@ function collectionProps(list: CalDavList, revision: number, syncToken: string):
         "</D:supported-report-set>",
       ].join(""),
     },
-    prop("CS", "getctag", String(revision)),
+    prop("CS", "getctag", ctag),
     prop("DAV:", "sync-token", escapeXmlText(syncToken)),
   ];
 }
@@ -277,6 +277,23 @@ function multiStatus(responses: string[], syncToken?: string): CalDavResponse {
   };
 }
 
+function collectionIdentity(
+  baseUrl: string,
+  revision: number,
+  spaceId: string | null,
+): { ctag: string; syncToken: string } {
+  if (spaceId === null)
+    return {
+      ctag: String(revision),
+      syncToken: `${baseUrl}/dav/sync/${revision}`,
+    };
+  const scope = encodeURIComponent(spaceId);
+  return {
+    ctag: `${scope}:${revision}`,
+    syncToken: `${baseUrl}/dav/sync/space/${scope}/${revision}`,
+  };
+}
+
 /** The main entry point used by the Durable Object. */
 export function handleCalDavRequest(
   request: CalDavHttpRequest,
@@ -286,7 +303,7 @@ export function handleCalDavRequest(
   const method = request.method.toUpperCase();
   const parts = parsePath(request.path);
   const revision = state.snapshot.revision;
-  const syncToken = `${deps.baseUrl}/dav/sync/${revision}`;
+  const { ctag, syncToken } = collectionIdentity(deps.baseUrl, revision, state.spaceId);
   const effects = emptyEffects();
 
   if (method === "OPTIONS")
@@ -364,7 +381,7 @@ export function handleCalDavRequest(
         responses.push(
           responseElement(
             listHref(parts.userId, list.name),
-            collectionProps(list, revision, syncToken),
+            collectionProps(list, ctag, syncToken),
             requested,
           ),
         );
@@ -385,7 +402,7 @@ export function handleCalDavRequest(
       const responses = [
         responseElement(
           listHref(parts.userId, list.name),
-          collectionProps(list, revision, syncToken),
+          collectionProps(list, ctag, syncToken),
           requested,
         ),
       ];
@@ -413,7 +430,7 @@ export function handleCalDavRequest(
 
     if (method === "PROPPATCH") {
       const requested = requestedProps(request.body);
-      const acknowledged = collectionProps(list, revision, syncToken).filter(
+      const acknowledged = collectionProps(list, ctag, syncToken).filter(
         (item) => requested === null || requested.has(item.local),
       );
       return {
@@ -606,7 +623,11 @@ function handleReport(
   }
 
   if (report === "sync-collection") {
-    const token = `${deps.baseUrl}/dav/sync/${state.snapshot.revision}`;
+    const token = collectionIdentity(
+      deps.baseUrl,
+      state.snapshot.revision,
+      state.spaceId,
+    ).syncToken;
     const clientToken = davDescendants(root, "sync-token")[0]?.text.trim() ?? "";
     if (clientToken && clientToken === token)
       return { ...multiStatus([], token), effects: flushEffects(effects) };

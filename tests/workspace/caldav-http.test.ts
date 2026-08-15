@@ -3,6 +3,8 @@ import { beforeEach, describe, it } from "vite-plus/test";
 
 import { env, SELF } from "cloudflare:test";
 import { SESSION_COOKIE, sealSession, type Session } from "../../worker/auth.ts";
+import { createWorkspace } from "../../shared/workspace/workspace.ts";
+import type { WorkspaceSyncSnapshot } from "../../shared/workspace/sync.ts";
 import { representativeWorkspace } from "./workspace-fixtures.ts";
 
 const USER_ID = "user_01CALDAV000000000000000";
@@ -97,6 +99,10 @@ const CALENDAR_QUERY = [
   "</C:calendar-query>",
 ].join("");
 
+function syncCollection(syncToken: string): string {
+  return SYNC_COLLECTION.replace("<D:sync-token/>", `<D:sync-token>${syncToken}</D:sync-token>`);
+}
+
 function multiget(href: string): string {
   // Attribute-carrying hrefs: iOS decorates elements with inline namespace
   // declarations; the parser must resolve them.
@@ -137,6 +143,31 @@ async function loadedWorkspace(): Promise<Record<string, unknown>> {
   const body = (await response.json()) as { snapshot: { document: Record<string, unknown> } };
   assert.ok(body.snapshot, "the workspace snapshot loaded");
   return body.snapshot.document;
+}
+
+async function createWebToDo(title: string, spaceId: string): Promise<void> {
+  const loaded = await api("/api/workspace");
+  assert.equal(loaded.status, 200);
+  const { snapshot } = (await loaded.json()) as { snapshot: WorkspaceSyncSnapshot };
+  const workspace = createWorkspace(snapshot.document, {
+    now: () => "2026-08-15T16:00:00.000Z",
+    createId: (kind) => `web-${kind}-${crypto.randomUUID()}`,
+  });
+  const changed = workspace.change({
+    type: "createToDo",
+    title,
+    location: { kind: "unfiled", spaceId },
+  });
+  assert.equal(changed.status, "changed");
+  const saved = await api("/api/workspace", {
+    method: "POST",
+    body: JSON.stringify({
+      expectedRevision: snapshot.revision,
+      mutationId: `web-create-${crypto.randomUUID()}`,
+      document: workspace.read(),
+    }),
+  });
+  assert.equal(saved.status, 200);
 }
 
 describe("CalDAV endpoint", () => {
@@ -235,7 +266,12 @@ describe("CalDAV endpoint", () => {
       body: PROPFIND_LISTS,
     });
     assert.equal(unscoped.status, 207);
-    assert.match(await unscoped.text(), /<D:displayname>caldav Monthly project<\/D:displayname>/);
+    const unscopedXml = await unscoped.text();
+    assert.match(unscopedXml, /<D:displayname>caldav Monthly project<\/D:displayname>/);
+    const scopedCtag = /<CS:getctag>([^<]+)<\/CS:getctag>/.exec(scopedXml)?.[1];
+    const unscopedCtag = /<CS:getctag>([^<]+)<\/CS:getctag>/.exec(unscopedXml)?.[1];
+    assert.ok(scopedCtag && unscopedCtag);
+    assert.notEqual(scopedCtag, unscopedCtag, "collection identity includes the Space scope");
   });
 
   it("cannot read or write resources outside the token's Space", async () => {
@@ -361,7 +397,30 @@ describe("CalDAV endpoint", () => {
     const spaces = document.spaces as Array<{ id: string; title: string }>;
     const workSpace = spaces.find((space) => space.title === "caldav Work");
     assert.ok(workSpace);
+    await createWebToDo("Web-created Work Inbox", workSpace.id);
+
+    const allSpacesSync = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/inbox/`, {
+      method: "REPORT",
+      headers: basic(token),
+      body: SYNC_COLLECTION,
+    });
+    assert.equal(allSpacesSync.status, 207);
+    const allSpacesSyncXml = await allSpacesSync.text();
+    const allSpacesSyncToken = /<D:sync-token>([^<]+)<\/D:sync-token>/.exec(allSpacesSyncXml)?.[1];
+    assert.ok(allSpacesSyncToken);
+
     const workToken = await createToken("Work Inbox", workSpace.id);
+    const replayedAcrossScope = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/inbox/`, {
+      method: "REPORT",
+      headers: basic(workToken),
+      body: syncCollection(allSpacesSyncToken),
+    });
+    assert.equal(replayedAcrossScope.status, 207);
+    assert.match(
+      await replayedAcrossScope.text(),
+      /<D:href>[^<]+\.ics<\/D:href>/,
+      "an All-Spaces sync token cannot suppress a single-Space initial sync",
+    );
 
     const query = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/inbox/`, {
       method: "REPORT",
@@ -369,7 +428,9 @@ describe("CalDAV endpoint", () => {
       body: CALENDAR_QUERY,
     });
     assert.equal(query.status, 207);
-    assert.ok(!(await query.text()).includes("caldav Weekly"));
+    const queryXml = await query.text();
+    assert.match(queryXml, /SUMMARY:Web-created Work Inbox/);
+    assert.ok(!queryXml.includes("caldav Weekly"));
 
     const href = `/dav/${USER_ID}/inbox/${crypto.randomUUID()}.ics`;
     const put = await SELF.fetch(`${ORIGIN}${href}`, {
