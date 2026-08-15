@@ -67,7 +67,7 @@ export function destroyTaskSortables(): void {
 
 export function mountHeadingSortable(
   root: ParentNode,
-  options: { onStart(): void; onOrder(orderedIds: string[]): void },
+  options: { onOrder(orderedIds: string[]): void },
 ): void {
   headingInstance?.destroy();
   headingInstance = null;
@@ -85,7 +85,6 @@ export function mountHeadingSortable(
     chosenClass: "sortable-chosen",
     dragClass: "sortable-drag",
     fallbackTolerance: 5,
-    onStart: options.onStart,
     onEnd: () =>
       options.onOrder(
         [

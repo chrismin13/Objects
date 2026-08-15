@@ -11,7 +11,7 @@ import {
 import type { WorkspaceSyncClient } from "../shared/workspace/sync-client";
 import { createWorkspaceSyncClient } from "../shared/workspace/sync-client";
 import { createEmptyWorkspace } from "../shared/workspace/workspace";
-import { initializePwa } from "./pwa";
+import { initializePwa, initializeStandalonePwaInteractions } from "./pwa";
 import { WaDropdown } from "./ui/webawesome";
 import { mountObjects, syncObjectsState } from "./objects";
 import { useHttpWorkspaceAdapter } from "./workspace/http-adapter";
@@ -21,6 +21,7 @@ import { objectsTheme } from "./theme";
 import "./vendor/webawesome/webawesome.js";
 
 initThemeBoot();
+initializeStandalonePwaInteractions();
 
 type AuthState = {
   isLoading: boolean;

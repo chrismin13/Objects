@@ -10,10 +10,10 @@ test("touch scrolling does not immediately activate item reordering", () => {
   assert.equal(sortableSource.match(/touchStartThreshold:\s*[1-9]\d*/g)?.length, 3);
 });
 
-test("starting a touch reorder cancels the pending long-press menu", () => {
-  assert.match(objectsSource, /onStart:\s*\(ids\)\s*=>\s*\{\s*cancelContextPress\(\)/);
+test("touch reordering has no competing long-press context menu", () => {
+  assert.doesNotMatch(objectsSource, /contextPress|handleContextPress|cancelContextPress/);
   assert.match(
     objectsSource,
-    /mountHeadingSortable\(content,\s*\{[\s\S]*?onStart:\s*cancelContextPress/,
+    /function handleContextMenu\(event\)\s*\{[\s\S]*?event\.button !== 2/,
   );
 });

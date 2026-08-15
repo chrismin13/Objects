@@ -18,6 +18,7 @@ let registrationPromise: Promise<ServiceWorkerRegistration | null> = Promise.res
 let initialized = false;
 let reloadForUpdate = false;
 let updateAvailable = false;
+let standaloneInteractionsInitialized = false;
 
 function isIos(): boolean {
   return (
@@ -32,6 +33,28 @@ function isInstalled(): boolean {
     window.matchMedia("(display-mode: fullscreen)").matches ||
     Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
   );
+}
+
+export function initializeStandalonePwaInteractions(): void {
+  if (standaloneInteractionsInitialized) return;
+  if (!isIos() || !isInstalled()) return;
+  standaloneInteractionsInitialized = true;
+
+  document.documentElement.classList.add("objects-ios-standalone");
+  document
+    .querySelector<HTMLMetaElement>('meta[name="viewport"]')
+    ?.setAttribute(
+      "content",
+      "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover",
+    );
+
+  const preventGesture = (event: Event) => event.preventDefault();
+  const preventMultitouch = (event: TouchEvent) => {
+    if (event.touches.length > 1) event.preventDefault();
+  };
+  document.addEventListener("gesturestart", preventGesture, { passive: false });
+  document.addEventListener("gesturechange", preventGesture, { passive: false });
+  document.addEventListener("touchmove", preventMultitouch, { passive: false });
 }
 
 function emitStatus(): void {

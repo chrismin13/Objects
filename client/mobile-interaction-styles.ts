@@ -2,6 +2,16 @@
 // component styles so iOS cannot reintroduce focus zoom with a smaller field
 // font. Mouse/trackpad-only browsers do not match this media query.
 export const mobileInteractionStyles = `
+html.objects-ios-standalone,
+html.objects-ios-standalone body,
+html.objects-ios-standalone #app {
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+html.objects-ios-standalone .app-shell {
+  touch-action: pan-x pan-y;
+}
+
 @media (any-pointer: coarse) {
   /* iOS magnifies focused form controls rendered below 16px. Keep prominent
      title fields at their existing size and raise every smaller editor to the
@@ -12,9 +22,9 @@ export const mobileInteractionStyles = `
     font-size: 16px !important;
   }
 
-  /* Remove double-tap zoom from activation surfaces without blocking a
-     deliberate pinch gesture. To-do rows retain their narrower pan-y policy
-     for the app's horizontal swipe interaction. */
+  /* Remove double-tap zoom from activation surfaces while regular browser
+     sessions retain deliberate pinch zoom. Installed iOS PWAs use the stricter
+     root policy above. To-do rows retain pan-y for horizontal app swipes. */
   :where(
     button,
     [role="button"],
@@ -35,6 +45,40 @@ export const mobileInteractionStyles = `
     -webkit-tap-highlight-color: transparent;
   }
 
+  /* Vertical panes must not become sideways scroll containers when an iOS
+     temporal control reports a large intrinsic width. Explicit horizontal
+     rails such as filter bars remain independently scrollable. */
+  :where(.content, .sidebar-nav, .inspector-scroll) {
+    overflow-x: hidden;
+  }
+  :where(.detail-group, .detail-row, .detail-group > :not(.detail-label)) {
+    min-width: 0;
+  }
+  :where(.detail-input, .detail-select) {
+    max-width: 100%;
+  }
+  input:is(
+    [type="date"],
+    [type="time"],
+    [type="datetime-local"],
+    [type="month"],
+    [type="week"]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+  input:is(
+    [type="date"],
+    [type="time"],
+    [type="datetime-local"],
+    [type="month"],
+    [type="week"]
+  )::-webkit-datetime-edit {
+    min-width: 0;
+    overflow: hidden;
+  }
+
   /* The shell owns the viewport; nested panes own scrolling. Containment keeps
      a boundary gesture from moving the page or the surface behind an overlay. */
   html,
@@ -53,11 +97,12 @@ export const mobileInteractionStyles = `
     overscroll-behavior: contain;
   }
   .objects-dialog::part(body) {
+    overflow-x: hidden;
     overscroll-behavior: contain;
   }
 
-  /* These surfaces use tap, swipe, drag, or a custom long-press menu. Native
-     text selection and callouts remain available in editors and note content. */
+  /* These surfaces use tap, swipe, drag, or a mouse context menu. Native text
+     selection and callouts remain available in editors and note content. */
   :where(
     .sidebar,
     .mobile-header,

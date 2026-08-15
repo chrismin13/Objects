@@ -306,7 +306,6 @@ let logbookTimer = null;
 let modalReturnFocus = null;
 let sidebarGesture = null;
 let taskGesture = null;
-let contextPress = null;
 let modalUsesPreact = false;
 
 function storageIdentity() {
@@ -1388,10 +1387,6 @@ function bindStaticEvents() {
   content.addEventListener("pointercancel", handleTaskGestureCancel, { passive: true });
   document.addEventListener("keydown", handleGlobalKeydown);
   document.addEventListener("contextmenu", handleContextMenu);
-  document.addEventListener("pointerdown", handleContextPressStart, { passive: true });
-  document.addEventListener("pointermove", handleContextPressMove, { passive: true });
-  document.addEventListener("pointerup", handleContextPressEnd, { passive: true });
-  document.addEventListener("pointercancel", handleContextPressEnd, { passive: true });
   document.addEventListener("click", handleContextMenuClick);
   window.addEventListener("objects:pwa-status", (event) => {
     if (event.detail?.updateAvailable && !ui.pwaUpdateNotified) {
@@ -1417,48 +1412,13 @@ function contextTarget(element) {
 function handleContextMenu(event) {
   const target = contextTarget(event.target);
   if (!target || event.target.closest("input, textarea, select")) return;
+  const pointerType = typeof event.pointerType === "string" ? event.pointerType : "";
+  if (event.button !== 2 || (pointerType && pointerType !== "mouse")) {
+    if (pointerType === "touch") event.preventDefault();
+    return;
+  }
   event.preventDefault();
   openContextMenu(target, event.clientX, event.clientY);
-}
-
-function handleContextPressStart(event) {
-  if (
-    event.pointerType === "mouse" ||
-    !event.isPrimary ||
-    event.target.closest("button, input, textarea, select, a")
-  )
-    return;
-  const target = contextTarget(event.target);
-  if (!target) return;
-  contextPress = {
-    pointerId: event.pointerId,
-    target,
-    x: event.clientX,
-    y: event.clientY,
-    timer: setTimeout(() => {
-      ui.suppressClickUntil = Date.now() + 500;
-      if (navigator.vibrate) navigator.vibrate(12);
-      openContextMenu(target, event.clientX, event.clientY);
-      contextPress = null;
-    }, 560),
-  };
-}
-
-function handleContextPressMove(event) {
-  if (!contextPress || event.pointerId !== contextPress.pointerId) return;
-  if (Math.hypot(event.clientX - contextPress.x, event.clientY - contextPress.y) > 9)
-    handleContextPressEnd(event);
-}
-
-function cancelContextPress() {
-  if (!contextPress) return;
-  clearTimeout(contextPress.timer);
-  contextPress = null;
-}
-
-function handleContextPressEnd(event) {
-  if (!contextPress || event.pointerId !== contextPress.pointerId) return;
-  cancelContextPress();
 }
 
 function menuButton(action, label, danger = false) {
@@ -2533,7 +2493,6 @@ function renderContent() {
         ui.view.type,
       ),
       onStart: (ids) => {
-        cancelContextPress();
         ui.sortableTaskDrag = true;
         ui.draggedTaskId = ids[0] || null;
       },
@@ -2573,7 +2532,6 @@ function renderContent() {
     !(ui.view.type === "project" && view.project?.repeat?.stopped)
   ) {
     mountHeadingSortable(content, {
-      onStart: cancelContextPress,
       onOrder: (orderedIds) => {
         reorderEntities(headingsFor(ui.view.type, ui.view.id), orderedIds);
         scheduleSave();
