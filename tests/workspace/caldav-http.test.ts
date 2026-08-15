@@ -248,6 +248,42 @@ describe("CalDAV endpoint", () => {
     assert.ok(workSpace && workProject && personalProject);
     const workToken = await createToken("Work boundary", workSpace.id);
 
+    const personalInboxQuery = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/inbox/`, {
+      method: "REPORT",
+      headers: basic(token),
+      body: CALENDAR_QUERY,
+    });
+    assert.equal(personalInboxQuery.status, 207);
+    const personalInboxResource = extractHrefResource(await personalInboxQuery.text());
+    const hiddenInbox = await SELF.fetch(
+      `${ORIGIN}/dav/${USER_ID}/inbox/${personalInboxResource}`,
+      { headers: basic(workToken) },
+    );
+    assert.equal(hiddenInbox.status, 404, "the shared Inbox path cannot bypass Space scope");
+    const hiddenInboxPut = await SELF.fetch(
+      `${ORIGIN}/dav/${USER_ID}/inbox/${personalInboxResource}`,
+      {
+        method: "PUT",
+        headers: basic(workToken),
+        body: newVtodoBody("Attempted hidden Inbox edit", null),
+      },
+    );
+    assert.equal(hiddenInboxPut.status, 404);
+    const hiddenInboxDelete = await SELF.fetch(
+      `${ORIGIN}/dav/${USER_ID}/inbox/${personalInboxResource}`,
+      { method: "DELETE", headers: basic(workToken) },
+    );
+    assert.equal(hiddenInboxDelete.status, 404);
+    const hiddenInboxMultiget = await SELF.fetch(`${ORIGIN}/dav/${USER_ID}/inbox/`, {
+      method: "REPORT",
+      headers: basic(workToken),
+      body: multiget(`/dav/${USER_ID}/inbox/${personalInboxResource}`),
+    });
+    assert.equal(hiddenInboxMultiget.status, 207);
+    const hiddenInboxXml = await hiddenInboxMultiget.text();
+    assert.match(hiddenInboxXml, /404 Not Found/);
+    assert.ok(!hiddenInboxXml.includes("caldav Weekly"));
+
     const personalQuery = await SELF.fetch(
       `${ORIGIN}/dav/${USER_ID}/project-${personalProject.id}/`,
       { method: "REPORT", headers: basic(token), body: CALENDAR_QUERY },
@@ -279,7 +315,9 @@ describe("CalDAV endpoint", () => {
     const after = await loadedWorkspace();
     assert.ok(
       !(after.toDos as Array<Record<string, unknown>>).some(
-        (toDo) => toDo.title === "Attempted cross-Space move",
+        (toDo) =>
+          toDo.title === "Attempted cross-Space move" ||
+          toDo.title === "Attempted hidden Inbox edit",
       ),
     );
   });
@@ -550,7 +588,7 @@ describe("CalDAV endpoint", () => {
     });
     assert.equal(initial.status, 207);
     const initialXml = await initial.text();
-    assert.ok(!initialXml.includes("404"), "initial sync carries no tombstones");
+    assert.ok(!initialXml.includes("404 Not Found"), "initial sync carries no tombstones");
     const syncToken = /<D:sync-token>([^<]+)<\/D:sync-token>/.exec(initialXml)?.[1];
     assert.ok(syncToken);
 

@@ -16,10 +16,11 @@ import {
   calDavList,
   calDavLists,
   changesForInboundPut,
-  listNameForToDo,
   locationForList,
   renderToDoResource,
   stampFor,
+  toDoIsInList,
+  toDoIsInSpace,
   toDosInList,
   type CalDavAnchor,
   type CalDavList,
@@ -432,9 +433,9 @@ export function handleCalDavRequest(
     return methodNotAllowed(flushEffects(effects));
   }
 
-  if (!calDavList(state.snapshot.document, parts.list, state.spaceId))
-    return plain(404, flushEffects(effects));
-  const result = handleResource(request, parts, state, deps, effects);
+  const list = calDavList(state.snapshot.document, parts.list, state.spaceId);
+  if (!list) return plain(404, flushEffects(effects));
+  const result = handleResource(request, parts, list, state, deps, effects);
   return { ...result, effects: flushEffects(effects) };
 }
 
@@ -583,7 +584,12 @@ function handleReport(
       const toDo = anchor
         ? (document.toDos.find((item) => item.id === anchor.toDoId) ?? null)
         : null;
-      if (!anchor || !toDo || toDo.trashedAt || listNameForToDo(document, toDo) !== parts.list) {
+      if (
+        !anchor ||
+        !toDo ||
+        toDo.trashedAt ||
+        !toDoIsInList(document, toDo, list, state.spaceId)
+      ) {
         responses.push(statusResponse(href, 404));
         continue;
       }
@@ -728,6 +734,7 @@ function propertyValue(parsed: ParsedVTodo | null, name: string): string | null 
 function handleResource(
   request: CalDavHttpRequest,
   parts: { userId: string; list: string; resource: string },
+  list: CalDavList,
   state: CalDavHandlerState,
   deps: CalDavDeps,
   effects: Effects,
@@ -737,11 +744,15 @@ function handleResource(
   const anchors = anchorMap(state, effects);
   const anchor = anchors.byResource.get(parts.resource) ?? null;
   const toDo = anchor ? (document.toDos.find((item) => item.id === anchor.toDoId) ?? null) : null;
+  // The Inbox path is shared by every Space, so list authorization alone is
+  // insufficient: a known anchor must also belong to this token's Space.
+  if (toDo && !toDoIsInSpace(document, toDo, state.spaceId))
+    return { status: 404, headers: {}, body: null };
   // `anchored`: the resource's to-do exists outside Trash. `live`: it also
   // currently belongs to this list — a web-side move makes the old href a
   // vanished resource for reads and deletes.
   const anchored = toDo && !toDo.trashedAt ? toDo : null;
-  const live = anchored && listNameForToDo(document, anchored) === parts.list ? anchored : null;
+  const live = anchored && toDoIsInList(document, anchored, list, state.spaceId) ? anchored : null;
 
   if (method === "GET" || method === "HEAD") {
     if (!live || !anchor) return { status: 404, headers: {}, body: null };

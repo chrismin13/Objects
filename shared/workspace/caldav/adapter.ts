@@ -62,6 +62,15 @@ function containerForListName(name: string): CalDavListContainer | null {
   return null;
 }
 
+function spaceIdForProject(document: WorkspaceDocument, projectId: string): string | null {
+  const project = document.projects.find((candidate) => candidate.id === projectId);
+  if (!project) return null;
+  const location = project.location;
+  return location.kind === "space"
+    ? location.spaceId
+    : (document.areas.find((area) => area.id === location.areaId)?.spaceId ?? null);
+}
+
 /** The lists exposed in the home set: Inbox, live Projects, live Areas. */
 export function calDavLists(
   document: WorkspaceDocument,
@@ -76,11 +85,7 @@ export function calDavLists(
     document.spaces.find((space) => space.id === spaceId)?.color ?? "#8e8e93";
   for (const project of [...document.projects].sort((left, right) => left.order - right.order)) {
     if (project.trashedAt) continue;
-    const projectLocation = project.location;
-    const spaceId =
-      projectLocation.kind === "space"
-        ? projectLocation.spaceId
-        : (document.areas.find((area) => area.id === projectLocation.areaId)?.spaceId ?? null);
+    const spaceId = spaceIdForProject(document, project.id);
     if (scopeSpaceId !== null && spaceId !== scopeSpaceId) continue;
     lists.push({
       name: listNameForContainer({ kind: "project", id: project.id }),
@@ -143,6 +148,41 @@ export function listNameForToDo(document: WorkspaceDocument, toDo: ToDo): string
   return listNameForContainer({ kind: "area", id: area.id });
 }
 
+/** The Space reached through a to-do's direct or inherited Location. */
+export function spaceIdForToDo(document: WorkspaceDocument, toDo: ToDo): string | null {
+  const location = toDo.location;
+  if (location.kind === "unfiled") return location.spaceId;
+  if (location.kind === "project") return spaceIdForProject(document, location.projectId);
+  if (location.kind === "area")
+    return document.areas.find((area) => area.id === location.areaId)?.spaceId ?? null;
+  const heading = document.headings.find((candidate) => candidate.id === location.headingId);
+  if (!heading) return null;
+  const headingLocation = heading.location;
+  return headingLocation.kind === "project"
+    ? spaceIdForProject(document, headingLocation.projectId)
+    : (document.areas.find((area) => area.id === headingLocation.areaId)?.spaceId ?? null);
+}
+
+export function toDoIsInSpace(
+  document: WorkspaceDocument,
+  toDo: ToDo,
+  scopeSpaceId: string | null,
+): boolean {
+  return scopeSpaceId === null || spaceIdForToDo(document, toDo) === scopeSpaceId;
+}
+
+/** Whether one live to-do is a member visible through this list and Space scope. */
+export function toDoIsInList(
+  document: WorkspaceDocument,
+  toDo: ToDo,
+  list: CalDavList,
+  scopeSpaceId: string | null = null,
+): boolean {
+  return (
+    listNameForToDo(document, toDo) === list.name && toDoIsInSpace(document, toDo, scopeSpaceId)
+  );
+}
+
 /** Members of a list: live to-dos whose Location resolves to the container. */
 export function toDosInList(
   document: WorkspaceDocument,
@@ -150,13 +190,7 @@ export function toDosInList(
   scopeSpaceId: string | null = null,
 ): ToDo[] {
   return document.toDos
-    .filter(
-      (toDo) =>
-        listNameForToDo(document, toDo) === list.name &&
-        (scopeSpaceId === null ||
-          list.container.kind !== "inbox" ||
-          (toDo.location.kind === "unfiled" && toDo.location.spaceId === scopeSpaceId)),
-    )
+    .filter((toDo) => toDoIsInList(document, toDo, list, scopeSpaceId))
     .sort((left, right) => left.order - right.order);
 }
 
