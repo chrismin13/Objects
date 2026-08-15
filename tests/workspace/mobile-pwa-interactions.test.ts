@@ -25,7 +25,7 @@ test("mobile inspector scrolls vertically without temporal controls widening it"
   );
 });
 
-test("mobile overlays share all four safe-area insets", () => {
+test("mobile dialogs keep safe areas outside their content", () => {
   for (const edge of ["top", "right", "bottom", "left"]) {
     assert.match(tokenSource, new RegExp(`--safe-area-${edge}: env\\(safe-area-inset-${edge}`));
   }
@@ -33,7 +33,7 @@ test("mobile overlays share all four safe-area insets", () => {
     libraryStyles,
     /\.objects-dialog::part\(dialog\)[\s\S]*?var\(--safe-area-top\)[\s\S]*?var\(--safe-area-bottom\)/,
   );
-  assert.match(
+  assert.doesNotMatch(
     libraryStyles,
     /\.objects-dialog::part\(footer\)[\s\S]*?padding-block-end:[^;]*var\(--safe-area-bottom\)/,
   );

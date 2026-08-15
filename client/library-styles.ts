@@ -117,14 +117,6 @@ wa-details::part(body) { padding: 0 var(--space-3) var(--space-3); }
   .objects-dialog [slot="footer"] wa-button::part(base) { min-height: var(--control-touch); height: var(--control-touch); }
 }
 
-@media (any-pointer: coarse) {
-  .objects-dialog::part(footer) {
-    padding-inline-start: calc(var(--spacing) + var(--safe-area-left));
-    padding-inline-end: calc(var(--spacing) + var(--safe-area-right));
-    padding-block-end: calc(var(--spacing) + var(--safe-area-bottom));
-  }
-}
-
 .objects-mobile-drawer { --wa-focus-ring-width: 0; }
 .objects-mobile-drawer::part(dialog) {
   padding: 0;
